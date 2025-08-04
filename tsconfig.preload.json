@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "outDir": "dist/preload",
+    "rootDir": "src/preload"
+  },
+  "include": ["src/preload/**/*"],
+  "exclude": ["src/preload/**/*.test.ts", "src/preload/**/*.spec.ts"]
+} 
