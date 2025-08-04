@@ -87,11 +87,105 @@ electron_1.app.on('window-all-closed', () => {
     }
 });
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
-// IPC handlers will be added here
+// File System Operations
+const promises_1 = require("fs/promises");
+// Basic app info handlers
 electron_1.ipcMain.handle('app:getVersion', () => {
     return electron_1.app.getVersion();
 });
 electron_1.ipcMain.handle('app:getPlatform', () => {
     return process.platform;
+});
+// File operations handlers
+electron_1.ipcMain.handle('file:openDirectory', async () => {
+    const result = await electron_1.dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: 'Select Journal Directory'
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+        return null;
+    }
+    return result.filePaths[0];
+});
+electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
+    try {
+        const entries = await (0, promises_1.readdir)(dirPath, { withFileTypes: true });
+        const files = [];
+        for (const entry of entries) {
+            // Skip hidden files and non-markdown files (except directories)
+            if (entry.name.startsWith('.'))
+                continue;
+            if (entry.isFile() && !entry.name.endsWith('.md'))
+                continue;
+            const fullPath = (0, path_1.join)(dirPath, entry.name);
+            const stats = await (0, promises_1.stat)(fullPath);
+            files.push({
+                name: entry.name,
+                path: fullPath,
+                type: entry.isDirectory() ? 'directory' : 'file',
+                modified: stats.mtime,
+                size: stats.size
+            });
+        }
+        // Sort: directories first, then files, both alphabetically
+        files.sort((a, b) => {
+            if (a.type !== b.type) {
+                return a.type === 'directory' ? -1 : 1;
+            }
+            return a.name.localeCompare(b.name);
+        });
+        return files;
+    }
+    catch (error) {
+        console.error('Error reading directory:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('file:readFile', async (_, filePath) => {
+    try {
+        const content = await (0, promises_1.readFile)(filePath, 'utf-8');
+        return content;
+    }
+    catch (error) {
+        console.error('Error reading file:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('file:writeFile', async (_, filePath, content) => {
+    try {
+        await (0, promises_1.writeFile)(filePath, content, 'utf-8');
+        return true;
+    }
+    catch (error) {
+        console.error('Error writing file:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('file:createFile', async (_, dirPath, fileName) => {
+    try {
+        // Ensure .md extension
+        if (!fileName.endsWith('.md')) {
+            fileName += '.md';
+        }
+        const filePath = (0, path_1.join)(dirPath, fileName);
+        const initialContent = `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`;
+        await (0, promises_1.writeFile)(filePath, initialContent, 'utf-8');
+        return filePath;
+    }
+    catch (error) {
+        console.error('Error creating file:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('file:createDirectory', async (_, parentPath, dirName) => {
+    try {
+        const dirPath = (0, path_1.join)(parentPath, dirName);
+        await (0, promises_1.mkdir)(dirPath, { recursive: true });
+        return dirPath;
+    }
+    catch (error) {
+        console.error('Error creating directory:', error);
+        throw error;
+    }
 });
 //# sourceMappingURL=index.js.map

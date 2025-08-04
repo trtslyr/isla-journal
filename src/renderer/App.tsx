@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { MonacoEditor } from './components/Editor'
+import { FileTree } from './components/FileTree'
 import './App.css'
 
 const App: React.FC = () => {
@@ -37,8 +38,20 @@ const thoughts = {
 
 ---
 
-*Started writing at ${new Date().toLocaleString()}*`)
+*Started writing at ${new Date().toLocaleString()}*
+
+## 🔥 Now with File Operations!
+
+Click **"📁 Open Directory"** in the file tree to:
+1. Select your journal directory
+2. See all your .md files
+3. Click any file to open it
+4. Create new files and folders
+5. Everything saves automatically!`)
   const [currentFile, setCurrentFile] = useState<string>('Welcome.md')
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null)
+  const [rootDirectory, setRootDirectory] = useState<string | null>(null)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
   useEffect(() => {
     // Test the Electron API
@@ -51,6 +64,51 @@ const thoughts = {
   const handleEditorChange = (value: string | undefined) => {
     if (value !== undefined) {
       setEditorContent(value)
+      setHasUnsavedChanges(true)
+      
+      // Auto-save after 1 second of no changes
+      if (currentFilePath) {
+        clearTimeout(window.autoSaveTimeout)
+        window.autoSaveTimeout = setTimeout(async () => {
+          try {
+            await window.electronAPI.writeFile(currentFilePath, value)
+            setHasUnsavedChanges(false)
+          } catch (error) {
+            console.error('Auto-save failed:', error)
+          }
+        }, 1000)
+      }
+    }
+  }
+
+  const handleFileSelect = async (filePath: string, fileName: string) => {
+    try {
+      // Save current file if there are unsaved changes
+      if (hasUnsavedChanges && currentFilePath) {
+        await window.electronAPI.writeFile(currentFilePath, editorContent)
+      }
+      
+      // Load the selected file
+      const content = await window.electronAPI.readFile(filePath)
+      setEditorContent(content)
+      setCurrentFile(fileName)
+      setCurrentFilePath(filePath)
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to open file:', error)
+      alert('Failed to open file: ' + fileName)
+    }
+  }
+
+  const handleOpenDirectory = async () => {
+    try {
+      const dirPath = await window.electronAPI.openDirectory()
+      if (dirPath) {
+        setRootDirectory(dirPath)
+      }
+    } catch (error) {
+      console.error('Failed to open directory:', error)
+      alert('Failed to open directory')
     }
   }
 
@@ -75,26 +133,20 @@ const thoughts = {
         <div className="panel file-tree-panel">
           <div className="panel-header">
             <h3>Explorer</h3>
+            <button 
+              className="open-directory-btn"
+              onClick={handleOpenDirectory}
+              title="Open Journal Directory"
+            >
+              📁
+            </button>
           </div>
           <div className="panel-content">
-            <div className="file-tree">
-              <div className="tree-item folder">
-                <span className="tree-icon">📁</span>
-                <span>My Journal</span>
-              </div>
-              <div className="tree-item file indent-1">
-                <span className="tree-icon">📄</span>
-                <span>2024-01-15.md</span>
-              </div>
-              <div className="tree-item file indent-1">
-                <span className="tree-icon">📄</span>
-                <span>ideas.md</span>
-              </div>
-              <div className="tree-item folder">
-                <span className="tree-icon">📁</span>
-                <span>Archive</span>
-              </div>
-            </div>
+            <FileTree
+              rootPath={rootDirectory}
+              onFileSelect={handleFileSelect}
+              selectedFile={currentFilePath}
+            />
           </div>
         </div>
 
@@ -103,7 +155,7 @@ const thoughts = {
           <div className="panel-header">
             <div className="tab-bar">
               <div className="tab active">
-                <span>{currentFile}</span>
+                <span>{currentFile}{hasUnsavedChanges ? ' •' : ''}</span>
                 <span className="tab-close">×</span>
               </div>
             </div>
