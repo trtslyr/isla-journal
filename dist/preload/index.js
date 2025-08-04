@@ -1,9 +1,11 @@
-import { contextBridge, ipcRenderer } from 'electron';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const electron_1 = require("electron");
 // Define the API that will be available in the renderer process
 const electronAPI = {
     // App info
-    getVersion: () => ipcRenderer.invoke('app:getVersion'),
-    getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
+    getVersion: () => electron_1.ipcRenderer.invoke('app:getVersion'),
+    getPlatform: () => electron_1.ipcRenderer.invoke('app:getPlatform'),
     // File system operations (to be added)
     // openDirectory: () => ipcRenderer.invoke('file:openDirectory'),
     // readFile: (path: string) => ipcRenderer.invoke('file:readFile', path),
@@ -11,10 +13,10 @@ const electronAPI = {
     // AI operations (to be added)
     // sendPrompt: (prompt: string) => ipcRenderer.invoke('ai:sendPrompt', prompt),
     // Window operations
-    minimize: () => ipcRenderer.invoke('window:minimize'),
-    maximize: () => ipcRenderer.invoke('window:maximize'),
-    close: () => ipcRenderer.invoke('window:close'),
+    minimize: () => electron_1.ipcRenderer.invoke('window:minimize'),
+    maximize: () => electron_1.ipcRenderer.invoke('window:maximize'),
+    close: () => electron_1.ipcRenderer.invoke('window:close'),
 };
 // Expose the API to the renderer process
-contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+electron_1.contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 //# sourceMappingURL=index.js.map

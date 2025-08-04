@@ -1,14 +1,16 @@
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
-import { join } from 'path';
-import { isDev } from './utils/is-dev';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const electron_1 = require("electron");
+const path_1 = require("path");
+const is_dev_1 = require("./utils/is-dev");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
-    app.quit();
+    electron_1.app.quit();
 }
 let mainWindow = null;
 const createWindow = () => {
     // Create the browser window.
-    mainWindow = new BrowserWindow({
+    mainWindow = new electron_1.BrowserWindow({
         width: 1400,
         height: 900,
         minWidth: 1000,
@@ -18,40 +20,40 @@ const createWindow = () => {
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            preload: join(__dirname, '../preload/index.js'),
-            webSecurity: !isDev
+            preload: (0, path_1.join)(__dirname, '../preload/index.js'),
+            webSecurity: !is_dev_1.isDev
         }
     });
     // Load the app
-    if (isDev) {
+    if (is_dev_1.isDev) {
         mainWindow.loadURL('http://localhost:5173');
         mainWindow.webContents.openDevTools();
     }
     else {
-        mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+        mainWindow.loadFile((0, path_1.join)(__dirname, '../renderer/index.html'));
     }
     // Show window when ready to prevent visual flash
     mainWindow.once('ready-to-show', () => {
         mainWindow?.show();
-        if (isDev) {
+        if (is_dev_1.isDev) {
             mainWindow?.webContents.openDevTools();
         }
     });
     // Handle external links
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        electron_1.shell.openExternal(url);
         return { action: 'deny' };
     });
 };
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+electron_1.app.whenReady().then(() => {
     createWindow();
     // Set app menu
     if (process.platform === 'darwin') {
         // macOS menu
         const template = [
             {
-                label: app.getName(),
+                label: electron_1.app.getName(),
                 submenu: [
                     { role: 'about' },
                     { type: 'separator' },
@@ -66,30 +68,30 @@ app.whenReady().then(() => {
             },
             // File menu, Edit menu, etc. will be added here
         ];
-        Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+        electron_1.Menu.setApplicationMenu(electron_1.Menu.buildFromTemplate(template));
     }
     else {
         // Windows/Linux - hide menu bar for VS Code-like experience
-        Menu.setApplicationMenu(null);
+        electron_1.Menu.setApplicationMenu(null);
     }
-    app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
+    electron_1.app.on('activate', () => {
+        if (electron_1.BrowserWindow.getAllWindows().length === 0) {
             createWindow();
         }
     });
 });
 // Quit when all windows are closed, except on macOS
-app.on('window-all-closed', () => {
+electron_1.app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
-        app.quit();
+        electron_1.app.quit();
     }
 });
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
 // IPC handlers will be added here
-ipcMain.handle('app:getVersion', () => {
-    return app.getVersion();
+electron_1.ipcMain.handle('app:getVersion', () => {
+    return electron_1.app.getVersion();
 });
-ipcMain.handle('app:getPlatform', () => {
+electron_1.ipcMain.handle('app:getPlatform', () => {
     return process.platform;
 });
 //# sourceMappingURL=index.js.map
