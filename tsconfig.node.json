@@ -8,11 +8,8 @@
     "allowSyntheticDefaultImports": true,
     "target": "ES2020",
     "lib": ["ES2020"],
-    "outDir": "dist/main",
-    "rootDir": "src/main",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
-  },
-  "include": ["src/main/**/*", "src/shared/**/*"]
+  }
 } 
