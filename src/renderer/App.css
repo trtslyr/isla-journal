@@ -204,36 +204,7 @@
   background-color: var(--bg-secondary);
 }
 
-.editor-placeholder {
-  padding: 24px;
-  max-width: 800px;
-  line-height: 1.6;
-}
-
-.editor-placeholder h1 {
-  color: var(--accent-blue);
-  margin-bottom: 16px;
-  font-size: 24px;
-}
-
-.editor-placeholder h2 {
-  color: var(--accent-green);
-  margin-bottom: 12px;
-  font-size: 18px;
-}
-
-.editor-placeholder ul {
-  margin-left: 20px;
-}
-
-.editor-placeholder li {
-  margin-bottom: 4px;
-}
-
-.editor-placeholder em {
-  color: var(--text-muted);
-  font-style: italic;
-}
+/* Monaco Editor will handle its own styling */
 
 /* AI Chat Panel */
 .ai-chat-panel {

@@ -1,9 +1,44 @@
 import React, { useState, useEffect } from 'react'
+import { MonacoEditor } from './components/Editor'
 import './App.css'
 
 const App: React.FC = () => {
   const [version, setVersion] = useState<string>('')
   const [platform, setPlatform] = useState<string>('')
+  const [editorContent, setEditorContent] = useState<string>(`# 🏝️ Welcome to Isla Journal
+
+Today I'm exploring this amazing new offline journaling app. The features I'm most excited about:
+
+## ✨ Key Features
+- **Completely offline** - All my thoughts stay private on my device
+- **AI-powered insights** - Local AI that understands my writing patterns
+- **VS Code interface** - Familiar and powerful editing experience
+- **Cross-platform** - Works seamlessly on Mac, Windows, and Linux
+
+## 📝 My Thoughts
+
+This markdown editor feels incredibly smooth and responsive. The **JetBrains Mono** font makes everything so readable.
+
+I can write:
+- Lists like this
+- With proper formatting
+- And everything just works
+
+> "The best journaling app is the one you actually use." - Me, just now
+
+### Code Snippets Work Too!
+
+\`\`\`javascript
+const thoughts = {
+  current: "This app is amazing!",
+  future: "Can't wait to use the AI features"
+}
+\`\`\`
+
+---
+
+*Started writing at ${new Date().toLocaleString()}*`)
+  const [currentFile, setCurrentFile] = useState<string>('Welcome.md')
 
   useEffect(() => {
     // Test the Electron API
@@ -12,6 +47,12 @@ const App: React.FC = () => {
       window.electronAPI.getPlatform().then(setPlatform)
     }
   }, [])
+
+  const handleEditorChange = (value: string | undefined) => {
+    if (value !== undefined) {
+      setEditorContent(value)
+    }
+  }
 
   return (
     <div className="app">
@@ -62,26 +103,17 @@ const App: React.FC = () => {
           <div className="panel-header">
             <div className="tab-bar">
               <div className="tab active">
-                <span>Welcome.md</span>
+                <span>{currentFile}</span>
                 <span className="tab-close">×</span>
               </div>
             </div>
           </div>
           <div className="panel-content">
-            <div className="editor-placeholder">
-              <h1>🏝️ Welcome to Isla Journal</h1>
-              <p>Your fully offline, AI-powered journaling companion.</p>
-              <br />
-              <h2>✨ Features</h2>
-              <ul>
-                <li>📝 VS Code-style interface</li>
-                <li>🤖 Local AI assistance</li>
-                <li>🔒 Completely offline</li>
-                <li>🌍 Cross-platform</li>
-              </ul>
-              <br />
-              <p><em>Monaco Editor will be integrated here soon...</em></p>
-            </div>
+            <MonacoEditor
+              value={editorContent}
+              onChange={handleEditorChange}
+              language="markdown"
+            />
           </div>
         </div>
 
@@ -121,7 +153,7 @@ const App: React.FC = () => {
           <span>Ready</span>
         </div>
         <div className="status-center">
-          <span>0 words | Line 1, Column 1</span>
+          <span>{editorContent.split(/\s+/).filter(word => word.length > 0).length} words | {editorContent.split('\n').length} lines</span>
         </div>
         <div className="status-right">
           <span>Markdown</span>
