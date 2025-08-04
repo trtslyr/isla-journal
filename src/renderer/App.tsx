@@ -102,13 +102,15 @@ Click **"📁 Open Directory"** in the file tree to:
 
   const handleOpenDirectory = async () => {
     try {
+      console.log('Opening directory dialog...')
       const dirPath = await window.electronAPI.openDirectory()
+      console.log('Directory selected:', dirPath)
       if (dirPath) {
         setRootDirectory(dirPath)
       }
     } catch (error) {
       console.error('Failed to open directory:', error)
-      alert('Failed to open directory')
+      alert(`Failed to open directory: ${error.message || 'Unknown error'}`)
     }
   }
 

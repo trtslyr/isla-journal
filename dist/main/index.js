@@ -98,14 +98,23 @@ electron_1.ipcMain.handle('app:getPlatform', () => {
 });
 // File operations handlers
 electron_1.ipcMain.handle('file:openDirectory', async () => {
-    const result = await electron_1.dialog.showOpenDialog(mainWindow, {
-        properties: ['openDirectory'],
-        title: 'Select Journal Directory'
-    });
-    if (result.canceled || result.filePaths.length === 0) {
-        return null;
+    if (!mainWindow) {
+        throw new Error('Main window not available');
     }
-    return result.filePaths[0];
+    try {
+        const result = await electron_1.dialog.showOpenDialog(mainWindow, {
+            properties: ['openDirectory'],
+            title: 'Select Journal Directory'
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        return result.filePaths[0];
+    }
+    catch (error) {
+        console.error('Error opening directory dialog:', error);
+        throw error;
+    }
 });
 electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
     try {

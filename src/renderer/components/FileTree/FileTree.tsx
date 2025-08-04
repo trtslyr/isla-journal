@@ -84,10 +84,15 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           <button 
             className="open-directory-btn"
             onClick={async () => {
-              const dirPath = await window.electronAPI.openDirectory()
-              if (dirPath) {
-                // This would be handled by parent component
-                console.log('Selected directory:', dirPath)
+              try {
+                const dirPath = await window.electronAPI.openDirectory()
+                if (dirPath) {
+                  // This would be handled by parent component
+                  console.log('Selected directory:', dirPath)
+                }
+              } catch (error) {
+                console.error('Failed to open directory:', error)
+                alert('Failed to open directory. Please try again.')
               }
             }}
           >
