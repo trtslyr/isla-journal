@@ -21,7 +21,6 @@ const createWindow = (): void => {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      enableRemoteModule: false,
       preload: join(__dirname, '../preload/index.js'),
       webSecurity: !isDev
     }
@@ -95,12 +94,7 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Security: Prevent new window creation
-app.on('web-contents-created', (_, contents) => {
-  contents.on('new-window', (event) => {
-    event.preventDefault()
-  })
-})
+// Security: Prevent new window creation (handled by setWindowOpenHandler above)
 
 // IPC handlers will be added here
 ipcMain.handle('app:getVersion', () => {
