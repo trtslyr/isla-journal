@@ -2,25 +2,53 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 // Define the API that will be available in the renderer process
 const electronAPI = {
-  // App info
+  // Version info
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
-
+  
   // File system operations
   openDirectory: () => ipcRenderer.invoke('file:openDirectory'),
   readDirectory: (path: string) => ipcRenderer.invoke('file:readDirectory', path),
   readFile: (path: string) => ipcRenderer.invoke('file:readFile', path),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('file:writeFile', path, content),
-  createFile: (dirPath: string, fileName: string) => ipcRenderer.invoke('file:createFile', dirPath, fileName),
-  createDirectory: (parentPath: string, dirName: string) => ipcRenderer.invoke('file:createDirectory', parentPath, dirName),
-
-  // AI operations (to be added)
-  // sendPrompt: (prompt: string) => ipcRenderer.invoke('ai:sendPrompt', prompt),
+  createFile: (dirPath: string, fileName: string, content: string) => 
+    ipcRenderer.invoke('file:createFile', dirPath, fileName, content),
+  createDirectory: (dirPath: string, dirName: string) => 
+    ipcRenderer.invoke('file:createDirectory', dirPath, dirName),
+  deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
+  renameFile: (oldPath: string, newName: string) => ipcRenderer.invoke('file:rename', oldPath, newName),
+  moveFile: (sourcePath: string, targetDirectoryPath: string) => ipcRenderer.invoke('file:move', sourcePath, targetDirectoryPath),
   
-  // Window operations
-  minimize: () => ipcRenderer.invoke('window:minimize'),
-  maximize: () => ipcRenderer.invoke('window:maximize'),
-  close: () => ipcRenderer.invoke('window:close'),
+  // Database operations
+  dbClearAll: () => ipcRenderer.invoke('db:clearAll'),
+  dbGetStats: () => ipcRenderer.invoke('db:getStats'),
+  
+  // Settings operations
+  settingsGet: (key: string) => ipcRenderer.invoke('settings:get', key),
+  settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
+  
+  // RAG/Content search
+  searchContent: (query: string) => ipcRenderer.invoke('content:search', query),
+  answerQuestion: (query: string, history?: Array<{role: string, content: string}>) => 
+    ipcRenderer.invoke('content:answer', query, history),
+  contentSearchAndAnswer: (query: string, chatId?: number) => 
+    ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
+    
+  // LLM operations
+  llmSendMessage: (messages: Array<{role: string, content: string}>) => 
+    ipcRenderer.invoke('llm:sendMessage', messages),
+  
+  // Chat operations
+  chatCreate: (title: string) => ipcRenderer.invoke('chat:create', title),
+  chatGetAll: () => ipcRenderer.invoke('chat:getAll'),
+  chatGetActive: () => ipcRenderer.invoke('chat:getActive'),
+  chatSetActive: (chatId: number) => ipcRenderer.invoke('chat:setActive', chatId),
+  chatDelete: (chatId: number) => ipcRenderer.invoke('chat:delete', chatId),
+  chatRename: (chatId: number, title: string) => ipcRenderer.invoke('chat:rename', chatId, title),
+  chatGetMessages: (chatId: number) => ipcRenderer.invoke('chat:getMessages', chatId),
+  chatAddMessage: (chatId: number, role: string, content: string) => 
+    ipcRenderer.invoke('chat:addMessage', chatId, role, content),
+  chatClearMessages: (chatId: number) => ipcRenderer.invoke('chat:clearMessages', chatId)
 }
 
 // Expose the API to the renderer process
