@@ -57,7 +57,20 @@ const createWindow = (): void => {
     mainWindow.loadURL('http://localhost:5173')
     // mainWindow.webContents.openDevTools() // Commented out for cleaner dev experience
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    const rendererPath = join(__dirname, '../renderer/index.html')
+    console.log('🌐 [Main] Loading renderer from:', rendererPath)
+    console.log('🌐 [Main] __dirname:', __dirname)
+    console.log('🌐 [Main] Renderer path exists:', require('fs').existsSync(rendererPath))
+    
+    // Try the correct path for packaged app
+    if (!require('fs').existsSync(rendererPath)) {
+      const altPath = join(__dirname, '../../dist/renderer/index.html')
+      console.log('🌐 [Main] Trying alternative path:', altPath)
+      console.log('🌐 [Main] Alternative path exists:', require('fs').existsSync(altPath))
+      mainWindow.loadFile(altPath)
+    } else {
+      mainWindow.loadFile(rendererPath)
+    }
   }
 
   // Show window when ready to prevent visual flash
