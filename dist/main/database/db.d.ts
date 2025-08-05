@@ -99,6 +99,7 @@ declare class IslaDatabase {
      * Clear all indexed content (useful when switching directories)
      */
     clearAllContent(): void;
+    private forceRecreateDatabase;
     /**
      * Update search index for a file
      */

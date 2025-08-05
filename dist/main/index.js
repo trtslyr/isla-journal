@@ -261,35 +261,56 @@ electron_1.ipcMain.handle('file:openDirectory', async () => {
 electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
     try {
         console.log('📁 Reading directory:', dirPath);
-        // Check if this is a directory switch by getting current saved directory
+        // Check if this is a root directory switch (not just subdirectory expansion)
         let shouldClearDatabase = false;
+        let isRootDirectoryChange = false;
         try {
             const currentSavedDirectory = await database_1.database.getSetting('selectedDirectory');
-            if (currentSavedDirectory && currentSavedDirectory !== dirPath) {
-                console.log('🔄 [Directory Switch] From:', currentSavedDirectory, 'To:', dirPath);
+            if (!currentSavedDirectory) {
+                // First time - this is a root directory selection
+                console.log('📁 [First Time] No previous directory found, setting root directory');
+                isRootDirectoryChange = true;
+            }
+            else if (currentSavedDirectory !== dirPath && !dirPath.startsWith(currentSavedDirectory + '/')) {
+                // This is a genuine root directory change (not a subdirectory)
+                console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', dirPath);
                 shouldClearDatabase = true;
+                isRootDirectoryChange = true;
+            }
+            else if (dirPath.startsWith(currentSavedDirectory + '/')) {
+                // This is just subdirectory expansion - don't change root directory or clear database
+                console.log('📂 [Subdirectory Expansion]:', dirPath);
+            }
+            else if (currentSavedDirectory === dirPath) {
+                // Same directory - might be a refresh
+                console.log('🔄 [Directory Refresh]:', dirPath);
             }
         }
         catch (error) {
             console.log('📁 [First Time] No previous directory found, proceeding with indexing');
+            isRootDirectoryChange = true;
         }
-        // Clear database if switching directories
+        // Clear database and reinitialize chunking for new directories
         if (shouldClearDatabase) {
-            database_1.database.clearAllContent();
+            console.log('🔄 [Directory Switch] Clearing and reinitializing database for new directory...');
+            try {
+                database_1.database.clearAllContent();
+                console.log('✅ [Directory Switch] Database cleared successfully');
+            }
+            catch (error) {
+                console.error('❌ [Directory Switch] Database clear failed:', error);
+                // Database will be recreated automatically by the force recreate function
+            }
         }
-        // Save the new directory
-        database_1.database.setSetting('selectedDirectory', dirPath);
+        // Save the directory as root directory only if it's a root directory change
+        if (isRootDirectoryChange) {
+            database_1.database.setSetting('selectedDirectory', dirPath);
+            console.log('📂 [Directory Switch] Set new root directory:', dirPath);
+        }
         const entries = await (0, promises_1.readdir)(dirPath, { withFileTypes: true });
         console.log('📋 Found entries:', entries.length);
-        // LIMIT FILE PROCESSING TO PREVENT UI BLOCKING
-        const MAX_FILES = 50;
-        let processedCount = 0;
         const files = [];
         for (const entry of entries) {
-            if (processedCount >= MAX_FILES) {
-                console.log(`⏸️ File limit reached (${MAX_FILES}), skipping remaining files to prevent UI blocking`);
-                break;
-            }
             console.log('🔍 Processing:', entry.name, 'Type:', entry.isDirectory() ? 'directory' : 'file');
             // Skip hidden files and non-markdown files (except directories)
             if (entry.name.startsWith('.')) {
@@ -333,7 +354,6 @@ electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
             // (This was causing the massive file processing on startup)
             files.push(fileItem);
             console.log('✅ Added:', entry.name, entry.isDirectory() ? 'directory' : 'file');
-            processedCount++;
         }
         // Sort: directories first, then files, both alphabetically
         files.sort((a, b) => {

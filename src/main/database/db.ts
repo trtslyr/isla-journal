@@ -414,22 +414,60 @@ class IslaDatabase {
     try {
       // Clear all content in transaction for consistency
       const transaction = this.db.transaction(() => {
-        // Clear FTS table first
-        this.db!.prepare('DELETE FROM fts_content').run()
-        
-        // Clear backing tables
+        // Clear backing tables first
         this.db!.prepare('DELETE FROM content_chunks').run()
         this.db!.prepare('DELETE FROM search_index').run()
         this.db!.prepare('DELETE FROM files').run()
         
-        // Rebuild FTS table to ensure consistency
-        this.db!.prepare('INSERT INTO fts_content(fts_content) VALUES("rebuild")').run()
+        // Clear FTS table safely
+        try {
+          this.db!.prepare('DELETE FROM fts_content').run()
+          // Rebuild FTS table to ensure consistency
+          this.db!.prepare('INSERT INTO fts_content(fts_content) VALUES("rebuild")').run()
+        } catch (ftsError) {
+          console.log('🔧 [Database] FTS table needs rebuilding during clear...')
+          // Drop and recreate FTS table if it has issues
+          this.db!.exec('DROP TABLE IF EXISTS fts_content')
+          this.db!.exec(`
+            CREATE VIRTUAL TABLE fts_content USING fts5(
+              content,
+              file_path,
+              file_name,
+              content='content_chunks',
+              content_rowid='id'
+            )
+          `)
+        }
       })
       
       transaction()
       console.log('✅ [Database] All indexed content cleared')
     } catch (error) {
       console.error('❌ [Database] Error clearing content:', error)
+      // Force recreate the database if clearing fails
+      this.forceRecreateDatabase()
+    }
+  }
+
+  private forceRecreateDatabase(): void {
+    console.log('🔄 [Database] Force recreating database due to errors...')
+    try {
+      if (this.db) {
+        this.db.close()
+        this.db = null
+      }
+      
+      // Delete the corrupted database file
+      const fs = require('fs')
+      if (fs.existsSync(this.dbPath)) {
+        fs.unlinkSync(this.dbPath)
+      }
+      
+      // Reinitialize completely
+      this.initialize()
+      console.log('✅ [Database] Successfully recreated database')
+    } catch (error) {
+      console.error('❌ [Database] Failed to recreate database:', error)
       throw error
     }
   }
@@ -485,13 +523,29 @@ class IslaDatabase {
 
     try {
       const fileCount = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number }
-      const chunkCount = this.db.prepare('SELECT COUNT(*) as count FROM content_chunks').get() as { count: number }  
-      const indexSize = this.db.prepare('SELECT COUNT(*) as count FROM fts_content').get() as { count: number }
+      const chunkCount = this.db.prepare('SELECT COUNT(*) as count FROM content_chunks').get() as { count: number }
+      
+      // Try to get FTS stats, but handle errors gracefully
+      let indexSize = 0
+      try {
+        const indexResult = this.db.prepare('SELECT COUNT(*) as count FROM fts_content').get() as { count: number }
+        indexSize = indexResult.count
+      } catch (ftsError) {
+        console.log('⚠️ [Database] FTS stats unavailable, rebuilding index...')
+        try {
+          this.fixDatabaseSchema()
+          const indexResult = this.db.prepare('SELECT COUNT(*) as count FROM fts_content').get() as { count: number }
+          indexSize = indexResult.count
+        } catch (rebuildError) {
+          console.log('⚠️ [Database] FTS rebuild failed, using 0 for index size')
+          indexSize = 0
+        }
+      }
       
       return {
         fileCount: fileCount.count,
         chunkCount: chunkCount.count,
-        indexSize: indexSize.count
+        indexSize: indexSize
       }
     } catch (error) {
       console.error('❌ [Database] Error getting stats:', error)

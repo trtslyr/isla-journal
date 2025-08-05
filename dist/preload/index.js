@@ -38,11 +38,7 @@ const electronAPI = {
     chatGetMessages: (chatId) => electron_1.ipcRenderer.invoke('chat:getMessages', chatId),
     chatAddMessage: (chatId, role, content) => electron_1.ipcRenderer.invoke('chat:addMessage', chatId, role, content),
     chatClearMessages: (chatId) => electron_1.ipcRenderer.invoke('chat:clearMessages', chatId),
-    // License operations
-    licenseValidate: (licenseKey) => electron_1.ipcRenderer.invoke('license:validate', licenseKey),
-    licenseGetStatus: () => electron_1.ipcRenderer.invoke('license:getStatus'),
-    licenseClear: () => electron_1.ipcRenderer.invoke('license:clear'),
-    licenseSetBackendUrl: (url) => electron_1.ipcRenderer.invoke('license:setBackendUrl', url),
+    // License operations removed - now handled in renderer process only
     // System operations
     openExternal: (url) => electron_1.ipcRenderer.invoke('system:openExternal', url)
 };

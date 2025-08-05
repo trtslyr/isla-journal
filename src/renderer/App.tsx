@@ -33,57 +33,8 @@ const App: React.FC = () => {
   const [forceLicenseScreen, setForceLicenseScreen] = useState(false)
   
   // Tab management
-  const [tabs, setTabs] = useState<EditorTab[]>([
-    {
-      id: 'welcome',
-      name: 'Welcome.md',
-      path: null,
-      content: `# 🏝️ Welcome to Isla Journal
-
-Today I'm exploring this amazing new offline journaling app. The features I'm most excited about:
-
-## ✨ Key Features
-- **Completely offline** - All my thoughts stay private on my device
-- **AI-powered insights** - Local AI that understands my writing patterns
-- **VS Code interface** - Familiar and powerful editing experience
-- **Cross-platform** - Works seamlessly on Mac, Windows, and Linux
-
-## 📝 My Thoughts
-
-This markdown editor feels incredibly smooth and responsive. The **JetBrains Mono** font makes everything so readable.
-
-I can write:
-- Lists like this
-- With proper formatting
-- And everything just works
-
-> "The best journaling app is the one you actually use." - Me, just now
-
-### Code Snippets Work Too!
-
-\`\`\`javascript
-const thoughts = {
-  current: "This app is amazing!",
-  future: "Can't wait to use the AI features"
-}
-\`\`\`
-
----
-
-*Started writing at ${new Date().toLocaleString()}*
-
-## 🔥 Now with File Operations!
-
-Click **"📁 Open Directory"** in the file tree to:
-1. Select your journal directory
-2. See all your .md files
-3. Click any file to open it
-4. Create new files and folders
-5. Everything saves automatically!`,
-      hasUnsavedChanges: false
-    }
-  ])
-  const [activeTabId, setActiveTabId] = useState<string>('welcome')
+  const [tabs, setTabs] = useState<EditorTab[]>([])
+  const [activeTabId, setActiveTabId] = useState<string>('')
   
   const [rootDirectory, setRootDirectory] = useState<string | null>(null)
   
@@ -265,8 +216,9 @@ Click **"📁 Open Directory"** in the file tree to:
           if (savedDirectory) {
             console.log('📁 [App] Restoring saved directory:', savedDirectory)
             setRootDirectory(savedDirectory)
+            console.log('✅ [App] Root directory set, FileTree should auto-load')
           } else {
-            console.log('📁 [App] No saved directory found')
+            console.log('📁 [App] No saved directory found - user needs to select directory')
           }        
         } catch (error) {
           console.error('❌ [App] Failed to load saved directory:', error)
@@ -276,7 +228,7 @@ Click **"📁 Open Directory"** in the file tree to:
         const chats = await window.electronAPI.chatGetAll()
         setAllChats(chats)
 
-        // Load active chat and its messages
+        // Load active chat and its messages (if any exist)
         const activeChat = await window.electronAPI.chatGetActive()
         if (activeChat) {
           setActiveChat(activeChat)
@@ -287,36 +239,8 @@ Click **"📁 Open Directory"** in the file tree to:
             role: msg.role as 'user' | 'assistant',
             timestamp: new Date(msg.created_at)
           })))
-        } else {
-          // Create default chat if none exists
-          console.log('🆕 [App] Creating Welcome Chat...')
-          const welcomeChat = await createNewChat('Welcome Chat')
-          if (welcomeChat) {
-            console.log('✅ [App] Welcome Chat created and activated')
-          } else {
-            console.error('❌ [App] Failed to create Welcome Chat')
-            // Fallback: try to activate any existing chat
-            if (chats.length > 0) {
-              await switchToChat(chats[0].id)
-              console.log('🔄 [App] Activated first available chat as fallback')
-            }
-          }
         }
-
-        // Ensure we have an active chat - final fallback
-        if (!activeChat && allChats.length === 0) {
-          console.log('🚨 [App] No chats available, creating emergency fallback chat')
-          try {
-            const fallbackChat = await window.electronAPI.chatCreate('AI Assistant')
-            await window.electronAPI.chatSetActive(fallbackChat.id)
-            setActiveChat(fallbackChat)
-            const updatedChats = await window.electronAPI.chatGetAll()
-            setAllChats(updatedChats)
-            console.log('✅ [App] Emergency fallback chat created')
-          } catch (error) {
-            console.error('❌ [App] Even fallback chat creation failed:', error)
-          }
-        }
+        // No automatic chat creation - user can create chats when needed
       } catch (error) {
         console.error('❌ [App] Failed to initialize app:', error)
       }
@@ -531,15 +455,7 @@ Click **"📁 Open Directory"** in the file tree to:
       const newChat = await window.electronAPI.chatCreate(newTitle)
       console.log('✅ [App] Chat created with ID:', newChat.id)
       
-      // Add welcome message for new chats (only if no title specified)
-      if (!title) {
-        await window.electronAPI.chatAddMessage(
-          newChat.id, 
-          'assistant', 
-          'Hello! I\'m your local AI assistant. I can help you analyze your journal entries, find patterns, and provide insights - all while keeping your data completely private and offline.'
-        )
-        console.log('📝 [App] Added welcome message to chat')
-      }
+      // No automatic welcome messages - user starts with clean chat
       
       // Refresh chats and set as active
       const chats = await window.electronAPI.chatGetAll()
@@ -689,16 +605,16 @@ Click **"📁 Open Directory"** in the file tree to:
       const result = await validateNewLicense(trimmedKey)
       
       if (result.valid) {
-        setLicenseValidationMessage('✅ License validated successfully! Welcome to Isla Journal!')
+        setLicenseValidationMessage('[OK] License validated successfully! Welcome to Isla Journal!')
         setLicenseKey('') // Clear input
         setForceLicenseScreen(false) // Reset force state when valid license is entered
         // The license check hook will automatically update the UI
       } else {
-        setLicenseValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
+        setLicenseValidationMessage(`[ERROR] ${result.error || 'Invalid license key'}`)
       }
     } catch (error) {
       console.error('License validation error:', error)
-      setLicenseValidationMessage('❌ Network error - please check your connection and try again')
+              setLicenseValidationMessage('[ERROR] Network error - please check your connection and try again')
     } finally {
       setIsValidatingLicense(false)
     }
@@ -745,7 +661,7 @@ Click **"📁 Open Directory"** in the file tree to:
                 onClick={() => setShowSettings(true)}
                 title="Settings"
               >
-                ⚙️
+                [⚙]
               </button>
             </div>
           </div>
@@ -765,7 +681,7 @@ Click **"📁 Open Directory"** in the file tree to:
                 onClick={handleOpenDirectory}
                 title="Open Journal Directory"
               >
-                📁
+                [DIR]
               </button>
               <button 
                 className="collapse-btn"
@@ -864,7 +780,6 @@ Click **"📁 Open Directory"** in the file tree to:
           />
           <div className="panel-header">
             <div className="chat-title">
-              <span className="chat-icon">🤖</span>
               <span>AI Journal Assistant</span>
             </div>
             <button 
@@ -925,7 +840,7 @@ Click **"📁 Open Directory"** in the file tree to:
                                 onClick={() => renameChat(chat.id, chat.title)}
                                 title="Rename Chat"
                               >
-                                ✏️
+                                [EDIT]
                               </button>
                               <button 
                                 className="chat-action-btn delete-btn"
@@ -937,7 +852,7 @@ Click **"📁 Open Directory"** in the file tree to:
                                 }}
                                 title="Delete Chat"
                               >
-                                🗑️
+                                [DEL]
                               </button>
                             </div>
                           </div>
@@ -960,9 +875,9 @@ Click **"📁 Open Directory"** in the file tree to:
                         console.error('❌ [App] Cannot create chat - electronAPI not available')
                       }
                     }}
-                    title="New Chat"
-                  >
-                    ➕ New
+                                  title="New Chat"
+            >
+              [+] New
                   </button>
                 </div>
                 
@@ -1095,7 +1010,7 @@ Click **"📁 Open Directory"** in the file tree to:
                 </div>
                 
                 {licenseValidationMessage && (
-                  <div className={`license-validation-message ${licenseValidationMessage.startsWith('✅') ? 'success' : 'error'}`}>
+                  <div className={`license-validation-message ${licenseValidationMessage.startsWith('[OK]') ? 'success' : 'error'}`}>
                     {licenseValidationMessage}
                   </div>
                 )}
@@ -1119,7 +1034,7 @@ Click **"📁 Open Directory"** in the file tree to:
                       className="license-payment-btn lifetime"
                       onClick={() => openUrl('https://pay.islajournal.app/b/cNieVc50A7yGfkv4BQ73G00')}
                     >
-                      🌟 Lifetime License
+                                              [LIFETIME] License
                       <span className="license-price">$99</span>
                     </button>
                     <button 
@@ -1133,7 +1048,7 @@ Click **"📁 Open Directory"** in the file tree to:
                       className="license-payment-btn monthly"
                       onClick={() => openUrl('https://pay.islajournal.app/b/dRmaEWct2cT03BN6JY73G01')}
                     >
-                      🔄 Monthly License
+                      [MONTHLY] License
                       <span className="license-price">$7</span>
                     </button>
                   </div>

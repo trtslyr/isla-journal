@@ -220,6 +220,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   }
 
   const handlePinItem = (item: FileItem) => {
+    // Only allow pinning files, not folders
+    if (item.type === 'directory') {
+      alert('Only files can be pinned, not folders')
+      return
+    }
+    
     if (pinnedItems.length >= 5) {
       alert('Maximum 5 items can be pinned')
       return
@@ -329,11 +335,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   const getFileIcon = (item: FileItem) => {
     if (item.type === 'directory') {
-      return expandedFolders.has(item.path) ? '📂' : '📁'
+      const isExpanded = expandedFolders.has(item.path)
+      return isExpanded ? '▼' : '▶'
     } else if (item.name.endsWith('.md')) {
-      return '📄'
+      return '○'
     }
-    return '📄'
+    return '○'
   }
 
   const createFile = async (fileName: string) => {
@@ -411,7 +418,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             {item.type === 'file' && (
               <span className="file-size">{formatFileSize(item.size)}</span>
             )}
-            {isPinned && <span className="pinned-indicator">📌</span>}
+            {isPinned && <span className="pinned-indicator">[*]</span>}
             
             {/* Hover menu */}
             {isHovered && !isDragging && (
@@ -443,7 +450,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     return (
       <div className="pinned-section">
         <div className="pinned-header">
-          <span className="pinned-title">📌 Pinned</span>
+          <span className="pinned-title">[*] Pinned</span>
           <span className="pinned-count">({pinnedItems.length}/5)</span>
         </div>
         <div 
@@ -463,7 +470,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
               onMouseLeave={() => setHoveredItem(null)}
               title={`Pinned: ${item.name}`}
             >
-              <span className="tree-icon">{item.type === 'directory' ? '📁' : '📄'}</span>
+              <span className="tree-icon">{item.type === 'directory' ? '▶' : '○'}</span>
               <span className="tree-name">{item.name}</span>
               
               {/* Unpin button */}
@@ -611,7 +618,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     return (
       <div className="file-tree-panel">
         <div className="panel-header">
-          <h3>📁 File Explorer</h3>
+          <h3>File Explorer</h3>
           <div className="panel-header-actions">
             <button className="collapse-btn" onClick={() => {}}>
               ◀
@@ -619,11 +626,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           </div>
         </div>
         <div className="file-tree-empty">
-          <p>📂 No directory selected</p>
+          <p>No directory selected</p>
           <small>Choose a directory to explore your markdown files</small>
-          <button className="open-directory-btn" onClick={onDirectorySelect}>
-            📁 Open Directory
-          </button>
+                      <button className="open-directory-btn" onClick={onDirectorySelect}>
+              [DIR] Open Directory
+            </button>
         </div>
       </div>
     )
@@ -642,14 +649,14 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
               onClick={() => loadDirectory(rootPath)}
               title="Refresh directory"
             >
-              🔄
+              [↻]
             </button>
             <button 
               className="open-directory-btn"
               onClick={onDirectorySelect}
               title="Open different directory"
             >
-              📁
+              [DIR]
             </button>
           </div>
         </div>
@@ -667,13 +674,13 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       <div className="file-tree-content">
         {loading && (
           <div className="file-tree-loading">
-            <p>🔄 Loading files...</p>
+            <p>Loading files...</p>
           </div>
         )}
 
         {error && (
           <div className="file-tree-error">
-            <p>❌ {error}</p>
+            <p>[ERROR] {error}</p>
             <button onClick={() => loadDirectory(rootPath)}>Retry</button>
           </div>
         )}
@@ -682,7 +689,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           <>
             {files.length === 0 ? (
               <div className="file-tree-empty">
-                <p>📂 No markdown files found</p>
+                <p>No markdown files found</p>
                 <small>This directory doesn't contain any .md files</small>
               </div>
             ) : (
@@ -703,7 +710,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           title="Create new markdown file"
           disabled={!rootPath}
         >
-          📄 New File
+          [+] New File
         </button>
         <button 
           className="action-btn"
@@ -714,7 +721,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           title="Create new directory" 
           disabled={!rootPath}
         >
-          📁 New Folder
+          [+] New Folder
         </button>
       </div>
       
@@ -760,35 +767,40 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
               
               return (
                 <div className="context-menu-content">
-                  <button
-                    className="context-menu-item"
-                    onClick={() => handlePinItem(item)}
-                    disabled={isPinned || pinnedItems.length >= 5}
-                  >
-                    📌 {isPinned ? 'Already Pinned' : 'Pin Item'}
-                  </button>
-                  {isPinned && (
-                    <button
-                      className="context-menu-item"
-                      onClick={() => {
-                        handleUnpinItem(item.path)
-                        setShowContextMenu(null)
-                      }}
-                    >
-                      📌 Unpin Item
-                    </button>
+                  {/* Only show pin options for files, not directories */}
+                  {item.type === 'file' && (
+                    <>
+                      <button
+                        className="context-menu-item"
+                        onClick={() => handlePinItem(item)}
+                        disabled={isPinned || pinnedItems.length >= 5}
+                      >
+                        {isPinned ? 'Already Pinned' : 'PIN ITEM'}
+                      </button>
+                      {isPinned && (
+                        <button
+                          className="context-menu-item"
+                          onClick={() => {
+                            handleUnpinItem(item.path)
+                            setShowContextMenu(null)
+                          }}
+                        >
+                          UNPIN ITEM
+                        </button>
+                      )}
+                    </>
                   )}
                   <button
                     className="context-menu-item"
                     onClick={() => handleRenameItem(item)}
                   >
-                    ✏️ Rename
+                    RENAME
                   </button>
                   <button
                     className="context-menu-item delete"
                     onClick={() => handleDeleteItem(item)}
                   >
-                    🗑️ Delete
+                    DELETE
                   </button>
                 </div>
               )

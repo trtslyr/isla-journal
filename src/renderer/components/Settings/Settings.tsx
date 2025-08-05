@@ -36,14 +36,14 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       const result = await validateNewLicense(licenseKey)
       
               if (result.valid) {
-          setValidationMessage('✅ License validated successfully!')
+          setValidationMessage('[OK] License validated successfully!')
           setLicenseKey('') // Clear input
         } else {
-        setValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
+        setValidationMessage(`[ERROR] ${result.error || 'Invalid license key'}`)
       }
     } catch (error) {
       console.error('License validation error:', error)
-      setValidationMessage('❌ Network error - please check your connection')
+              setValidationMessage('[ERROR] Network error - please check your connection')
     }
   }
 
@@ -57,7 +57,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
         onClose()
       } catch (error) {
         console.error('Failed to clear license:', error)
-        setValidationMessage('❌ Failed to clear license')
+        setValidationMessage('[ERROR] Failed to clear license')
       }
     }
   }
@@ -106,7 +106,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 <div className="license-status-display">
                   <div className="license-status-item">
                     <span className="license-label">Status:</span>
-                    <span className="license-value valid">✅ Active</span>
+                    <span className="license-value valid">[ACTIVE]</span>
                   </div>
                   <div className="license-status-item">
                     <span className="license-label">Type:</span>
@@ -196,7 +196,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                       className="purchase-btn lifetime" 
                       onClick={() => openUrl('https://pay.islajournal.app/b/cNieVc50A7yGfkv4BQ73G00')}
                     >
-                      🌟 Lifetime License
+                                              [LIFETIME] License
                       <span className="license-price">$99</span>
                     </button>
                     <button 
@@ -210,7 +210,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                       className="purchase-btn monthly" 
                       onClick={() => openUrl('https://pay.islajournal.app/b/dRmaEWct2cT03BN6JY73G01')}
                     >
-                      🔄 Monthly License
+                      [MONTHLY] License
                       <span className="license-price">$7</span>
                     </button>
                   </div>
@@ -223,28 +223,6 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Token Usage Section */}
-          <div className="settings-section">
-            <h3>Token Usage</h3>
-            <div className="settings-item">
-              <div className="usage-stats">
-                <div className="usage-item">
-                  <span className="usage-label">Tokens Used Today:</span>
-                  <span className="usage-value">0 / 10,000</span>
-                </div>
-                <div className="usage-item">
-                  <span className="usage-label">Tokens Used This Month:</span>
-                  <span className="usage-value">0 / 100,000</span>
-                </div>
-                <div className="usage-progress">
-                  <div className="progress-bar">
-                    <div className="progress-fill" style={{ width: '0%' }}></div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
 
           {/* AI Model Section */}
@@ -342,42 +320,6 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 className="settings-slider"
               />
               <span className="slider-value">14px</span>
-            </div>
-          </div>
-
-          {/* Additional Settings */}
-          <div className="settings-section">
-            <h3>Advanced</h3>
-            <div className="settings-item">
-              <label className="settings-checkbox">
-                <input type="checkbox" defaultChecked />
-                <span className="checkmark"></span>
-                Enable auto-save
-              </label>
-            </div>
-            <div className="settings-item">
-              <label className="settings-checkbox">
-                <input type="checkbox" defaultChecked />
-                <span className="checkmark"></span>
-                Enable file watching
-              </label>
-            </div>
-            <div className="settings-item">
-              <label className="settings-checkbox">
-                <input type="checkbox" />
-                <span className="checkmark"></span>
-                Enable debug logging
-              </label>
-            </div>
-            <div className="settings-item">
-              <label>Auto-save interval (seconds):</label>
-              <input 
-                type="number" 
-                min="5" 
-                max="300" 
-                defaultValue="30" 
-                className="settings-input number"
-              />
             </div>
           </div>
 
