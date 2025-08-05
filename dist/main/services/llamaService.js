@@ -137,8 +137,24 @@ class LlamaService {
             this.safeLog('✅ [LlamaService] Ollama is running');
         }
         catch (error) {
-            this.safeLog('❌ [LlamaService] Ollama not running. Please install and start Ollama first.', 'error');
-            throw new Error('Ollama is not running. Please install Ollama from https://ollama.ai and start it.');
+            const platform = process.platform;
+            let installInstructions = '';
+            switch (platform) {
+                case 'darwin':
+                    installInstructions = 'Install Ollama for macOS from https://ollama.ai/download/mac';
+                    break;
+                case 'win32':
+                    installInstructions = 'Install Ollama for Windows from https://ollama.ai/download/windows';
+                    break;
+                case 'linux':
+                    installInstructions = 'Install Ollama for Linux: curl -fsSL https://ollama.ai/install.sh | sh';
+                    break;
+                default:
+                    installInstructions = 'Install Ollama from https://ollama.ai for your platform';
+                    break;
+            }
+            this.safeLog(`❌ [LlamaService] Ollama not running on ${platform}. ${installInstructions}`, 'error');
+            throw new Error(`Ollama is not running. ${installInstructions}`);
         }
     }
     async getModelStatus(modelName) {

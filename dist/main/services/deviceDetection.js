@@ -86,29 +86,45 @@ class DeviceDetectionService {
             return this.deviceSpecs;
         }
         try {
-            const [memory, cpu, osInfo] = await Promise.all([
+            // Use Promise.allSettled for better error handling across platforms
+            const results = await Promise.allSettled([
                 si.mem(),
                 si.cpu(),
                 si.osInfo()
             ]);
-            // Detect Apple Silicon
-            const isAppleSilicon = process.platform === 'darwin' &&
-                (process.arch === 'arm64' || cpu.manufacturer?.toLowerCase().includes('apple'));
-            // Detect AVX support (simplified - in production you'd use a more robust check)
-            const supportsAVX = cpu.flags?.includes('avx') || cpu.flags?.includes('avx2') ||
-                cpu.brand?.toLowerCase().includes('intel') || cpu.brand?.toLowerCase().includes('amd');
+            // Extract results with fallbacks
+            const memory = results[0].status === 'fulfilled' ? results[0].value : { total: 8 * (1024 ** 3), available: 4 * (1024 ** 3) };
+            const cpu = results[1].status === 'fulfilled' ? results[1].value : { cores: 4, speed: 2.0, manufacturer: '', brand: '', flags: [] };
+            const osInfo = results[2].status === 'fulfilled' ? results[2].value : { platform: process.platform, arch: process.arch, release: os.release() };
+            // Cross-platform Apple Silicon detection
+            const isAppleSilicon = (process.platform === 'darwin' && process.arch === 'arm64') ||
+                cpu.manufacturer?.toLowerCase().includes('apple') ||
+                cpu.brand?.toLowerCase().includes('apple');
+            // Enhanced AVX detection with cross-platform support
+            const supportsAVX = this.detectAVXSupport(cpu, process.platform, process.arch);
+            // Robust memory calculation with fallbacks
+            const totalMemoryGB = memory.total ? Math.round(memory.total / (1024 ** 3)) : this.estimateMemoryByPlatform(process.platform);
+            const availableMemoryGB = memory.available ? Math.round(memory.available / (1024 ** 3)) : Math.round(totalMemoryGB * 0.5);
             this.deviceSpecs = {
-                totalMemory: Math.round(memory.total / (1024 ** 3)), // Convert to GB
-                availableMemory: Math.round(memory.available / (1024 ** 3)),
-                cpuCores: cpu.cores,
-                cpuSpeed: cpu.speed,
-                platform: this.normalizePlatform(osInfo.platform),
-                arch: this.normalizeArchitecture(osInfo.arch),
-                osVersion: osInfo.release || 'unknown',
+                totalMemory: totalMemoryGB,
+                availableMemory: availableMemoryGB,
+                cpuCores: cpu.cores || this.estimateCoresByPlatform(process.platform),
+                cpuSpeed: cpu.speed || 2.0,
+                platform: this.normalizePlatform(osInfo.platform || process.platform),
+                arch: this.normalizeArchitecture(osInfo.arch || process.arch),
+                osVersion: osInfo.release || os.release() || 'unknown',
                 isAppleSilicon,
-                supportsAVX: supportsAVX || false
+                supportsAVX
             };
-            console.log('🔍 [DeviceDetection] Device specs:', this.deviceSpecs);
+            console.log('🔍 [DeviceDetection] Device specs detected:', {
+                platform: this.deviceSpecs.platform,
+                arch: this.deviceSpecs.arch,
+                totalMemory: `${this.deviceSpecs.totalMemory}GB`,
+                cpuCores: this.deviceSpecs.cpuCores,
+                isAppleSilicon: this.deviceSpecs.isAppleSilicon,
+                supportsAVX: this.deviceSpecs.supportsAVX,
+                osVersion: this.deviceSpecs.osVersion
+            });
             return this.deviceSpecs;
         }
         catch (error) {
@@ -129,19 +145,29 @@ class DeviceDetectionService {
         }
     }
     normalizePlatform(platform) {
-        switch (platform.toLowerCase()) {
+        const normalized = platform.toLowerCase();
+        switch (normalized) {
             case 'win32':
             case 'windows':
+            case 'cygwin':
+            case 'msys':
                 return 'windows';
             case 'darwin':
             case 'macos':
+            case 'osx':
                 return 'macos';
             case 'linux':
             case 'freebsd':
             case 'openbsd':
+            case 'netbsd':
+            case 'sunos':
+            case 'aix':
                 return 'linux';
+            case 'android':
+                return 'android';
             default:
-                return platform.toLowerCase();
+                console.log(`🔍 [DeviceDetection] Unknown platform: ${platform}, treating as linux`);
+                return 'linux'; // Conservative fallback to linux
         }
     }
     normalizeArchitecture(arch) {
@@ -158,6 +184,58 @@ class DeviceDetectionService {
                 return 'x86';
             default:
                 return arch.toLowerCase();
+        }
+    }
+    detectAVXSupport(cpu, platform, arch) {
+        // Check CPU flags first (most reliable)
+        if (cpu.flags && Array.isArray(cpu.flags)) {
+            if (cpu.flags.includes('avx') || cpu.flags.includes('avx2')) {
+                return true;
+            }
+        }
+        // Check brand/manufacturer
+        const brand = (cpu.brand || '').toLowerCase();
+        const manufacturer = (cpu.manufacturer || '').toLowerCase();
+        // Most modern Intel/AMD CPUs support AVX
+        if (brand.includes('intel') || brand.includes('amd') ||
+            manufacturer.includes('intel') || manufacturer.includes('amd')) {
+            return true;
+        }
+        // Apple Silicon has its own optimizations
+        if (platform === 'darwin' && arch === 'arm64') {
+            return false; // Apple Silicon uses different optimizations
+        }
+        // Conservative fallback
+        return false;
+    }
+    estimateMemoryByPlatform(platform) {
+        // Conservative estimates based on typical configurations
+        switch (platform.toLowerCase()) {
+            case 'win32':
+            case 'windows':
+                return 16; // Windows machines often have 16GB+
+            case 'darwin':
+            case 'macos':
+                return 16; // Macs typically 16GB+
+            case 'linux':
+                return 8; // Linux can run on lower-end hardware
+            default:
+                return 8; // Conservative fallback
+        }
+    }
+    estimateCoresByPlatform(platform) {
+        // Conservative estimates based on typical configurations
+        switch (platform.toLowerCase()) {
+            case 'win32':
+            case 'windows':
+                return 8; // Modern Windows machines
+            case 'darwin':
+            case 'macos':
+                return 8; // Modern Macs
+            case 'linux':
+                return 4; // Linux can run on varied hardware
+            default:
+                return 4; // Conservative fallback
         }
     }
     getModelRecommendation(specs) {
@@ -234,22 +312,45 @@ class DeviceDetectionService {
                 }
             ];
         }
-        // Filter models based on platform and architecture compatibility
-        const compatibleModels = candidateModels.filter(model => model.compatiblePlatforms.includes(specs.platform) &&
-            model.compatibleArchitectures.includes(specs.arch));
+        // Enhanced cross-platform compatibility filtering
+        const compatibleModels = candidateModels.filter(model => {
+            // Check platform compatibility with fallbacks
+            let platformCompatible = model.compatiblePlatforms.includes(specs.platform);
+            // If platform not directly supported, check for linux fallback (most universal)
+            if (!platformCompatible && specs.platform === 'android') {
+                platformCompatible = model.compatiblePlatforms.includes('linux');
+            }
+            // Check architecture compatibility with fallbacks
+            let archCompatible = model.compatibleArchitectures.includes(specs.arch);
+            // x86 systems can often run x64 models
+            if (!archCompatible && specs.arch === 'x86') {
+                archCompatible = model.compatibleArchitectures.includes('x64');
+            }
+            const isCompatible = platformCompatible && archCompatible;
+            if (!isCompatible) {
+                console.log(`🚫 [DeviceDetection] Model ${model.modelName} incompatible: platform=${specs.platform}(${platformCompatible}), arch=${specs.arch}(${archCompatible})`);
+            }
+            else {
+                console.log(`✅ [DeviceDetection] Model ${model.modelName} compatible with ${specs.platform}/${specs.arch}`);
+            }
+            return isCompatible;
+        });
         // Return the first compatible model, or fallback if none found
         if (compatibleModels.length > 0) {
-            return compatibleModels[0];
+            const selectedModel = compatibleModels[0];
+            console.log(`🎯 [DeviceDetection] Selected ${selectedModel.displayName} for ${specs.platform}/${specs.arch} with ${specs.totalMemory}GB RAM`);
+            return selectedModel;
         }
-        // Ultimate fallback - should work on all platforms
+        // Ultimate universal fallback - guaranteed to work on all platforms
+        console.log(`⚠️ [DeviceDetection] No compatible models found, using universal fallback for ${specs.platform}/${specs.arch}`);
         return {
             modelName: 'gemma2:2b',
-            displayName: 'Gemma 2 2B (Fallback)',
+            displayName: 'Gemma 2 2B (Universal Fallback)',
             minMemory: 2,
-            description: 'Universal compatibility, minimal resource usage',
+            description: 'Cross-platform compatibility guaranteed, minimal resource usage',
             downloadSize: '1.6GB',
-            compatiblePlatforms: ['windows', 'macos', 'linux'],
-            compatibleArchitectures: ['x64', 'arm64'],
+            compatiblePlatforms: ['windows', 'macos', 'linux', 'android'],
+            compatibleArchitectures: ['x64', 'arm64', 'x86'],
             isOptimized: false
         };
     }

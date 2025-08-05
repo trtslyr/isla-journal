@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.contentService = void 0;
 const database_1 = require("../database");
 const llamaService_1 = require("./llamaService");
+const promises_1 = require("fs/promises");
+const path_1 = require("path");
 class ContentService {
     /**
      * Perform RAG search and generate response with conversation context
@@ -10,25 +12,27 @@ class ContentService {
     async searchAndAnswer(query, conversationHistory) {
         try {
             console.log(`🔍 [ContentService] Searching for: ${query}`);
-            // 1. Get pinned files content first
+            // 1. Get pinned files content first with cross-platform path handling
             let pinnedContent = '';
             try {
                 const pinnedItemsJson = database_1.database.getSetting('pinnedItems');
                 if (pinnedItemsJson) {
                     const pinnedItems = JSON.parse(pinnedItemsJson);
-                    const { readFile } = require('fs/promises');
                     const pinnedSources = [];
                     for (let i = 0; i < pinnedItems.length; i++) {
                         const item = pinnedItems[i];
                         if (item.type === 'file' && item.path.endsWith('.md')) {
                             try {
-                                const content = await readFile(item.path, 'utf-8');
+                                // Normalize path for cross-platform compatibility
+                                const normalizedPath = (0, path_1.normalize)((0, path_1.resolve)(item.path));
+                                const content = await (0, promises_1.readFile)(normalizedPath, 'utf-8');
                                 // Get first 300 chars as snippet
                                 const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content;
                                 pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`);
+                                console.log(`📌 [ContentService] Successfully read pinned file: ${item.name} (${normalizedPath})`);
                             }
                             catch (error) {
-                                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name}`);
+                                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name} - ${error.message}`);
                             }
                         }
                     }

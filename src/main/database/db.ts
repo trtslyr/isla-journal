@@ -65,8 +65,10 @@ export interface ContentChunk {
 class IslaDatabase {
   private db: Database.Database | null = null
   private dbPath: string
+  private isWindows: boolean
 
   constructor() {
+    this.isWindows = os.platform() === 'win32'
     // Cross-platform database path
     this.dbPath = this.getDatabasePath()
   }
@@ -76,10 +78,30 @@ class IslaDatabase {
    * Converts Windows backslashes to forward slashes for consistent storage
    */
   private normalizeFilePath(filePath: string): string {
-    // Resolve to absolute path and normalize
-    const resolved = resolve(filePath)
-    // Convert Windows backslashes to forward slashes for consistent storage
-    return resolved.replace(/\\/g, '/')
+    try {
+      // Resolve to absolute path and normalize
+      const resolved = resolve(filePath)
+      
+      // Windows-specific path handling
+      if (this.isWindows) {
+        // Handle long paths on Windows (>260 chars)
+        const longPathPrefix = '\\\\?\\'
+        let windowsPath = resolved
+        
+        if (resolved.length > 260 && !resolved.startsWith(longPathPrefix)) {
+          windowsPath = longPathPrefix + resolved
+        }
+        
+        // Convert to forward slashes for consistent storage
+        return windowsPath.replace(/\\/g, '/')
+      }
+      
+      // Convert Windows backslashes to forward slashes for consistent storage
+      return resolved.replace(/\\/g, '/')
+    } catch (error) {
+      console.warn(`⚠️ [Database] Path normalization failed for ${filePath}:`, error)
+      return normalize(filePath).replace(/\\/g, '/')
+    }
   }
 
   /**
@@ -96,7 +118,19 @@ class IslaDatabase {
       
       // Ensure directory exists with cross-platform permissions
       if (!existsSync(dbDir)) {
-        mkdirSync(dbDir, { recursive: true, mode: 0o755 })
+        const dirOptions: any = { recursive: true }
+        
+        // Windows doesn't use Unix-style mode permissions
+        if (!this.isWindows) {
+          dirOptions.mode = 0o755
+        }
+        
+        mkdirSync(dbDir, dirOptions)
+        
+        // Additional Windows directory setup
+        if (this.isWindows) {
+          console.log(`🪟 [Database] Windows database directory created: ${dbDir}`)
+        }
       }
       
       const dbPath = normalize(join(dbDir, 'isla.db'))
@@ -111,7 +145,14 @@ class IslaDatabase {
       const fallbackDir = normalize(join(homeDir, '.isla-journal', 'database'))
       
       if (!existsSync(fallbackDir)) {
-        mkdirSync(fallbackDir, { recursive: true, mode: 0o755 })
+        const dirOptions: any = { recursive: true }
+        
+        // Windows doesn't use Unix-style mode permissions
+        if (!this.isWindows) {
+          dirOptions.mode = 0o755
+        }
+        
+        mkdirSync(fallbackDir, dirOptions)
       }
       
       const fallbackPath = normalize(join(fallbackDir, 'isla.db'))
@@ -122,24 +163,51 @@ class IslaDatabase {
   }
 
   /**
-   * Initialize database and create tables
+   * Initialize database and create tables with Windows-specific optimizations
    */
   public initialize(): void {
     try {
       // Ensure database directory exists
       const dbDir = path.dirname(this.dbPath)
       if (!existsSync(dbDir)) {
-        mkdirSync(dbDir, { recursive: true })
+        const dirOptions: any = { recursive: true }
+        if (!this.isWindows) {
+          dirOptions.mode = 0o755
+        }
+        mkdirSync(dbDir, dirOptions)
       }
 
-      this.db = new Database(this.dbPath)
+      // Windows-specific database options
+      const dbOptions: Database.Options = {}
+      
+      if (this.isWindows) {
+        // Windows-specific SQLite options
+        dbOptions.verbose = console.log // Better Windows debugging
+        dbOptions.fileMustExist = false
+        dbOptions.timeout = 10000 // 10 second timeout for Windows file locking
+      }
+
+      this.db = new Database(this.dbPath, dbOptions)
       console.log('🗄️ [Database] Connected to SQLite database')
 
-      // Enable WAL mode for better concurrency and safety
-      this.db.pragma('journal_mode = WAL')
-      this.db.pragma('synchronous = NORMAL')
-      this.db.pragma('cache_size = 10000')
-      this.db.pragma('foreign_keys = ON')
+      // Enhanced Windows-compatible SQLite pragmas
+      if (this.isWindows) {
+        // Windows-specific pragmas for better reliability
+        this.db.pragma('journal_mode = WAL')
+        this.db.pragma('synchronous = NORMAL') 
+        this.db.pragma('cache_size = 10000')
+        this.db.pragma('foreign_keys = ON')
+        this.db.pragma('temp_store = MEMORY') // Keep temp files in memory on Windows
+        this.db.pragma('mmap_size = 268435456') // 256MB memory mapping
+        this.db.pragma('wal_autocheckpoint = 1000') // Checkpoint WAL more frequently on Windows
+        console.log('🪟 [Database] Applied Windows-specific SQLite optimizations')
+      } else {
+        // Standard pragmas for Unix-like systems
+        this.db.pragma('journal_mode = WAL')
+        this.db.pragma('synchronous = NORMAL')
+        this.db.pragma('cache_size = 10000')
+        this.db.pragma('foreign_keys = ON')
+      }
 
       // Create tables if they don't exist
       this.createTables()
@@ -149,6 +217,46 @@ class IslaDatabase {
       console.log('✅ [Database] SQLite initialized successfully')
     } catch (error) {
       console.error('❌ [Database] Failed to initialize:', error)
+      
+      // Windows-specific error handling
+      if (this.isWindows && error.message.includes('database is locked')) {
+        console.log('🪟 [Database] Windows file lock detected, attempting recovery...')
+        this.handleWindowsLockError()
+      } else {
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Handle Windows-specific SQLite locking issues
+   */
+  private handleWindowsLockError(): void {
+    try {
+      // Wait a bit for Windows file system
+      setTimeout(() => {
+        console.log('🪟 [Database] Retrying Windows database connection...')
+        
+        // Close any existing connection
+        if (this.db) {
+          try {
+            this.db.close()
+          } catch (e) {
+            console.warn('⚠️ [Database] Error closing database:', e)
+          }
+          this.db = null
+        }
+        
+        // Force garbage collection on Windows
+        if (global.gc) {
+          global.gc()
+        }
+        
+        // Retry initialization
+        this.initialize()
+      }, 1000)
+    } catch (error) {
+      console.error('❌ [Database] Windows lock recovery failed:', error)
       throw error
     }
   }
@@ -425,38 +533,124 @@ class IslaDatabase {
     console.log('🔄 [Database] Force recreating database due to errors...')
     try {
       if (this.db) {
-        this.db.close()
+        try {
+          this.db.close()
+        } catch (closeError) {
+          console.warn('⚠️ [Database] Error during database close:', closeError)
+        }
         this.db = null
+      }
+      
+      // Windows-specific cleanup delay
+      if (this.isWindows) {
+        // Give Windows file system time to release handles
+        console.log('🪟 [Database] Waiting for Windows file handles to release...')
+        setTimeout(() => this.performDatabaseCleanup(), 500)
+      } else {
+        this.performDatabaseCleanup()
+      }
+      
+    } catch (error) {
+      console.error('❌ [Database] Failed to recreate database:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Perform the actual database file cleanup with enhanced Windows support
+   */
+  private performDatabaseCleanup(): void {
+    try {
+      // Force garbage collection on Windows to release file handles
+      if (this.isWindows && global.gc) {
+        global.gc()
       }
       
       // Delete the corrupted database file with cross-platform path handling
       const normalizedPath = normalize(this.dbPath)
-      if (existsSync(normalizedPath)) {
-        unlinkSync(normalizedPath)
-        console.log(`🗑️ [Database] Deleted corrupted database: ${normalizedPath}`)
+      
+      // Windows-specific file deletion with retry logic
+      if (this.isWindows) {
+        this.deleteFileWithRetry(normalizedPath, 'main database')
+      } else {
+        if (existsSync(normalizedPath)) {
+          unlinkSync(normalizedPath)
+          console.log(`🗑️ [Database] Deleted corrupted database: ${normalizedPath}`)
+        }
       }
       
       // Also clean up any associated WAL/SHM files (SQLite)
       const walPath = normalizedPath + '-wal'
       const shmPath = normalizedPath + '-shm'
+      const journalPath = normalizedPath + '-journal'
       
-      if (existsSync(walPath)) {
-        unlinkSync(walPath)
-        console.log(`🗑️ [Database] Deleted WAL file: ${walPath}`)
+      if (this.isWindows) {
+        // Windows: delete with retry
+        this.deleteFileWithRetry(walPath, 'WAL file')
+        this.deleteFileWithRetry(shmPath, 'SHM file')
+        this.deleteFileWithRetry(journalPath, 'Journal file')
+      } else {
+        // Unix: standard deletion
+        if (existsSync(walPath)) {
+          unlinkSync(walPath)
+          console.log(`🗑️ [Database] Deleted WAL file: ${walPath}`)
+        }
+        
+        if (existsSync(shmPath)) {
+          unlinkSync(shmPath)
+          console.log(`🗑️ [Database] Deleted SHM file: ${shmPath}`)
+        }
+        
+        if (existsSync(journalPath)) {
+          unlinkSync(journalPath)
+          console.log(`🗑️ [Database] Deleted Journal file: ${journalPath}`)
+        }
       }
       
-      if (existsSync(shmPath)) {
-        unlinkSync(shmPath)
-        console.log(`🗑️ [Database] Deleted SHM file: ${shmPath}`)
+      // Small delay before reinitializing on Windows
+      if (this.isWindows) {
+        setTimeout(() => {
+          this.initialize()
+          console.log('✅ [Database] Successfully recreated database')
+        }, 200)
+      } else {
+        // Reinitialize immediately on Unix
+        this.initialize()
+        console.log('✅ [Database] Successfully recreated database')
       }
       
-      // Reinitialize completely
-      this.initialize()
-      console.log('✅ [Database] Successfully recreated database')
     } catch (error) {
-      console.error('❌ [Database] Failed to recreate database:', error)
+      console.error('❌ [Database] Failed during cleanup:', error)
       throw error
     }
+  }
+
+  /**
+   * Delete file with retry logic for Windows file locking issues
+   */
+  private deleteFileWithRetry(filePath: string, fileType: string, maxRetries: number = 3): void {
+    if (!existsSync(filePath)) return
+    
+    let retries = 0
+    const attemptDelete = () => {
+      try {
+        unlinkSync(filePath)
+        console.log(`🗑️ [Database] Deleted ${fileType}: ${filePath}`)
+      } catch (error) {
+        retries++
+        if (retries < maxRetries && error.code === 'EBUSY') {
+          console.log(`🪟 [Database] ${fileType} busy, retrying (${retries}/${maxRetries})...`)
+          setTimeout(attemptDelete, 100 * retries) // Exponential backoff
+        } else if (retries < maxRetries) {
+          console.log(`🪟 [Database] Retrying ${fileType} deletion (${retries}/${maxRetries})...`)
+          setTimeout(attemptDelete, 50)
+        } else {
+          console.warn(`⚠️ [Database] Failed to delete ${fileType} after ${maxRetries} attempts:`, error)
+        }
+      }
+    }
+    
+    attemptDelete()
   }
 
   /**
@@ -758,13 +952,39 @@ class IslaDatabase {
   // fixDatabaseSchema method removed - no longer needed without FTS
 
   /**
-   * Close database connection
+   * Close database connection with Windows-specific cleanup
    */
   public close(): void {
     if (this.db) {
-      this.db.close()
-      this.db = null
-      console.log('🔒 [Database] Connection closed')
+      try {
+        // Windows-specific pre-close cleanup
+        if (this.isWindows) {
+          // Checkpoint WAL files on Windows before closing
+          try {
+            this.db.pragma('wal_checkpoint(TRUNCATE)')
+            console.log('🪟 [Database] Windows WAL checkpoint completed')
+          } catch (walError) {
+            console.warn('⚠️ [Database] WAL checkpoint warning:', walError)
+          }
+        }
+        
+        this.db.close()
+        this.db = null
+        console.log('🔒 [Database] Connection closed')
+        
+        // Windows-specific post-close cleanup
+        if (this.isWindows && global.gc) {
+          // Force garbage collection to release file handles
+          setTimeout(() => {
+            global.gc()
+            console.log('🪟 [Database] Windows garbage collection completed')
+          }, 100)
+        }
+        
+      } catch (error) {
+        console.error('❌ [Database] Error during close:', error)
+        this.db = null // Ensure it's set to null even on error
+      }
     }
   }
 }

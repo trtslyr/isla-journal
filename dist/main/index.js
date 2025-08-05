@@ -37,7 +37,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
-const path_1 = require("path");
 const is_dev_1 = require("./utils/is-dev");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -83,6 +82,8 @@ const createWindow = () => {
 };
 // This method will be called when Electron has finished initialization
 electron_1.app.whenReady().then(() => {
+    // Log cross-platform information
+    logPlatformInfo();
     // Initialize database
     try {
         database_1.database.initialize();
@@ -223,13 +224,32 @@ electron_1.app.on('before-quit', () => {
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
 // File System Operations
 const promises_1 = require("fs/promises");
-const path_2 = __importDefault(require("path"));
+const path_1 = __importStar(require("path"));
+const os_1 = __importDefault(require("os"));
 // Database
 const database_1 = require("./database");
 // LLM Services
 const llamaService_1 = require("./services/llamaService");
 const deviceDetection_1 = require("./services/deviceDetection");
 const contentService_1 = require("./services/contentService");
+// Cross-platform path utility
+const normalizePath = (filePath) => {
+    try {
+        // Resolve to absolute path and normalize
+        const resolved = (0, path_1.resolve)(filePath);
+        // Convert Windows backslashes to forward slashes for logging consistency
+        const normalized = (0, path_1.normalize)(resolved);
+        return normalized;
+    }
+    catch (error) {
+        console.warn(`⚠️ [Path] Failed to normalize path: ${filePath} - ${error.message}`);
+        return (0, path_1.normalize)(filePath); // Fallback to basic normalization
+    }
+};
+// Cross-platform logging helper
+const logPlatformInfo = () => {
+    console.log(`🌍 [Platform] OS: ${os_1.default.platform()}, Arch: ${os_1.default.arch()}, Release: ${os_1.default.release()}`);
+};
 // Basic app info handlers
 electron_1.ipcMain.handle('app:getVersion', () => {
     return electron_1.app.getVersion();
@@ -257,10 +277,12 @@ electron_1.ipcMain.handle('file:openDirectory', async () => {
         throw error;
     }
 });
-// IPC handler to read directory contents
+// IPC handler to read directory contents with cross-platform path handling
 electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
     try {
-        console.log('📁 Reading directory:', dirPath);
+        const normalizedDirPath = normalizePath(dirPath);
+        console.log('📁 Reading directory:', normalizedDirPath);
+        console.log('🔍 [Directory] Original path:', dirPath, '→ Normalized:', normalizedDirPath);
         // Check if this is a root directory switch (not just subdirectory expansion)
         let shouldClearDatabase = false;
         let isRootDirectoryChange = false;
@@ -304,10 +326,10 @@ electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
         }
         // Save the directory as root directory only if it's a root directory change
         if (isRootDirectoryChange) {
-            database_1.database.setSetting('selectedDirectory', dirPath);
-            console.log('📂 [Directory Switch] Set new root directory:', dirPath);
+            database_1.database.setSetting('selectedDirectory', normalizedDirPath);
+            console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath);
         }
-        const entries = await (0, promises_1.readdir)(dirPath, { withFileTypes: true });
+        const entries = await (0, promises_1.readdir)(normalizedDirPath, { withFileTypes: true });
         console.log('📋 Found entries:', entries.length);
         const files = [];
         for (const entry of entries) {
@@ -321,7 +343,7 @@ electron_1.ipcMain.handle('file:readDirectory', async (_, dirPath) => {
                 console.log('⏭️ Skipping non-markdown file:', entry.name);
                 continue;
             }
-            const fullPath = (0, path_1.join)(dirPath, entry.name);
+            const fullPath = normalizePath((0, path_1.join)(normalizedDirPath, entry.name));
             const stats = await (0, promises_1.stat)(fullPath);
             const fileItem = {
                 name: entry.name,
@@ -410,27 +432,31 @@ async function processDirectoryRecursively(dirPath) {
 }
 electron_1.ipcMain.handle('file:readFile', async (_, filePath) => {
     try {
-        const content = await (0, promises_1.readFile)(filePath, 'utf-8');
+        const normalizedPath = normalizePath(filePath);
+        console.log('📖 [File] Reading:', normalizedPath);
+        const content = await (0, promises_1.readFile)(normalizedPath, 'utf-8');
         return content;
     }
     catch (error) {
-        console.error('Error reading file:', error);
+        console.error('❌ [File] Error reading file:', filePath, '→', error.message);
         throw error;
     }
 });
 electron_1.ipcMain.handle('file:writeFile', async (_, filePath, content) => {
     try {
-        await (0, promises_1.writeFile)(filePath, content, 'utf-8');
+        const normalizedPath = normalizePath(filePath);
+        console.log('💾 [File] Writing:', normalizedPath);
+        await (0, promises_1.writeFile)(normalizedPath, content, 'utf-8');
         // If it's a markdown file, also update the database for RAG
-        if (filePath.endsWith('.md')) {
-            const fileName = path_2.default.basename(filePath);
-            database_1.database.saveFile(filePath, fileName, content);
-            console.log('🧠 Updated RAG index for:', fileName);
+        if (normalizedPath.endsWith('.md')) {
+            const fileName = path_1.default.basename(normalizedPath);
+            database_1.database.saveFile(normalizedPath, fileName, content);
+            console.log('🧠 [File] Updated RAG index for:', fileName);
         }
         return true;
     }
     catch (error) {
-        console.error('Error writing file:', error);
+        console.error('❌ [File] Error writing file:', filePath, '→', error.message);
         throw error;
     }
 });
@@ -440,13 +466,18 @@ electron_1.ipcMain.handle('file:createFile', async (_, dirPath, fileName) => {
         if (!fileName.endsWith('.md')) {
             fileName += '.md';
         }
-        const filePath = (0, path_1.join)(dirPath, fileName);
+        const normalizedDirPath = normalizePath(dirPath);
+        const filePath = normalizePath((0, path_1.join)(normalizedDirPath, fileName));
         const initialContent = `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`;
+        console.log('📝 [File] Creating new file:', filePath);
         await (0, promises_1.writeFile)(filePath, initialContent, 'utf-8');
+        // Also add to database for RAG indexing
+        database_1.database.saveFile(filePath, fileName, initialContent);
+        console.log('🧠 [File] Added new file to RAG index:', fileName);
         return filePath;
     }
     catch (error) {
-        console.error('Error creating file:', error);
+        console.error('❌ [File] Error creating file:', fileName, '→', error.message);
         throw error;
     }
 });
@@ -788,8 +819,8 @@ electron_1.ipcMain.handle('file:delete', async (_, filePath) => {
 electron_1.ipcMain.handle('file:rename', async (_, oldPath, newName) => {
     try {
         const { rename } = await Promise.resolve().then(() => __importStar(require('fs/promises')));
-        const parentDir = path_2.default.dirname(oldPath);
-        const newPath = path_2.default.join(parentDir, newName);
+        const parentDir = path_1.default.dirname(oldPath);
+        const newPath = path_1.default.join(parentDir, newName);
         // Check if new path already exists
         try {
             await (0, promises_1.stat)(newPath);
@@ -808,7 +839,7 @@ electron_1.ipcMain.handle('file:rename', async (_, oldPath, newName) => {
         if (oldPath.endsWith('.md') && newPath.endsWith('.md')) {
             try {
                 const content = await (0, promises_1.readFile)(newPath, 'utf-8');
-                const fileName = path_2.default.basename(newPath);
+                const fileName = path_1.default.basename(newPath);
                 // Remove old entry and add new one
                 // TODO: Add method to update file path in database
                 database_1.database.saveFile(newPath, fileName, content);
@@ -829,8 +860,8 @@ electron_1.ipcMain.handle('file:rename', async (_, oldPath, newName) => {
 electron_1.ipcMain.handle('file:move', async (_, sourcePath, targetDirectoryPath) => {
     try {
         const { rename } = await Promise.resolve().then(() => __importStar(require('fs/promises')));
-        const fileName = path_2.default.basename(sourcePath);
-        const newPath = path_2.default.join(targetDirectoryPath, fileName);
+        const fileName = path_1.default.basename(sourcePath);
+        const newPath = path_1.default.join(targetDirectoryPath, fileName);
         // Check if source and target are the same
         if (sourcePath === newPath) {
             return { success: true, newPath: sourcePath, message: 'File is already in target location' };
@@ -853,7 +884,7 @@ electron_1.ipcMain.handle('file:move', async (_, sourcePath, targetDirectoryPath
         if (sourcePath.endsWith('.md') && newPath.endsWith('.md')) {
             try {
                 const content = await (0, promises_1.readFile)(newPath, 'utf-8');
-                const fileName = path_2.default.basename(newPath);
+                const fileName = path_1.default.basename(newPath);
                 // Remove old entry and add new one
                 // TODO: Add method to update file path in database
                 database_1.database.saveFile(newPath, fileName, content);

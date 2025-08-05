@@ -9,44 +9,130 @@ const path_1 = require("path");
 const electron_1 = require("electron");
 const fs_1 = require("fs");
 const path_2 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 class IslaDatabase {
     constructor() {
         this.db = null;
+        this.isWindows = os_1.default.platform() === 'win32';
         // Cross-platform database path
         this.dbPath = this.getDatabasePath();
     }
     /**
-     * Get platform-specific database path
-     * - macOS: ~/Library/Application Support/Isla Journal/
-     * - Windows: %APPDATA%/Isla Journal/
-     * - Linux: ~/.local/share/Isla Journal/
+     * Normalize file paths for cross-platform storage
+     * Converts Windows backslashes to forward slashes for consistent storage
      */
-    getDatabasePath() {
-        const userDataPath = electron_1.app.getPath('userData');
-        const dbDir = (0, path_1.join)(userDataPath, 'database');
-        // Ensure directory exists
-        if (!(0, fs_1.existsSync)(dbDir)) {
-            (0, fs_1.mkdirSync)(dbDir, { recursive: true });
+    normalizeFilePath(filePath) {
+        try {
+            // Resolve to absolute path and normalize
+            const resolved = (0, path_1.resolve)(filePath);
+            // Windows-specific path handling
+            if (this.isWindows) {
+                // Handle long paths on Windows (>260 chars)
+                const longPathPrefix = '\\\\?\\';
+                let windowsPath = resolved;
+                if (resolved.length > 260 && !resolved.startsWith(longPathPrefix)) {
+                    windowsPath = longPathPrefix + resolved;
+                }
+                // Convert to forward slashes for consistent storage
+                return windowsPath.replace(/\\/g, '/');
+            }
+            // Convert Windows backslashes to forward slashes for consistent storage
+            return resolved.replace(/\\/g, '/');
         }
-        return (0, path_1.join)(dbDir, 'isla.db');
+        catch (error) {
+            console.warn(`⚠️ [Database] Path normalization failed for ${filePath}:`, error);
+            return (0, path_1.normalize)(filePath).replace(/\\/g, '/');
+        }
     }
     /**
-     * Initialize database and create tables
+     * Get platform-specific database path with enhanced cross-platform support
+     * - macOS: ~/Library/Application Support/Isla Journal/database/
+     * - Windows: %APPDATA%/Isla Journal/database/
+     * - Linux: ~/.local/share/Isla Journal/database/
+     * - Fallback: ~/.isla-journal/database/
+     */
+    getDatabasePath() {
+        try {
+            const userDataPath = electron_1.app.getPath('userData');
+            const dbDir = (0, path_1.normalize)((0, path_1.join)(userDataPath, 'database'));
+            // Ensure directory exists with cross-platform permissions
+            if (!(0, fs_1.existsSync)(dbDir)) {
+                const dirOptions = { recursive: true };
+                // Windows doesn't use Unix-style mode permissions
+                if (!this.isWindows) {
+                    dirOptions.mode = 0o755;
+                }
+                (0, fs_1.mkdirSync)(dbDir, dirOptions);
+                // Additional Windows directory setup
+                if (this.isWindows) {
+                    console.log(`🪟 [Database] Windows database directory created: ${dbDir}`);
+                }
+            }
+            const dbPath = (0, path_1.normalize)((0, path_1.join)(dbDir, 'isla.db'));
+            console.log(`🗄️ [Database] Platform: ${os_1.default.platform()}, DB Path: ${dbPath}`);
+            return dbPath;
+        }
+        catch (error) {
+            // Fallback to home directory if Electron userData fails
+            console.warn(`⚠️ [Database] Electron userData failed, using fallback: ${error}`);
+            const homeDir = os_1.default.homedir();
+            const fallbackDir = (0, path_1.normalize)((0, path_1.join)(homeDir, '.isla-journal', 'database'));
+            if (!(0, fs_1.existsSync)(fallbackDir)) {
+                const dirOptions = { recursive: true };
+                // Windows doesn't use Unix-style mode permissions
+                if (!this.isWindows) {
+                    dirOptions.mode = 0o755;
+                }
+                (0, fs_1.mkdirSync)(fallbackDir, dirOptions);
+            }
+            const fallbackPath = (0, path_1.normalize)((0, path_1.join)(fallbackDir, 'isla.db'));
+            console.log(`🗄️ [Database] Fallback path: ${fallbackPath}`);
+            return fallbackPath;
+        }
+    }
+    /**
+     * Initialize database and create tables with Windows-specific optimizations
      */
     initialize() {
         try {
             // Ensure database directory exists
             const dbDir = path_2.default.dirname(this.dbPath);
             if (!(0, fs_1.existsSync)(dbDir)) {
-                (0, fs_1.mkdirSync)(dbDir, { recursive: true });
+                const dirOptions = { recursive: true };
+                if (!this.isWindows) {
+                    dirOptions.mode = 0o755;
+                }
+                (0, fs_1.mkdirSync)(dbDir, dirOptions);
             }
-            this.db = new better_sqlite3_1.default(this.dbPath);
+            // Windows-specific database options
+            const dbOptions = {};
+            if (this.isWindows) {
+                // Windows-specific SQLite options
+                dbOptions.verbose = console.log; // Better Windows debugging
+                dbOptions.fileMustExist = false;
+                dbOptions.timeout = 10000; // 10 second timeout for Windows file locking
+            }
+            this.db = new better_sqlite3_1.default(this.dbPath, dbOptions);
             console.log('🗄️ [Database] Connected to SQLite database');
-            // Enable WAL mode for better concurrency and safety
-            this.db.pragma('journal_mode = WAL');
-            this.db.pragma('synchronous = NORMAL');
-            this.db.pragma('cache_size = 10000');
-            this.db.pragma('foreign_keys = ON');
+            // Enhanced Windows-compatible SQLite pragmas
+            if (this.isWindows) {
+                // Windows-specific pragmas for better reliability
+                this.db.pragma('journal_mode = WAL');
+                this.db.pragma('synchronous = NORMAL');
+                this.db.pragma('cache_size = 10000');
+                this.db.pragma('foreign_keys = ON');
+                this.db.pragma('temp_store = MEMORY'); // Keep temp files in memory on Windows
+                this.db.pragma('mmap_size = 268435456'); // 256MB memory mapping
+                this.db.pragma('wal_autocheckpoint = 1000'); // Checkpoint WAL more frequently on Windows
+                console.log('🪟 [Database] Applied Windows-specific SQLite optimizations');
+            }
+            else {
+                // Standard pragmas for Unix-like systems
+                this.db.pragma('journal_mode = WAL');
+                this.db.pragma('synchronous = NORMAL');
+                this.db.pragma('cache_size = 10000');
+                this.db.pragma('foreign_keys = ON');
+            }
             // Create tables if they don't exist
             this.createTables();
             console.log('📋 [Database] Tables and indexes created');
@@ -55,6 +141,44 @@ class IslaDatabase {
         }
         catch (error) {
             console.error('❌ [Database] Failed to initialize:', error);
+            // Windows-specific error handling
+            if (this.isWindows && error.message.includes('database is locked')) {
+                console.log('🪟 [Database] Windows file lock detected, attempting recovery...');
+                this.handleWindowsLockError();
+            }
+            else {
+                throw error;
+            }
+        }
+    }
+    /**
+     * Handle Windows-specific SQLite locking issues
+     */
+    handleWindowsLockError() {
+        try {
+            // Wait a bit for Windows file system
+            setTimeout(() => {
+                console.log('🪟 [Database] Retrying Windows database connection...');
+                // Close any existing connection
+                if (this.db) {
+                    try {
+                        this.db.close();
+                    }
+                    catch (e) {
+                        console.warn('⚠️ [Database] Error closing database:', e);
+                    }
+                    this.db = null;
+                }
+                // Force garbage collection on Windows
+                if (global.gc) {
+                    global.gc();
+                }
+                // Retry initialization
+                this.initialize();
+            }, 1000);
+        }
+        catch (error) {
+            console.error('❌ [Database] Windows lock recovery failed:', error);
             throw error;
         }
     }
@@ -142,20 +266,22 @@ class IslaDatabase {
         console.log('📋 [Database] Tables and indexes created');
     }
     /**
-     * Save or update file content in database
+     * Save or update file content in database with cross-platform path normalization
      */
     saveFile(filePath, fileName, content) {
         if (!this.db)
             throw new Error('Database not initialized');
+        // Normalize file path for consistent cross-platform storage
+        const normalizedPath = this.normalizeFilePath(filePath);
         const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO files (path, name, content, modified_at, size)
       VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
     `);
-        const result = stmt.run(filePath, fileName, content, content.length);
+        const result = stmt.run(normalizedPath, fileName, content, content.length);
         const fileId = result.lastInsertRowid;
-        // Update content chunks for FTS
-        this.updateContentChunks(fileId, filePath, fileName, content);
-        console.log(`✅ [Database] Saved file: ${fileName}`);
+        // Update content chunks for search
+        this.updateContentChunks(fileId, normalizedPath, fileName, content);
+        console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`);
     }
     /**
      * Break content into chunks and update FTS index
@@ -251,13 +377,14 @@ class IslaDatabase {
         return result?.content || null;
     }
     /**
-     * Get file content from database
+     * Get file content from database with cross-platform path normalization
      */
     getFile(filePath) {
         if (!this.db)
             throw new Error('Database not initialized');
+        const normalizedPath = this.normalizeFilePath(filePath);
         const select = this.db.prepare('SELECT * FROM files WHERE path = ?');
-        return select.get(filePath) || null;
+        return select.get(normalizedPath) || null;
     }
     // searchFiles method removed - FTS not needed, using searchContent instead
     /**
@@ -288,22 +415,121 @@ class IslaDatabase {
         console.log('🔄 [Database] Force recreating database due to errors...');
         try {
             if (this.db) {
-                this.db.close();
+                try {
+                    this.db.close();
+                }
+                catch (closeError) {
+                    console.warn('⚠️ [Database] Error during database close:', closeError);
+                }
                 this.db = null;
             }
-            // Delete the corrupted database file
-            const fs = require('fs');
-            if (fs.existsSync(this.dbPath)) {
-                fs.unlinkSync(this.dbPath);
+            // Windows-specific cleanup delay
+            if (this.isWindows) {
+                // Give Windows file system time to release handles
+                console.log('🪟 [Database] Waiting for Windows file handles to release...');
+                setTimeout(() => this.performDatabaseCleanup(), 500);
             }
-            // Reinitialize completely
-            this.initialize();
-            console.log('✅ [Database] Successfully recreated database');
+            else {
+                this.performDatabaseCleanup();
+            }
         }
         catch (error) {
             console.error('❌ [Database] Failed to recreate database:', error);
             throw error;
         }
+    }
+    /**
+     * Perform the actual database file cleanup with enhanced Windows support
+     */
+    performDatabaseCleanup() {
+        try {
+            // Force garbage collection on Windows to release file handles
+            if (this.isWindows && global.gc) {
+                global.gc();
+            }
+            // Delete the corrupted database file with cross-platform path handling
+            const normalizedPath = (0, path_1.normalize)(this.dbPath);
+            // Windows-specific file deletion with retry logic
+            if (this.isWindows) {
+                this.deleteFileWithRetry(normalizedPath, 'main database');
+            }
+            else {
+                if ((0, fs_1.existsSync)(normalizedPath)) {
+                    (0, fs_1.unlinkSync)(normalizedPath);
+                    console.log(`🗑️ [Database] Deleted corrupted database: ${normalizedPath}`);
+                }
+            }
+            // Also clean up any associated WAL/SHM files (SQLite)
+            const walPath = normalizedPath + '-wal';
+            const shmPath = normalizedPath + '-shm';
+            const journalPath = normalizedPath + '-journal';
+            if (this.isWindows) {
+                // Windows: delete with retry
+                this.deleteFileWithRetry(walPath, 'WAL file');
+                this.deleteFileWithRetry(shmPath, 'SHM file');
+                this.deleteFileWithRetry(journalPath, 'Journal file');
+            }
+            else {
+                // Unix: standard deletion
+                if ((0, fs_1.existsSync)(walPath)) {
+                    (0, fs_1.unlinkSync)(walPath);
+                    console.log(`🗑️ [Database] Deleted WAL file: ${walPath}`);
+                }
+                if ((0, fs_1.existsSync)(shmPath)) {
+                    (0, fs_1.unlinkSync)(shmPath);
+                    console.log(`🗑️ [Database] Deleted SHM file: ${shmPath}`);
+                }
+                if ((0, fs_1.existsSync)(journalPath)) {
+                    (0, fs_1.unlinkSync)(journalPath);
+                    console.log(`🗑️ [Database] Deleted Journal file: ${journalPath}`);
+                }
+            }
+            // Small delay before reinitializing on Windows
+            if (this.isWindows) {
+                setTimeout(() => {
+                    this.initialize();
+                    console.log('✅ [Database] Successfully recreated database');
+                }, 200);
+            }
+            else {
+                // Reinitialize immediately on Unix
+                this.initialize();
+                console.log('✅ [Database] Successfully recreated database');
+            }
+        }
+        catch (error) {
+            console.error('❌ [Database] Failed during cleanup:', error);
+            throw error;
+        }
+    }
+    /**
+     * Delete file with retry logic for Windows file locking issues
+     */
+    deleteFileWithRetry(filePath, fileType, maxRetries = 3) {
+        if (!(0, fs_1.existsSync)(filePath))
+            return;
+        let retries = 0;
+        const attemptDelete = () => {
+            try {
+                (0, fs_1.unlinkSync)(filePath);
+                console.log(`🗑️ [Database] Deleted ${fileType}: ${filePath}`);
+            }
+            catch (error) {
+                retries++;
+                if (retries < maxRetries && error.code === 'EBUSY') {
+                    console.log(`🪟 [Database] ${fileType} busy, retrying (${retries}/${maxRetries})...`);
+                    setTimeout(attemptDelete, 100 * retries); // Exponential backoff
+                }
+                else if (retries < maxRetries) {
+                    console.log(`🪟 [Database] Retrying ${fileType} deletion (${retries}/${maxRetries})...`);
+                    setTimeout(attemptDelete, 50);
+                }
+                else {
+                    console.warn(`⚠️ [Database] Failed to delete ${fileType} after ${maxRetries} attempts:`, error);
+                }
+            }
+        };
+        attemptDelete();
     }
     /**
      * Update search index for a file
@@ -531,13 +757,14 @@ class IslaDatabase {
         return settings;
     }
     /**
-     * Check if a file needs to be processed (new or modified)
+     * Check if a file needs to be processed (new or modified) with cross-platform path handling
      */
     needsProcessing(filePath, currentMtime) {
         if (!this.db)
             throw new Error('Database not initialized');
         try {
-            const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(filePath);
+            const normalizedPath = this.normalizeFilePath(filePath);
+            const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath);
             if (!existing) {
                 // File doesn't exist in database, needs processing
                 return true;
@@ -553,13 +780,14 @@ class IslaDatabase {
         }
     }
     /**
-     * Get file by path with error handling
+     * Get file by path with error handling and cross-platform path normalization
      */
     getFileByPath(filePath) {
         if (!this.db)
             throw new Error('Database not initialized');
         try {
-            return this.db.prepare('SELECT * FROM files WHERE path = ?').get(filePath) || null;
+            const normalizedPath = this.normalizeFilePath(filePath);
+            return this.db.prepare('SELECT * FROM files WHERE path = ?').get(normalizedPath) || null;
         }
         catch (error) {
             console.error('❌ [Database] Error getting file by path:', error);
@@ -568,13 +796,38 @@ class IslaDatabase {
     }
     // fixDatabaseSchema method removed - no longer needed without FTS
     /**
-     * Close database connection
+     * Close database connection with Windows-specific cleanup
      */
     close() {
         if (this.db) {
-            this.db.close();
-            this.db = null;
-            console.log('🔒 [Database] Connection closed');
+            try {
+                // Windows-specific pre-close cleanup
+                if (this.isWindows) {
+                    // Checkpoint WAL files on Windows before closing
+                    try {
+                        this.db.pragma('wal_checkpoint(TRUNCATE)');
+                        console.log('🪟 [Database] Windows WAL checkpoint completed');
+                    }
+                    catch (walError) {
+                        console.warn('⚠️ [Database] WAL checkpoint warning:', walError);
+                    }
+                }
+                this.db.close();
+                this.db = null;
+                console.log('🔒 [Database] Connection closed');
+                // Windows-specific post-close cleanup
+                if (this.isWindows && global.gc) {
+                    // Force garbage collection to release file handles
+                    setTimeout(() => {
+                        global.gc();
+                        console.log('🪟 [Database] Windows garbage collection completed');
+                    }, 100);
+                }
+            }
+            catch (error) {
+                console.error('❌ [Database] Error during close:', error);
+                this.db = null; // Ensure it's set to null even on error
+            }
         }
     }
 }

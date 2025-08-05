@@ -51,24 +51,35 @@ export interface ContentChunk {
 declare class IslaDatabase {
     private db;
     private dbPath;
+    private isWindows;
     constructor();
     /**
-     * Get platform-specific database path
-     * - macOS: ~/Library/Application Support/Isla Journal/
-     * - Windows: %APPDATA%/Isla Journal/
-     * - Linux: ~/.local/share/Isla Journal/
+     * Normalize file paths for cross-platform storage
+     * Converts Windows backslashes to forward slashes for consistent storage
+     */
+    private normalizeFilePath;
+    /**
+     * Get platform-specific database path with enhanced cross-platform support
+     * - macOS: ~/Library/Application Support/Isla Journal/database/
+     * - Windows: %APPDATA%/Isla Journal/database/
+     * - Linux: ~/.local/share/Isla Journal/database/
+     * - Fallback: ~/.isla-journal/database/
      */
     private getDatabasePath;
     /**
-     * Initialize database and create tables
+     * Initialize database and create tables with Windows-specific optimizations
      */
     initialize(): void;
+    /**
+     * Handle Windows-specific SQLite locking issues
+     */
+    private handleWindowsLockError;
     /**
      * Create database schema
      */
     private createTables;
     /**
-     * Save or update file content in database
+     * Save or update file content in database with cross-platform path normalization
      */
     saveFile(filePath: string, fileName: string, content: string): void;
     /**
@@ -88,7 +99,7 @@ declare class IslaDatabase {
      */
     getFileContent(fileId: number): string | null;
     /**
-     * Get file content from database
+     * Get file content from database with cross-platform path normalization
      */
     getFile(filePath: string): FileRecord | null;
     /**
@@ -96,6 +107,14 @@ declare class IslaDatabase {
      */
     clearAllContent(): void;
     private forceRecreateDatabase;
+    /**
+     * Perform the actual database file cleanup with enhanced Windows support
+     */
+    private performDatabaseCleanup;
+    /**
+     * Delete file with retry logic for Windows file locking issues
+     */
+    private deleteFileWithRetry;
     /**
      * Update search index for a file
      */
@@ -153,15 +172,15 @@ declare class IslaDatabase {
      */
     getAllSettings(): Record<string, string>;
     /**
-     * Check if a file needs to be processed (new or modified)
+     * Check if a file needs to be processed (new or modified) with cross-platform path handling
      */
     needsProcessing(filePath: string, currentMtime: Date): boolean;
     /**
-     * Get file by path with error handling
+     * Get file by path with error handling and cross-platform path normalization
      */
     getFileByPath(filePath: string): FileRecord | null;
     /**
-     * Close database connection
+     * Close database connection with Windows-specific cleanup
      */
     close(): void;
 }

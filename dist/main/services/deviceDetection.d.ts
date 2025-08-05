@@ -39,6 +39,9 @@ export declare class DeviceDetectionService {
     getDeviceSpecs(): Promise<DeviceSpecs>;
     private normalizePlatform;
     private normalizeArchitecture;
+    private detectAVXSupport;
+    private estimateMemoryByPlatform;
+    private estimateCoresByPlatform;
     getModelRecommendation(specs: DeviceSpecs): ModelRecommendation;
     getRecommendedModel(): Promise<ModelRecommendation>;
     getAllSupportedModels(): ModelRecommendation[];
