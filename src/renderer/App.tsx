@@ -718,29 +718,32 @@ Click **"📁 Open Directory"** in the file tree to:
 
   return (
     <div className="app">
-      {/* Title Bar */}
-      <div className="title-bar">
-        <div className="title-bar-left">
-          <span className="app-title">Isla Journal</span>
-        </div>
-        <div className="title-bar-center">
-          <span className="file-path">
-            {activeTab ? activeTab.name : 'No file open'}
-          </span>
-        </div>
-        <div className="title-bar-right">
-          <span className="app-info">v{version} ({platform})</span>
-          <button 
-            className="settings-gear-btn"
-            onClick={() => setShowSettings(true)}
-            title="Settings"
-          >
-            ⚙️
-          </button>
-        </div>
-      </div>
+      {/* Only show main app if licensed */}
+      {!licenseLoading && isLicensed && (
+        <>
+          {/* Title Bar */}
+          <div className="title-bar">
+            <div className="title-bar-left">
+              <span className="app-title">Isla Journal</span>
+            </div>
+            <div className="title-bar-center">
+              <span className="file-path">
+                {activeTab ? activeTab.name : 'No file open'}
+              </span>
+            </div>
+            <div className="title-bar-right">
+              <span className="app-info">v{version} ({platform})</span>
+              <button 
+                className="settings-gear-btn"
+                onClick={() => setShowSettings(true)}
+                title="Settings"
+              >
+                ⚙️
+              </button>
+            </div>
+          </div>
 
-      {/* Main Content Area */}
+          {/* Main Content Area */}
       <div className="main-content">
         {/* Left Panel - File Tree */}
         <div 
@@ -1020,19 +1023,21 @@ Click **"📁 Open Directory"** in the file tree to:
         </div>
       </div>
       
-      {/* Rename Modal */}
-      <RenameModal
-        isOpen={showRenameModal}
-        currentName={renamingChat?.title || ''}
-        onSubmit={handleRenameSubmit}
-        onCancel={handleRenameCancel}
-      />
-      
-      {/* Settings Modal */}
-      <Settings
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-      />
+          {/* Rename Modal */}
+          <RenameModal
+            isOpen={showRenameModal}
+            currentName={renamingChat?.title || ''}
+            onSubmit={handleRenameSubmit}
+            onCancel={handleRenameCancel}
+          />
+          
+          {/* Settings Modal */}
+          <Settings
+            isOpen={showSettings}
+            onClose={() => setShowSettings(false)}
+          />
+        </>
+      )}
       
       {/* License Check Overlay */}
       {!licenseLoading && !isLicensed && (

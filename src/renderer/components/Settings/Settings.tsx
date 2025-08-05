@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
 import { ValidationResult } from '../../services/licenseValidation'
-import { LicenseStorage } from '../../services/licenseStorage'
 import { getLicenseDisplayType } from '../../utils/licenseUtils'
 import { useLicenseCheck } from '../../hooks/useLicenseCheck'
 
@@ -13,26 +12,12 @@ interface SettingsProps {
 const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
-  const [storedLicenseKey, setStoredLicenseKey] = useState<string | null>(null)
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
-  // Load stored license key when modal opens
+  // Clear validation message when modal opens
   useEffect(() => {
     if (isOpen) {
       setValidationMessage('')
-      
-      // Load current stored license key
-      try {
-        const stored = LicenseStorage.getStoredLicense()
-        if (stored && stored.key) {
-          setStoredLicenseKey(stored.key)
-        } else {
-          setStoredLicenseKey(null)
-        }
-      } catch (error) {
-        console.error('Failed to load stored license:', error)
-        setStoredLicenseKey(null)
-      }
     }
   }, [isOpen])
 
@@ -49,11 +34,10 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     try {
       const result = await validateNewLicense(licenseKey)
       
-      if (result.valid) {
-        setValidationMessage('✅ License validated successfully!')
-        setStoredLicenseKey(licenseKey.trim()) // Update the displayed license key
-        setLicenseKey('') // Clear input
-      } else {
+              if (result.valid) {
+          setValidationMessage('✅ License validated successfully!')
+          setLicenseKey('') // Clear input
+        } else {
         setValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
       }
     } catch (error) {
@@ -165,11 +149,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
                 </div>
                 
                 {/* Display current license key */}
-                {storedLicenseKey && (
+                {licenseStatus.licenseKey && (
                   <div className="license-key-display">
                     <div className="license-status-item">
                       <span className="license-label">License Key:</span>
-                      <span className="license-value license-key-text">{storedLicenseKey}</span>
+                      <span className="license-value license-key-text">{licenseStatus.licenseKey}</span>
                     </div>
                   </div>
                 )}
