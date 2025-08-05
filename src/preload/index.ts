@@ -50,11 +50,7 @@ const electronAPI = {
     ipcRenderer.invoke('chat:addMessage', chatId, role, content),
   chatClearMessages: (chatId: number) => ipcRenderer.invoke('chat:clearMessages', chatId),
   
-  // License operations
-  licenseValidate: (licenseKey: string) => ipcRenderer.invoke('license:validate', licenseKey),
-  licenseGetStatus: () => ipcRenderer.invoke('license:getStatus'),
-  licenseClear: () => ipcRenderer.invoke('license:clear'),
-  licenseSetBackendUrl: (url: string) => ipcRenderer.invoke('license:setBackendUrl', url),
+  // License operations removed - now handled in renderer process only
   
   // System operations
   openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url)

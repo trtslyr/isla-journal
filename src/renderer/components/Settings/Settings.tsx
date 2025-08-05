@@ -50,7 +50,6 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
       try {
         clearLicense()
-        setStoredLicenseKey(null) // Clear the displayed license key
         setValidationMessage('License cleared - returning to license screen...')
         
         // Close settings modal after a brief delay so user sees the license screen
