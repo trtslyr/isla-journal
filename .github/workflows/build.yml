@@ -1,0 +1,153 @@
+name: Build and Release Isla Journal
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.0.0)'
+        required: true
+        default: 'v0.1.0'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            arch: x64
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Build distributables (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            npm run dist:mac -- --arm64
+          else
+            npm run dist:mac -- --x64
+          fi
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASS: ${{ secrets.APPLE_ID_PASS }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Build distributables (Windows)
+        if: matrix.platform == 'win'
+        run: npm run dist:win
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Build distributables (Linux)
+        if: matrix.platform == 'linux'
+        run: npm run dist:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: isla-journal-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
+            release/*.tar.gz
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.version }}
+          release_name: Isla Journal ${{ github.ref_name || github.event.inputs.version }}
+          body: |
+            ## 🏝️ Isla Journal Release ${{ github.ref_name || github.event.inputs.version }}
+            
+            ### Download for your platform:
+            
+            **🍎 macOS:**
+            - Apple Silicon (M1/M2/M3): `Isla Journal-*-arm64.dmg`
+            - Intel Macs: `Isla Journal-*-x64.dmg`
+            
+            **🪟 Windows:**
+            - `Isla Journal Setup *.exe`
+            
+            **🐧 Linux:**
+            - AppImage: `Isla Journal-*.AppImage` (Universal)
+            - Debian/Ubuntu: `isla-journal_*_amd64.deb`
+            - RedHat/Fedora: `isla-journal-*.x86_64.rpm`
+            
+            ### Features:
+            - ✅ Fully offline AI-powered journaling
+            - ✅ Cross-platform compatibility
+            - ✅ Smart device-optimized AI model selection
+            - ✅ Beautiful VS Code-style interface
+            - ✅ RAG-powered content search
+            
+            ---
+            
+            **First time using Isla Journal?**
+            1. Download the appropriate file for your system
+            2. Install and launch the app
+            3. The AI model will auto-download on first use
+            4. Start journaling with AI assistance!
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Assets
+        run: |
+          for file in artifacts/*/release/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file"
+              gh release upload "${{ github.ref_name || github.event.inputs.version }}" "$file" --clobber
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
