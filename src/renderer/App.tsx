@@ -3,6 +3,7 @@ import { MonacoEditor } from './components/Editor'
 import { FileTree } from './components/FileTree'
 import RenameModal from './components/FileTree/RenameModal'
 import Settings from './components/Settings'
+import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
 
 interface ChatMessage {
@@ -23,6 +24,9 @@ interface EditorTab {
 const App: React.FC = () => {
   const [version, setVersion] = useState<string>('')
   const [platform, setPlatform] = useState<string>('')
+  
+  // License management
+  const { licenseStatus, isLoading: licenseLoading, isLicensed } = useLicenseCheck()
   
   // Tab management
   const [tabs, setTabs] = useState<EditorTab[]>([
@@ -983,6 +987,29 @@ Click **"📁 Open Directory"** in the file tree to:
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
       />
+      
+      {/* License Check Overlay */}
+      {!licenseLoading && !isLicensed && (
+        <div className="license-overlay">
+          <div className="license-prompt">
+            <div className="license-prompt-header">
+              <h2>🔒 License Required</h2>
+            </div>
+            <div className="license-prompt-content">
+              <p>Isla Journal requires a valid license to access all features.</p>
+              <p>Open Settings to enter your license key or purchase a license.</p>
+              <div className="license-prompt-actions">
+                <button 
+                  className="license-prompt-btn primary"
+                  onClick={() => setShowSettings(true)}
+                >
+                  Open Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

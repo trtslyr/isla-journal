@@ -514,4 +514,26 @@
   .purchase-buttons {
     grid-template-columns: 1fr;
   }
+}
+
+/* License Loading State */
+.license-loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Additional license status styling */
+.license-value-valid {
+  color: var(--success-color, #4ec9b0);
+  font-weight: 600;
+}
+
+.validation-message {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
 } 

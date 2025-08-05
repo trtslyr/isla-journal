@@ -12,8 +12,8 @@ class LicenseService {
     constructor() {
         this.mainWindow = null;
         this.validationInProgress = false;
-        // Your backend URL - you'll need to provide this
-        this.backendUrl = process.env.LICENSE_BACKEND_URL || 'https://your-backend-url.railway.app';
+        // Production backend URL on Railway
+        this.backendUrl = process.env.LICENSE_BACKEND_URL || 'https://islajournalbackend-production.up.railway.app';
     }
     setMainWindow(window) {
         this.mainWindow = window;

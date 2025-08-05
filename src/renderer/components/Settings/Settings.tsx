@@ -1,46 +1,28 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
+import { ValidationResult } from '../../services/licenseValidation'
+import { LicenseStorage } from '../../services/licenseStorage'
+import { getLicenseDisplayType } from '../../utils/licenseUtils'
+import { useLicenseCheck } from '../../hooks/useLicenseCheck'
 
 interface SettingsProps {
   isOpen: boolean
   onClose: () => void
 }
 
-interface LicenseStatus {
-  isValid: boolean
-  licenseType: 'lifetime' | 'monthly' | 'annual' | null
-  expiresAt?: string
-  lastValidated: string
-  error?: string
-}
-
 const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const [licenseKey, setLicenseKey] = useState('')
-  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null)
-  const [isValidating, setIsValidating] = useState(false)
   const [validationMessage, setValidationMessage] = useState('')
+  const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
-  // Load license status when component opens
+  // Clear validation message when modal opens
   useEffect(() => {
     if (isOpen) {
-      loadLicenseStatus()
+      setValidationMessage('')
     }
   }, [isOpen])
 
   if (!isOpen) return null
-
-  const loadLicenseStatus = async () => {
-    try {
-      if (!window.electronAPI?.licenseGetStatus) {
-        console.warn('License API not available')
-        return
-      }
-      const status = await window.electronAPI.licenseGetStatus()
-      setLicenseStatus(status)
-    } catch (error) {
-      console.error('Failed to load license status:', error)
-    }
-  }
 
   const handleValidateLicense = async () => {
     if (!licenseKey.trim()) {
@@ -48,20 +30,13 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
       return
     }
 
-    if (!window.electronAPI?.licenseValidate) {
-      setValidationMessage('❌ License API not available')
-      return
-    }
-
-    setIsValidating(true)
     setValidationMessage('')
 
     try {
-      const result = await window.electronAPI.licenseValidate(licenseKey)
+      const result = await validateNewLicense(licenseKey)
       
-      if (result.success) {
+      if (result.valid) {
         setValidationMessage('✅ License validated successfully!')
-        await loadLicenseStatus() // Refresh status
         setLicenseKey('') // Clear input
       } else {
         setValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
@@ -69,20 +44,13 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     } catch (error) {
       console.error('License validation error:', error)
       setValidationMessage('❌ Network error - please check your connection')
-    } finally {
-      setIsValidating(false)
     }
   }
 
   const handleClearLicense = async () => {
     if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
       try {
-        if (!window.electronAPI?.licenseClear) {
-          setValidationMessage('❌ License API not available')
-          return
-        }
-        await window.electronAPI.licenseClear()
-        await loadLicenseStatus()
+        clearLicense()
         setValidationMessage('License cleared')
       } catch (error) {
         console.error('Failed to clear license:', error)
@@ -124,7 +92,13 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
           <div className="settings-section">
             <h3>License Status</h3>
             
-            {licenseStatus && licenseStatus.isValid ? (
+            {isLoading ? (
+              <div className="settings-item">
+                <div className="license-loading">
+                  Checking license status...
+                </div>
+              </div>
+            ) : licenseStatus && licenseStatus.valid ? (
               <div className="settings-item">
                 <div className="license-status-display">
                   <div className="license-status-item">
@@ -134,21 +108,39 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
                   <div className="license-status-item">
                     <span className="license-label">Type:</span>
                     <span className="license-value">
-                      {licenseStatus.licenseType === 'lifetime' ? '💎 Lifetime' : 
-                       licenseStatus.licenseType === 'annual' ? '📅 Annual' : 
-                       licenseStatus.licenseType === 'monthly' ? '📆 Monthly' : 'Unknown'}
+                      {getLicenseDisplayType(licenseStatus.licenseKey || '')}
                     </span>
                   </div>
-                  {licenseStatus.expiresAt && (
+                  {licenseStatus.customerName && (
+                    <div className="license-status-item">
+                      <span className="license-label">Customer:</span>
+                      <span className="license-value">{licenseStatus.customerName}</span>
+                    </div>
+                  )}
+                  {licenseStatus.planType && (
+                    <div className="license-status-item">
+                      <span className="license-label">Plan:</span>
+                      <span className="license-value">{licenseStatus.planType}</span>
+                    </div>
+                  )}
+                  {licenseStatus.expiresAt && !licenseStatus.neverExpires && (
                     <div className="license-status-item">
                       <span className="license-label">Expires:</span>
                       <span className="license-value">{new Date(licenseStatus.expiresAt).toLocaleDateString()}</span>
                     </div>
                   )}
-                  <div className="license-status-item">
-                    <span className="license-label">Last Validated:</span>
-                    <span className="license-value">{new Date(licenseStatus.lastValidated).toLocaleDateString()}</span>
-                  </div>
+                  {licenseStatus.neverExpires && (
+                    <div className="license-status-item">
+                      <span className="license-label">Expires:</span>
+                      <span className="license-value-valid">Never</span>
+                    </div>
+                  )}
+                  {licenseStatus.grantedAt && (
+                    <div className="license-status-item">
+                      <span className="license-label">Granted:</span>
+                      <span className="license-value">{new Date(licenseStatus.grantedAt).toLocaleDateString()}</span>
+                    </div>
+                  )}
                 </div>
                 <button className="settings-btn danger" onClick={handleClearLicense}>
                   Clear License
@@ -162,16 +154,17 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
                     type="text" 
                     value={licenseKey}
                     onChange={(e) => setLicenseKey(e.target.value)}
-                    placeholder="Enter license key..." 
+                    placeholder="ij_life_... or ij_sub_..." 
                     className="settings-input"
-                    disabled={isValidating}
+                    disabled={isLoading}
+                    onKeyPress={(e) => e.key === 'Enter' && handleValidateLicense()}
                   />
                   <button 
                     className="settings-btn"
                     onClick={handleValidateLicense}
-                    disabled={isValidating || !licenseKey.trim()}
+                    disabled={isLoading || !licenseKey.trim()}
                   >
-                    {isValidating ? 'Validating...' : 'Validate'}
+                    {isLoading ? 'Validating...' : 'Validate'}
                   </button>
                 </div>
                 {validationMessage && (

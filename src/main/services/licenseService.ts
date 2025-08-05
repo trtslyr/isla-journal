@@ -33,8 +33,8 @@ export class LicenseService {
   }
 
   private constructor() {
-    // Your backend URL - you'll need to provide this
-    this.backendUrl = process.env.LICENSE_BACKEND_URL || 'https://your-backend-url.railway.app'
+    // Production backend URL on Railway
+    this.backendUrl = process.env.LICENSE_BACKEND_URL || 'https://islajournalbackend-production.up.railway.app'
   }
 
   public setMainWindow(window: BrowserWindow): void {
