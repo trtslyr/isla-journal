@@ -50,7 +50,23 @@ jobs:
         run: npm ci
 
       - name: Build app
-        run: npm run build
+        run: |
+          echo "🏗️ Starting build process..."
+          mkdir -p dist/main dist/preload dist/renderer
+          npm run build
+
+      - name: Debug build output
+        run: |
+          echo "🔍 Current working directory:"
+          pwd
+          echo "📁 Repository contents:"
+          ls -la
+          echo "📁 Dist directory contents:"
+          ls -la dist/ || echo "❌ dist/ directory not found"
+          echo "📁 Dist/main contents:"
+          ls -la dist/main/ || echo "❌ dist/main/ directory not found"
+          echo "📄 Looking for main entry file:"
+          find . -name "index.js" -type f | head -10
 
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
