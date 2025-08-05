@@ -41,6 +41,27 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
+      - name: Cache native modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules/better-sqlite3/build
+            node_modules/systeminformation/build
+          key: ${{ runner.os }}-${{ matrix.arch }}-native-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-native-modules-
+
+      - name: Install build tools (Ubuntu)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install build tools (Windows)
+        if: matrix.platform == 'win'
+        run: |
+          echo "Windows build tools should be available in GitHub Actions runner"
+
       - name: Setup Python (for native compilation)
         uses: actions/setup-python@v4
         with:
@@ -48,6 +69,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Rebuild native dependencies
+        run: |
+          echo "🔧 Rebuilding native dependencies for Electron..."
+          npx @electron/rebuild --verbose --only better-sqlite3,systeminformation || echo "⚠️ Rebuild failed, trying with build-from-source..."
+          # Fallback: try building from source if rebuild fails
+          if [ ! -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]; then
+            echo "🔧 Building better-sqlite3 from source..."
+            cd node_modules/better-sqlite3 && npm run build-release && cd ../..
+          fi
+          echo "✅ Native dependencies ready"
 
       - name: Build app
         run: |
@@ -80,7 +112,25 @@ jobs:
             echo "❌ dist/main/index.js NOT FOUND!"
             echo "📁 Available files in dist/:"
             find dist/ -name "*.js" -type f | head -10
+            echo "📂 Full dist directory structure:"
+            ls -la dist/
+            echo "🔍 Checking TypeScript compilation output:"
+            npx tsc --version
+            echo "🔍 Re-running build to debug:"
+            npm run build:main
+            ls -la dist/main/ || echo "No dist/main directory"
             exit 1
+          fi
+
+      - name: Verify native dependencies
+        run: |
+          echo "🔍 Checking native dependencies..."
+          if [ -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]; then
+            echo "✅ better-sqlite3 native binary found"
+            ls -la node_modules/better-sqlite3/build/Release/better_sqlite3.node
+          else
+            echo "⚠️ better-sqlite3 native binary not found"
+            find node_modules/better-sqlite3 -name "*.node" -type f | head -5
           fi
 
       - name: Build distributables (macOS)

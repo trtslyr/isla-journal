@@ -19,7 +19,9 @@
     "dist:win": "npm run build && electron-builder --win --publish=never",
     "dist:mac": "npm run build && electron-builder --mac --publish=never",
     "dist:linux": "npm run build && electron-builder --linux --publish=never",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "rebuild": "electron-rebuild",
+    "rebuild:electron": "electron-rebuild"
   },
   "keywords": [
     "journal",
@@ -44,6 +46,7 @@
     "cross-env": "^7.0.3",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
+    "@electron/rebuild": "^3.6.0",
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },
