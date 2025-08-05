@@ -4,7 +4,6 @@ import { FileTree } from './components/FileTree'
 import RenameModal from './components/FileTree/RenameModal'
 import Settings from './components/Settings'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
-import { LicenseStorage } from './services/licenseStorage'
 import './App.css'
 
 interface ChatMessage {
@@ -26,32 +25,11 @@ const App: React.FC = () => {
   const [version, setVersion] = useState<string>('')
   const [platform, setPlatform] = useState<string>('')
   
-  // License management - centralized state
-  const { licenseStatus, isLoading: licenseLoading, isLicensed, validateNewLicense, clearLicense } = useLicenseCheck()
+  // License management
+  const { licenseStatus, isLoading: licenseLoading, isLicensed, validateNewLicense } = useLicenseCheck()
   const [licenseKey, setLicenseKey] = useState('')
   const [licenseValidationMessage, setLicenseValidationMessage] = useState('')
   const [isValidatingLicense, setIsValidatingLicense] = useState(false)
-  const [forceShowLicenseScreen, setForceShowLicenseScreen] = useState(false)
-  
-  // Load current license key for display in input fields
-  useEffect(() => {
-    const stored = LicenseStorage.getStoredLicense()
-    if (stored && stored.key && !isLicensed) {
-      // If we have a stored key but not licensed, clear it
-      LicenseStorage.clearLicense()
-    }
-  }, [isLicensed])
-
-  // Watch for license status changes to handle app locking
-  useEffect(() => {
-    if (!licenseLoading && !isLicensed) {
-      setForceShowLicenseScreen(true)
-    } else if (isLicensed) {
-      setForceShowLicenseScreen(false)
-      setLicenseKey('')
-      setLicenseValidationMessage('')
-    }
-  }, [licenseLoading, isLicensed])
   
   // Tab management
   const [tabs, setTabs] = useState<EditorTab[]>([
@@ -695,44 +673,33 @@ Click **"📁 Open Directory"** in the file tree to:
     }
   }
 
-  // License key validation function - shared between license screen and settings
-  const handleLicenseValidation = async (keyToValidate?: string) => {
-    const keyToUse = keyToValidate || licenseKey.trim()
-    if (!keyToUse) {
+  // License key validation function
+  const handleLicenseValidation = async () => {
+    const trimmedKey = licenseKey.trim()
+    if (!trimmedKey) {
       setLicenseValidationMessage('Please enter a license key')
-      return { success: false, error: 'Please enter a license key' }
+      return
     }
 
     setIsValidatingLicense(true)
     setLicenseValidationMessage('')
 
     try {
-      const result = await validateNewLicense(keyToUse)
+      const result = await validateNewLicense(trimmedKey)
       
       if (result.valid) {
         setLicenseValidationMessage('✅ License validated successfully! Welcome to Isla Journal!')
         setLicenseKey('') // Clear input
-        setForceShowLicenseScreen(false)
-        return { success: true, result }
+        // The license check hook will automatically update the UI
       } else {
         setLicenseValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
-        return { success: false, error: result.error || 'Invalid license key' }
       }
     } catch (error) {
       console.error('License validation error:', error)
       setLicenseValidationMessage('❌ Network error - please check your connection and try again')
-      return { success: false, error: 'Network error - please check your connection and try again' }
     } finally {
       setIsValidatingLicense(false)
     }
-  }
-
-  // Shared license clearing function
-  const handleLicenseClear = () => {
-    clearLicense()
-    setLicenseKey('')
-    setLicenseValidationMessage('')
-    setForceShowLicenseScreen(true)
   }
 
   // Function to open external URLs
@@ -1065,14 +1032,10 @@ Click **"📁 Open Directory"** in the file tree to:
       <Settings
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
-        onValidateLicense={handleLicenseValidation}
-        onClearLicense={handleLicenseClear}
-        isValidating={isValidatingLicense}
-        currentLicenseKey={LicenseStorage.getStoredLicense()?.key || ''}
       />
       
       {/* License Check Overlay */}
-      {(!licenseLoading && !isLicensed) || forceShowLicenseScreen ? (
+      {!licenseLoading && !isLicensed && (
         <div className="license-overlay">
           <div className="license-prompt">
             <div className="license-prompt-header">
@@ -1166,7 +1129,7 @@ Click **"📁 Open Directory"** in the file tree to:
             </div>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   )
 }

@@ -8,30 +8,18 @@ import { useLicenseCheck } from '../../hooks/useLicenseCheck'
 interface SettingsProps {
   isOpen: boolean
   onClose: () => void
-  onValidateLicense: (licenseKey: string) => Promise<{ success: boolean, error?: string, result?: ValidationResult }>
-  onClearLicense: () => void
-  isValidating: boolean
-  currentLicenseKey: string
 }
 
-const Settings: React.FC<SettingsProps> = ({ 
-  isOpen, 
-  onClose, 
-  onValidateLicense, 
-  onClearLicense, 
-  isValidating, 
-  currentLicenseKey 
-}) => {
+const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
   const [storedLicenseKey, setStoredLicenseKey] = useState<string | null>(null)
-  const { licenseStatus, isLoading } = useLicenseCheck()
+  const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
   // Load stored license key when modal opens
   useEffect(() => {
     if (isOpen) {
       setValidationMessage('')
-      setLicenseKey('')
       
       // Load current stored license key
       try {
@@ -46,7 +34,7 @@ const Settings: React.FC<SettingsProps> = ({
         setStoredLicenseKey(null)
       }
     }
-  }, [isOpen, currentLicenseKey])
+  }, [isOpen])
 
   if (!isOpen) return null
 
@@ -59,17 +47,12 @@ const Settings: React.FC<SettingsProps> = ({
     setValidationMessage('')
 
     try {
-      const result = await onValidateLicense(licenseKey.trim())
+      const result = await validateNewLicense(licenseKey)
       
-      if (result.success) {
+      if (result.valid) {
         setValidationMessage('✅ License validated successfully!')
         setStoredLicenseKey(licenseKey.trim()) // Update the displayed license key
         setLicenseKey('') // Clear input
-        
-        // Close settings after successful validation
-        setTimeout(() => {
-          onClose()
-        }, 1500)
       } else {
         setValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
       }
@@ -80,13 +63,13 @@ const Settings: React.FC<SettingsProps> = ({
   }
 
   const handleClearLicense = async () => {
-    if (confirm('Are you sure you want to clear your license? The app will be locked until a valid license is entered.')) {
+    if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
       try {
-        onClearLicense()
+        clearLicense()
         setStoredLicenseKey(null) // Clear the displayed license key
-        setValidationMessage('License cleared - app will now be locked...')
+        setValidationMessage('License cleared - returning to license screen...')
         
-        // Close settings modal after a brief delay
+        // Close settings modal after a brief delay so user sees the license screen
         setTimeout(() => {
           onClose()
         }, 1500)
@@ -205,15 +188,15 @@ const Settings: React.FC<SettingsProps> = ({
                     onChange={(e) => setLicenseKey(e.target.value)}
                     placeholder="ij_life_... or ij_sub_..." 
                     className="settings-input"
-                    disabled={isValidating}
+                    disabled={isLoading}
                     onKeyPress={(e) => e.key === 'Enter' && handleValidateLicense()}
                   />
                   <button 
                     className="settings-btn"
                     onClick={handleValidateLicense}
-                    disabled={isValidating || !licenseKey.trim()}
+                    disabled={isLoading || !licenseKey.trim()}
                   >
-                    {isValidating ? 'Validating...' : 'Validate'}
+                    {isLoading ? 'Validating...' : 'Validate'}
                   </button>
                 </div>
                 {validationMessage && (
