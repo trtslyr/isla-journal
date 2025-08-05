@@ -52,6 +52,15 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Verify build output
+        run: |
+          echo "📁 Checking build output..."
+          ls -la dist/
+          echo "📄 Main entry file:"
+          ls -la dist/main/index.js
+          echo "📦 Package.json main field:"
+          grep '"main"' package.json
+
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
         run: |
