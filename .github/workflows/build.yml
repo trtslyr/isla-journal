@@ -44,12 +44,45 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup Python (for native compilation)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          # Ensure Xcode command line tools are available
+          xcode-select --install || true
+          
+      - name: Install build tools (Windows)
+        if: matrix.platform == 'win'
+        run: |
+          npm install -g windows-build-tools || true
+          
+      - name: Setup native build environment
+        run: |
+          # Clear npm cache
+          npm cache clean --force
+          
+      - name: Force rebuild native dependencies
+        run: |
+          # Remove existing native builds
+          find node_modules -name "*.node" -delete || true
+          # Rebuild specifically for Electron
+          npx electron-rebuild --force
+
       - name: Build app
         run: npm run build
 
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
         run: |
+          echo "🍎 Building for macOS ${{ matrix.arch }}"
+          echo "Working directory: $(pwd)"
+          echo "Node modules status:"
+          ls -la node_modules/better-sqlite3/ || echo "better-sqlite3 not found"
+          
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             npm run dist:mac -- --arm64
           else
@@ -60,6 +93,7 @@ jobs:
           APPLE_ID_PASS: ${{ secrets.APPLE_ID_PASS }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          DEBUG: electron-builder
 
       - name: Build distributables (Windows)
         if: matrix.platform == 'win'
