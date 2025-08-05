@@ -53,20 +53,35 @@ jobs:
         run: |
           echo "🏗️ Starting build process..."
           mkdir -p dist/main dist/preload dist/renderer
-          npm run build
+          
+          echo "📋 Running build:vite..."
+          npm run build:vite
+          ls -la dist/renderer/
+          
+          echo "📋 Running build:main..."
+          npm run build:main
+          ls -la dist/main/
+          
+          echo "📋 Running build:preload..."
+          npm run build:preload
+          ls -la dist/preload/
+          
+          echo "✅ All builds completed"
 
-      - name: Debug build output
+      - name: Verify entry file exists
         run: |
-          echo "🔍 Current working directory:"
-          pwd
-          echo "📁 Repository contents:"
-          ls -la
-          echo "📁 Dist directory contents:"
-          ls -la dist/ || echo "❌ dist/ directory not found"
-          echo "📁 Dist/main contents:"
-          ls -la dist/main/ || echo "❌ dist/main/ directory not found"
-          echo "📄 Looking for main entry file:"
-          find . -name "index.js" -type f | head -10
+          echo "🔍 Checking for main entry file..."
+          if [ -f "dist/main/index.js" ]; then
+            echo "✅ Found dist/main/index.js"
+            ls -la dist/main/index.js
+            echo "📄 Content preview:"
+            head -n 10 dist/main/index.js
+          else
+            echo "❌ dist/main/index.js NOT FOUND!"
+            echo "📁 Available files in dist/:"
+            find dist/ -name "*.js" -type f | head -10
+            exit 1
+          fi
 
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
