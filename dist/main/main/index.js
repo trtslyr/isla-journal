@@ -99,6 +99,14 @@ electron_1.app.whenReady().then(() => {
         console.error('❌ [Main] Failed to initialize LLM service:', error);
         // LLM will be unavailable but app continues to work
     });
+    // Initialize License service
+    const licenseService = licenseService_1.LicenseService.getInstance();
+    licenseService.setMainWindow(mainWindow);
+    // Perform startup license check (async, don't block app startup)
+    licenseService.performStartupLicenseCheck().catch(error => {
+        console.error('❌ [Main] License check failed:', error);
+        // App will continue but with limited functionality
+    });
     // Set app menu
     if (process.platform === 'darwin') {
         // macOS menu
@@ -230,6 +238,8 @@ const database_1 = require("./database");
 const llamaService_1 = require("./services/llamaService");
 const deviceDetection_1 = require("./services/deviceDetection");
 const contentService_1 = require("./services/contentService");
+// License Service
+const licenseService_1 = require("./services/licenseService");
 // Basic app info handlers
 electron_1.ipcMain.handle('app:getVersion', () => {
     return electron_1.app.getVersion();
@@ -803,6 +813,49 @@ electron_1.ipcMain.handle('file:move', async (_, sourcePath, targetDirectoryPath
     }
     catch (error) {
         console.error('❌ [IPC] Error moving file/directory:', error);
+        throw error;
+    }
+});
+// License IPC handlers
+electron_1.ipcMain.handle('license:validate', async (_, licenseKey) => {
+    try {
+        const licenseService = licenseService_1.LicenseService.getInstance();
+        return await licenseService.validateLicense(licenseKey);
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error validating license:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('license:getStatus', async () => {
+    try {
+        const licenseService = licenseService_1.LicenseService.getInstance();
+        return await licenseService.getCurrentLicenseStatus();
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error getting license status:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('license:clear', async () => {
+    try {
+        const licenseService = licenseService_1.LicenseService.getInstance();
+        await licenseService.clearLicense();
+        return true;
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error clearing license:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('license:setBackendUrl', async (_, url) => {
+    try {
+        const licenseService = licenseService_1.LicenseService.getInstance();
+        licenseService.setBackendUrl(url);
+        return true;
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error setting backend URL:', error);
         throw error;
     }
 });

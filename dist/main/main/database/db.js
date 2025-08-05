@@ -94,9 +94,7 @@ class IslaDatabase {
       CREATE VIRTUAL TABLE IF NOT EXISTS fts_content USING fts5(
         content,
         file_path,
-        file_name,
-        content='content_chunks',
-        content_rowid='id'
+        file_name
       )
     `);
         // Search index table - for full-text search
@@ -609,9 +607,7 @@ class IslaDatabase {
           CREATE VIRTUAL TABLE fts_content USING fts5(
             content,
             file_path,
-            file_name,
-            content='content_chunks',
-            content_rowid='id'
+            file_name
           )
         `);
                 // Rebuild FTS index from existing chunks

@@ -70,16 +70,6 @@ app.whenReady().then(() => {
     // LLM will be unavailable but app continues to work
   })
 
-  // Initialize License service
-  const licenseService = LicenseService.getInstance()
-  licenseService.setMainWindow(mainWindow!)
-  
-  // Perform startup license check (async, don't block app startup)
-  licenseService.performStartupLicenseCheck().catch(error => {
-    console.error('❌ [Main] License check failed:', error)
-    // App will continue but with limited functionality
-  })
-
   // Set app menu
   if (process.platform === 'darwin') {
     // macOS menu
@@ -217,9 +207,6 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { DeviceDetectionService } from './services/deviceDetection'
 import { contentService } from './services/contentService'
-
-// License Service
-import { LicenseService } from './services/licenseService'
 
 // Basic app info handlers
 ipcMain.handle('app:getVersion', () => {
@@ -832,49 +819,6 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     return { success: true, newPath }
   } catch (error) {
     console.error('❌ [IPC] Error moving file/directory:', error)
-    throw error
-  }
-})
-
-// License IPC handlers
-ipcMain.handle('license:validate', async (_, licenseKey: string) => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    return await licenseService.validateLicense(licenseKey)
-  } catch (error) {
-    console.error('❌ [IPC] Error validating license:', error)
-    throw error
-  }
-})
-
-ipcMain.handle('license:getStatus', async () => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    return await licenseService.getCurrentLicenseStatus()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting license status:', error)
-    throw error
-  }
-})
-
-ipcMain.handle('license:clear', async () => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    await licenseService.clearLicense()
-    return true
-  } catch (error) {
-    console.error('❌ [IPC] Error clearing license:', error)
-    throw error
-  }
-})
-
-ipcMain.handle('license:setBackendUrl', async (_, url: string) => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    licenseService.setBackendUrl(url)
-    return true
-  } catch (error) {
-    console.error('❌ [IPC] Error setting backend URL:', error)
     throw error
   }
 })

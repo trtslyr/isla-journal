@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Paste Test</title>
+    <style>
+        body { font-family: Arial; padding: 50px; }
+        input { width: 400px; padding: 10px; font-size: 16px; margin: 10px 0; }
+        .result { margin: 20px 0; padding: 10px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>License Key Paste Test</h1>
+    
+    <p>Test basic paste functionality:</p>
+    
+    <input type="text" id="test1" placeholder="Paste anything here with Cmd+V" />
+    <div class="result" id="result1">Paste result will appear here</div>
+    
+    <input type="text" id="test2" placeholder="ij_life_... or ij_sub_..." />
+    <div class="result" id="result2">License key result will appear here</div>
+    
+    <script>
+        document.getElementById('test1').addEventListener('input', function(e) {
+            document.getElementById('result1').textContent = 'Input value: ' + e.target.value;
+        });
+        
+        document.getElementById('test2').addEventListener('input', function(e) {
+            const value = e.target.value;
+            const isValid = value.startsWith('ij_life_') || value.startsWith('ij_sub_');
+            document.getElementById('result2').textContent = 'License key: ' + value + ' (Valid format: ' + isValid + ')';
+        });
+    </script>
+</body>
+</html> 

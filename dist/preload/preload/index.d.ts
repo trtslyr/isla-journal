@@ -1,3 +1,4 @@
+import { LicenseStatus, LicenseValidationResponse } from '../shared/types';
 declare const electronAPI: {
     getVersion: () => Promise<any>;
     getPlatform: () => Promise<any>;
@@ -33,10 +34,10 @@ declare const electronAPI: {
     chatGetMessages: (chatId: number) => Promise<any>;
     chatAddMessage: (chatId: number, role: string, content: string) => Promise<any>;
     chatClearMessages: (chatId: number) => Promise<any>;
-    licenseValidate: (licenseKey: string) => Promise<any>;
-    licenseGetStatus: () => Promise<any>;
-    licenseClear: () => Promise<any>;
-    licenseSetBackendUrl: (url: string) => Promise<any>;
+    licenseValidate: (licenseKey: string) => Promise<LicenseValidationResponse>;
+    licenseGetStatus: () => Promise<LicenseStatus>;
+    licenseClear: () => Promise<void>;
+    licenseSetBackendUrl: (url: string) => Promise<void>;
     openExternal: (url: string) => Promise<any>;
 };
 declare global {
