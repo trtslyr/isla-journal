@@ -27,15 +27,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      - name: Generate icons
+      - name: Debug environment
+        run: |
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          echo "Working directory: $(pwd)"
+          echo "Build directory exists: $(if (Test-Path build) { 'Yes' } else { 'No' })"
+          if (Test-Path build) { echo "Build contents: $(Get-ChildItem build)" }
+        shell: powershell
+      
+      - name: Generate icons (with error handling)
         run: npm run icons
         continue-on-error: true
       
       - name: Build application
         run: npm run build
       
+      - name: Debug build output
+        run: |
+          echo "Dist directory exists: $(if (Test-Path dist) { 'Yes' } else { 'No' })"
+          if (Test-Path dist) { echo "Dist contents: $(Get-ChildItem dist -Recurse)" }
+        shell: powershell
+        continue-on-error: true
+      
       - name: Build Windows installer
         run: npm run make
+      
+      - name: Debug output directory
+        run: |
+          echo "Out directory exists: $(if (Test-Path out) { 'Yes' } else { 'No' })"
+          if (Test-Path out) { echo "Out contents: $(Get-ChildItem out -Recurse)" }
+        shell: powershell
+        continue-on-error: true
       
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
