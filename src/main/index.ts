@@ -1,5 +1,12 @@
 import { app, BrowserWindow, ipcMain, Menu, shell, dialog } from 'electron'
+import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
+import path, { join, normalize, resolve } from 'path'
+import os from 'os'
 import { isDev } from './utils/is-dev'
+import { database } from './database'
+import { LlamaService } from './services/llamaService'
+import { DeviceDetectionService } from './services/deviceDetection'
+import { contentService } from './services/contentService'
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -204,18 +211,7 @@ app.on('before-quit', () => {
 
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
 
-  // File System Operations
-import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
-import path, { join, normalize, resolve } from 'path'
-import os from 'os'
 
-// Database
-import { database } from './database'
-
-// LLM Services
-import { LlamaService } from './services/llamaService'
-import { DeviceDetectionService } from './services/deviceDetection'
-import { contentService } from './services/contentService'
 
 // Cross-platform path utility
 const normalizePath = (filePath: string): string => {
