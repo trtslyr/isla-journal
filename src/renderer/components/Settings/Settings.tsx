@@ -20,8 +20,6 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const [isValidating, setIsValidating] = useState(false)
   const [validationMessage, setValidationMessage] = useState('')
 
-  if (!isOpen) return null
-
   // Load license status when component opens
   useEffect(() => {
     if (isOpen) {
@@ -29,8 +27,14 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     }
   }, [isOpen])
 
+  if (!isOpen) return null
+
   const loadLicenseStatus = async () => {
     try {
+      if (!window.electronAPI?.licenseGetStatus) {
+        console.warn('License API not available')
+        return
+      }
       const status = await window.electronAPI.licenseGetStatus()
       setLicenseStatus(status)
     } catch (error) {
@@ -41,6 +45,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const handleValidateLicense = async () => {
     if (!licenseKey.trim()) {
       setValidationMessage('Please enter a license key')
+      return
+    }
+
+    if (!window.electronAPI?.licenseValidate) {
+      setValidationMessage('❌ License API not available')
       return
     }
 
@@ -68,6 +77,10 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const handleClearLicense = async () => {
     if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
       try {
+        if (!window.electronAPI?.licenseClear) {
+          setValidationMessage('❌ License API not available')
+          return
+        }
         await window.electronAPI.licenseClear()
         await loadLicenseStatus()
         setValidationMessage('License cleared')
@@ -80,7 +93,16 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
 
   const openUrl = (url: string) => {
     // Open URL in external browser
-    window.electronAPI.openExternal?.(url) || window.open(url, '_blank')
+    try {
+      if (window.electronAPI?.openExternal) {
+        window.electronAPI.openExternal(url)
+      } else {
+        window.open(url, '_blank')
+      }
+    } catch (error) {
+      console.error('Failed to open URL:', error)
+      window.open(url, '_blank')
+    }
   }
 
   const handleBackdropClick = (e: React.MouseEvent) => {
