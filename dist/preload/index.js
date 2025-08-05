@@ -37,7 +37,14 @@ const electronAPI = {
     chatRename: (chatId, title) => electron_1.ipcRenderer.invoke('chat:rename', chatId, title),
     chatGetMessages: (chatId) => electron_1.ipcRenderer.invoke('chat:getMessages', chatId),
     chatAddMessage: (chatId, role, content) => electron_1.ipcRenderer.invoke('chat:addMessage', chatId, role, content),
-    chatClearMessages: (chatId) => electron_1.ipcRenderer.invoke('chat:clearMessages', chatId)
+    chatClearMessages: (chatId) => electron_1.ipcRenderer.invoke('chat:clearMessages', chatId),
+    // License operations
+    licenseValidate: (licenseKey) => electron_1.ipcRenderer.invoke('license:validate', licenseKey),
+    licenseGetStatus: () => electron_1.ipcRenderer.invoke('license:getStatus'),
+    licenseClear: () => electron_1.ipcRenderer.invoke('license:clear'),
+    licenseSetBackendUrl: (url) => electron_1.ipcRenderer.invoke('license:setBackendUrl', url),
+    // System operations
+    openExternal: (url) => electron_1.ipcRenderer.invoke('system:openExternal', url)
 };
 // Expose the API to the renderer process
 electron_1.contextBridge.exposeInMainWorld('electronAPI', electronAPI);

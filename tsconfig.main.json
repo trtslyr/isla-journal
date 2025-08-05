@@ -2,8 +2,14 @@
   "extends": "./tsconfig.node.json",
   "compilerOptions": {
     "outDir": "dist/main",
-    "rootDir": "src/main"
+    "rootDir": "src/main",
+    "allowJs": true,
+    "checkJs": false
   },
   "include": ["src/main/**/*"],
-  "exclude": ["src/main/**/*.test.ts", "src/main/**/*.spec.ts"]
+  "exclude": [
+    "src/main/**/*.test.ts", 
+    "src/main/**/*.spec.ts",
+    "src/main/backend/**/*"
+  ]
 } 

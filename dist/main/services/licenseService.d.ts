@@ -1,94 +1,59 @@
 import { BrowserWindow } from 'electron';
-export interface LicenseValidationResult {
-    valid: boolean;
-    reason?: string;
-    license_type?: 'lifetime' | 'subscription';
-    customer_name?: string;
-    never_expires?: boolean;
-    granted_at?: string;
-    plan_type?: string;
-    expires_at?: string;
-    next_validation?: string;
+export interface LicenseStatus {
+    isValid: boolean;
+    licenseType: 'lifetime' | 'monthly' | 'annual' | null;
+    expiresAt?: string;
+    lastValidated: string;
+    error?: string;
 }
-export interface LicenseState {
-    status: 'unlicensed' | 'active' | 'expired' | 'invalid';
-    license_type?: 'lifetime' | 'subscription';
-    license_key?: string;
-    last_validated?: string;
-    next_validation?: string;
-    customer_name?: string;
-    expires_at?: string;
-}
-export interface PaymentLinks {
-    monthly: string;
-    annual: string;
-    lifetime: string;
-    portal: string;
+export interface LicenseValidationResponse {
+    success: boolean;
+    license?: {
+        type: 'lifetime' | 'monthly' | 'annual';
+        status: 'active' | 'expired' | 'cancelled';
+        expires_at?: string;
+    };
+    error?: string;
 }
 export declare class LicenseService {
     private static instance;
-    private licenseServer;
     private mainWindow;
-    private isInitialized;
-    private validationTimer;
+    private backendUrl;
+    private validationInProgress;
     static getInstance(): LicenseService;
     private constructor();
     setMainWindow(window: BrowserWindow): void;
     /**
-     * Initialize the license service
+     * Validate license key with backend server
      */
-    initialize(): Promise<void>;
+    validateLicense(licenseKey: string): Promise<LicenseValidationResponse>;
     /**
-     * Validate a license key
+     * Get current license status from local storage
      */
-    validateLicense(licenseKey: string): Promise<LicenseValidationResult>;
+    getCurrentLicenseStatus(): Promise<LicenseStatus>;
     /**
-     * Get current license state
+     * Check if license needs revalidation based on type
      */
-    getCurrentLicenseState(): Promise<LicenseState>;
+    shouldRevalidate(): Promise<boolean>;
     /**
-     * Check if app is licensed and operational
+     * Perform automatic license check on app startup
      */
-    isAppLicensed(): Promise<boolean>;
+    performStartupLicenseCheck(): Promise<boolean>;
     /**
-     * Start automatic validation timer for subscription licenses
+     * Store license information locally
      */
-    private startValidationTimer;
+    private storeLicenseLocally;
     /**
-     * Get payment links for purchasing licenses
+     * Get cached license status
      */
-    getPaymentLinks(): PaymentLinks;
+    private getCachedLicenseStatus;
     /**
-     * Open payment link in user's browser
-     */
-    openPaymentLink(linkType: 'monthly' | 'annual' | 'lifetime' | 'portal'): Promise<void>;
-    /**
-     * Show license enforcement dialog
-     */
-    showLicenseDialog(): Promise<void>;
-    /**
-     * Lock the app due to invalid license
-     */
-    lockApp(reason: string): Promise<void>;
-    /**
-     * Unlock the app after successful license validation
-     */
-    unlockApp(): Promise<void>;
-    /**
-     * Perform startup license check
-     */
-    performStartupCheck(): Promise<boolean>;
-    /**
-     * Clear current license (for testing or license reset)
+     * Clear stored license (logout)
      */
     clearLicense(): Promise<void>;
     /**
-     * Get license usage statistics
+     * Set backend URL (for development/testing)
      */
-    getLicenseStats(): Promise<any>;
-    /**
-     * Stop validation timer and cleanup
-     */
-    cleanup(): void;
+    setBackendUrl(url: string): void;
 }
 //# sourceMappingURL=licenseService.d.ts.map

@@ -52,27 +52,12 @@ const electronAPI = {
   
   // License operations
   licenseValidate: (licenseKey: string) => ipcRenderer.invoke('license:validate', licenseKey),
-  licenseGetState: () => ipcRenderer.invoke('license:getState'),
-  licenseIsLicensed: () => ipcRenderer.invoke('license:isLicensed'),
-  licenseGetPaymentLinks: () => ipcRenderer.invoke('license:getPaymentLinks'),
-  licenseOpenPaymentLink: (linkType: 'monthly' | 'annual' | 'lifetime' | 'portal') => 
-    ipcRenderer.invoke('license:openPaymentLink', linkType),
+  licenseGetStatus: () => ipcRenderer.invoke('license:getStatus'),
   licenseClear: () => ipcRenderer.invoke('license:clear'),
-  licenseGetStats: () => ipcRenderer.invoke('license:getStats'),
+  licenseSetBackendUrl: (url: string) => ipcRenderer.invoke('license:setBackendUrl', url),
   
-  // License event listeners
-  onLicenseStatusChanged: (callback: (event: any, data: any) => void) => {
-    ipcRenderer.on('license:statusChanged', callback)
-  },
-  onLicenseShowDialog: (callback: (event: any, data: any) => void) => {
-    ipcRenderer.on('license:showDialog', callback)
-  },
-  onLicenseLockApp: (callback: (event: any, data: any) => void) => {
-    ipcRenderer.on('license:lockApp', callback)
-  },
-  onLicenseUnlockApp: (callback: (event: any, data: any) => void) => {
-    ipcRenderer.on('license:unlockApp', callback)
-  }
+  // System operations
+  openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url)
 }
 
 // Expose the API to the renderer process

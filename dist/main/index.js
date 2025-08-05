@@ -82,7 +82,7 @@ const createWindow = () => {
     });
 };
 // This method will be called when Electron has finished initialization
-electron_1.app.whenReady().then(async () => {
+electron_1.app.whenReady().then(() => {
     // Initialize database
     try {
         database_1.database.initialize();
@@ -92,27 +92,20 @@ electron_1.app.whenReady().then(async () => {
         // Continue without database for now - could show error dialog
     }
     createWindow();
-    // Initialize License service (critical for app operation)
-    const licenseService = licenseService_1.LicenseService.getInstance();
-    licenseService.setMainWindow(mainWindow);
-    try {
-        await licenseService.initialize();
-        // Perform startup license check
-        const isLicensed = await licenseService.performStartupCheck();
-        if (!isLicensed) {
-            console.log('⚠️ [Main] App startup without valid license - functionality limited');
-        }
-    }
-    catch (error) {
-        console.error('❌ [Main] Failed to initialize license service:', error);
-        // Continue but show license dialog
-    }
     // Initialize LLM service (async, don't block app startup)
     const llamaService = llamaService_1.LlamaService.getInstance();
     llamaService.setMainWindow(mainWindow);
     llamaService.initialize().catch(error => {
         console.error('❌ [Main] Failed to initialize LLM service:', error);
         // LLM will be unavailable but app continues to work
+    });
+    // Initialize License service
+    const licenseService = licenseService_1.LicenseService.getInstance();
+    licenseService.setMainWindow(mainWindow);
+    // Perform startup license check (async, don't block app startup)
+    licenseService.performStartupLicenseCheck().catch(error => {
+        console.error('❌ [Main] License check failed:', error);
+        // App will continue but with limited functionality
     });
     // Set app menu
     if (process.platform === 'darwin') {
@@ -152,17 +145,9 @@ electron_1.app.on('window-all-closed', () => {
         electron_1.app.quit();
     }
 });
-// Clean up database and license service when app is about to quit
+// Clean up database when app is about to quit
 electron_1.app.on('before-quit', () => {
     database_1.database.close();
-    // Cleanup license service
-    try {
-        const licenseService = licenseService_1.LicenseService.getInstance();
-        licenseService.cleanup();
-    }
-    catch (error) {
-        console.error('❌ [Main] License service cleanup error:', error);
-    }
 });
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
 // File System Operations
@@ -745,10 +730,7 @@ electron_1.ipcMain.handle('file:move', async (_, sourcePath, targetDirectoryPath
         throw error;
     }
 });
-// ========================
-// LICENSE IPC HANDLERS
-// ========================
-// Validate license key
+// License IPC handlers
 electron_1.ipcMain.handle('license:validate', async (_, licenseKey) => {
     try {
         const licenseService = licenseService_1.LicenseService.getInstance();
@@ -759,52 +741,16 @@ electron_1.ipcMain.handle('license:validate', async (_, licenseKey) => {
         throw error;
     }
 });
-// Get current license state
-electron_1.ipcMain.handle('license:getState', async () => {
+electron_1.ipcMain.handle('license:getStatus', async () => {
     try {
         const licenseService = licenseService_1.LicenseService.getInstance();
-        return await licenseService.getCurrentLicenseState();
+        return await licenseService.getCurrentLicenseStatus();
     }
     catch (error) {
-        console.error('❌ [IPC] Error getting license state:', error);
+        console.error('❌ [IPC] Error getting license status:', error);
         throw error;
     }
 });
-// Check if app is licensed
-electron_1.ipcMain.handle('license:isLicensed', async () => {
-    try {
-        const licenseService = licenseService_1.LicenseService.getInstance();
-        return await licenseService.isAppLicensed();
-    }
-    catch (error) {
-        console.error('❌ [IPC] Error checking license status:', error);
-        return false;
-    }
-});
-// Get payment links
-electron_1.ipcMain.handle('license:getPaymentLinks', async () => {
-    try {
-        const licenseService = licenseService_1.LicenseService.getInstance();
-        return licenseService.getPaymentLinks();
-    }
-    catch (error) {
-        console.error('❌ [IPC] Error getting payment links:', error);
-        throw error;
-    }
-});
-// Open payment link
-electron_1.ipcMain.handle('license:openPaymentLink', async (_, linkType) => {
-    try {
-        const licenseService = licenseService_1.LicenseService.getInstance();
-        await licenseService.openPaymentLink(linkType);
-        return true;
-    }
-    catch (error) {
-        console.error('❌ [IPC] Error opening payment link:', error);
-        throw error;
-    }
-});
-// Clear license (for testing)
 electron_1.ipcMain.handle('license:clear', async () => {
     try {
         const licenseService = licenseService_1.LicenseService.getInstance();
@@ -816,14 +762,25 @@ electron_1.ipcMain.handle('license:clear', async () => {
         throw error;
     }
 });
-// Get license statistics
-electron_1.ipcMain.handle('license:getStats', async () => {
+electron_1.ipcMain.handle('license:setBackendUrl', async (_, url) => {
     try {
         const licenseService = licenseService_1.LicenseService.getInstance();
-        return await licenseService.getLicenseStats();
+        licenseService.setBackendUrl(url);
+        return true;
     }
     catch (error) {
-        console.error('❌ [IPC] Error getting license stats:', error);
+        console.error('❌ [IPC] Error setting backend URL:', error);
+        throw error;
+    }
+});
+// System operations
+electron_1.ipcMain.handle('system:openExternal', async (_, url) => {
+    try {
+        await electron_1.shell.openExternal(url);
+        return true;
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error opening external URL:', error);
         throw error;
     }
 });

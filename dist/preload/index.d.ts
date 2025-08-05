@@ -33,6 +33,11 @@ declare const electronAPI: {
     chatGetMessages: (chatId: number) => Promise<any>;
     chatAddMessage: (chatId: number, role: string, content: string) => Promise<any>;
     chatClearMessages: (chatId: number) => Promise<any>;
+    licenseValidate: (licenseKey: string) => Promise<any>;
+    licenseGetStatus: () => Promise<any>;
+    licenseClear: () => Promise<any>;
+    licenseSetBackendUrl: (url: string) => Promise<any>;
+    openExternal: (url: string) => Promise<any>;
 };
 declare global {
     interface Window {

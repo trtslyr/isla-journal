@@ -345,6 +345,147 @@
   border-top: 1px solid var(--border-color);
 }
 
+/* License Status Styles */
+.license-status-display {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.license-status-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.license-status-item:last-child {
+  margin-bottom: 0;
+}
+
+.license-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.license-value {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.license-value.valid {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.license-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.license-input-group input {
+  flex: 1;
+}
+
+.validation-message {
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.purchase-links {
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+  margin-top: 16px;
+}
+
+.purchase-links h4 {
+  margin: 0 0 12px 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.purchase-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.purchase-btn {
+  padding: 12px 16px;
+  border: 2px solid;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.2s;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.purchase-btn.monthly {
+  background: var(--bg-secondary);
+  color: #1976d2;
+  border-color: #1976d2;
+}
+
+.purchase-btn.monthly:hover {
+  background: #1976d2;
+  color: white;
+}
+
+.purchase-btn.annual {
+  background: var(--bg-secondary);
+  color: #7b1fa2;
+  border-color: #7b1fa2;
+}
+
+.purchase-btn.annual:hover {
+  background: #7b1fa2;
+  color: white;
+}
+
+.purchase-btn.lifetime {
+  background: var(--bg-secondary);
+  color: #f57c00;
+  border-color: #f57c00;
+}
+
+.purchase-btn.lifetime:hover {
+  background: #f57c00;
+  color: white;
+}
+
+.customer-portal-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary);
+  transition: all 0.2s;
+}
+
+.customer-portal-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-secondary);
+}
+
 /* Responsive Design */
 @media (max-width: 600px) {
   .settings-modal {
@@ -369,113 +510,8 @@
     margin-right: 0;
     margin-bottom: 8px;
   }
-}
-
-/* License Input Group */
-.license-input-group {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.license-input-group .settings-input {
-  flex: 1;
-}
-
-.validation-message {
-  margin-top: 8px;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 14px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-}
-
-/* License Status */
-.license-status.active {
-  background: #1a5a1a;
-  border: 1px solid #2d8a2d;
-  border-radius: 6px;
-  padding: 12px;
-  margin-top: 8px;
-}
-
-.license-info {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-
-.license-info:last-child {
-  margin-bottom: 0;
-}
-
-.license-label {
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.license-value {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* Payment Links */
-.payment-links {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.payment-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 16px;
-  border: 2px solid transparent;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.payment-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent-color);
-  transform: translateY(-1px);
-}
-
-.payment-btn.monthly {
-  border-color: #3b82f6;
-}
-
-.payment-btn.annual {
-  border-color: #10b981;
-  background: #0f4a3a;
-}
-
-.payment-btn.lifetime {
-  border-color: #f59e0b;
-  background: #4a3d0f;
-}
-
-.payment-description {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 4px;
-  font-weight: normal;
-}
-
-.settings-btn.portal {
-  background: #6366f1;
-  border-color: #6366f1;
-}
-
-.settings-btn.portal:hover {
-  background: #5855eb;
-  border-color: #5855eb;
+  
+  .purchase-buttons {
+    grid-template-columns: 1fr;
+  }
 } 

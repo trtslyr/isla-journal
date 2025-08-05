@@ -51,7 +51,7 @@ const createWindow = (): void => {
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   // Initialize database
   try {
     database.initialize()
@@ -62,29 +62,22 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  // Initialize License service (critical for app operation)
-  const licenseService = LicenseService.getInstance()
-  licenseService.setMainWindow(mainWindow!)
-  
-  try {
-    await licenseService.initialize()
-    
-    // Perform startup license check
-    const isLicensed = await licenseService.performStartupCheck()
-    if (!isLicensed) {
-      console.log('⚠️ [Main] App startup without valid license - functionality limited')
-    }
-  } catch (error) {
-    console.error('❌ [Main] Failed to initialize license service:', error)
-    // Continue but show license dialog
-  }
-
   // Initialize LLM service (async, don't block app startup)
   const llamaService = LlamaService.getInstance()
   llamaService.setMainWindow(mainWindow!)
   llamaService.initialize().catch(error => {
     console.error('❌ [Main] Failed to initialize LLM service:', error)
     // LLM will be unavailable but app continues to work
+  })
+
+  // Initialize License service
+  const licenseService = LicenseService.getInstance()
+  licenseService.setMainWindow(mainWindow!)
+  
+  // Perform startup license check (async, don't block app startup)
+  licenseService.performStartupLicenseCheck().catch(error => {
+    console.error('❌ [Main] License check failed:', error)
+    // App will continue but with limited functionality
   })
 
   // Set app menu
@@ -127,17 +120,9 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Clean up database and license service when app is about to quit
+// Clean up database when app is about to quit
 app.on('before-quit', () => {
   database.close()
-  
-  // Cleanup license service
-  try {
-    const licenseService = LicenseService.getInstance()
-    licenseService.cleanup()
-  } catch (error) {
-    console.error('❌ [Main] License service cleanup error:', error)
-  }
 })
 
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
@@ -762,11 +747,7 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
   }
 })
 
-// ========================
-// LICENSE IPC HANDLERS
-// ========================
-
-// Validate license key
+// License IPC handlers
 ipcMain.handle('license:validate', async (_, licenseKey: string) => {
   try {
     const licenseService = LicenseService.getInstance()
@@ -777,52 +758,16 @@ ipcMain.handle('license:validate', async (_, licenseKey: string) => {
   }
 })
 
-// Get current license state
-ipcMain.handle('license:getState', async () => {
+ipcMain.handle('license:getStatus', async () => {
   try {
     const licenseService = LicenseService.getInstance()
-    return await licenseService.getCurrentLicenseState()
+    return await licenseService.getCurrentLicenseStatus()
   } catch (error) {
-    console.error('❌ [IPC] Error getting license state:', error)
+    console.error('❌ [IPC] Error getting license status:', error)
     throw error
   }
 })
 
-// Check if app is licensed
-ipcMain.handle('license:isLicensed', async () => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    return await licenseService.isAppLicensed()
-  } catch (error) {
-    console.error('❌ [IPC] Error checking license status:', error)
-    return false
-  }
-})
-
-// Get payment links
-ipcMain.handle('license:getPaymentLinks', async () => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    return licenseService.getPaymentLinks()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting payment links:', error)
-    throw error
-  }
-})
-
-// Open payment link
-ipcMain.handle('license:openPaymentLink', async (_, linkType: 'monthly' | 'annual' | 'lifetime' | 'portal') => {
-  try {
-    const licenseService = LicenseService.getInstance()
-    await licenseService.openPaymentLink(linkType)
-    return true
-  } catch (error) {
-    console.error('❌ [IPC] Error opening payment link:', error)
-    throw error
-  }
-})
-
-// Clear license (for testing)
 ipcMain.handle('license:clear', async () => {
   try {
     const licenseService = LicenseService.getInstance()
@@ -834,13 +779,24 @@ ipcMain.handle('license:clear', async () => {
   }
 })
 
-// Get license statistics
-ipcMain.handle('license:getStats', async () => {
+ipcMain.handle('license:setBackendUrl', async (_, url: string) => {
   try {
     const licenseService = LicenseService.getInstance()
-    return await licenseService.getLicenseStats()
+    licenseService.setBackendUrl(url)
+    return true
   } catch (error) {
-    console.error('❌ [IPC] Error getting license stats:', error)
+    console.error('❌ [IPC] Error setting backend URL:', error)
+    throw error
+  }
+})
+
+// System operations
+ipcMain.handle('system:openExternal', async (_, url: string) => {
+  try {
+    await shell.openExternal(url)
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error opening external URL:', error)
     throw error
   }
 }) 

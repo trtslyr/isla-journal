@@ -1,41 +1,29 @@
-import { BrowserWindow, shell } from 'electron'
-import { LicenseServer } from '../backend/licenseServer'
+import { BrowserWindow } from 'electron'
+import { database } from '../database'
 
-export interface LicenseValidationResult {
-  valid: boolean
-  reason?: string
-  license_type?: 'lifetime' | 'subscription'
-  customer_name?: string
-  never_expires?: boolean
-  granted_at?: string
-  plan_type?: string
-  expires_at?: string
-  next_validation?: string
+export interface LicenseStatus {
+  isValid: boolean
+  licenseType: 'lifetime' | 'monthly' | 'annual' | null
+  expiresAt?: string
+  lastValidated: string
+  error?: string
 }
 
-export interface LicenseState {
-  status: 'unlicensed' | 'active' | 'expired' | 'invalid'
-  license_type?: 'lifetime' | 'subscription'
-  license_key?: string
-  last_validated?: string
-  next_validation?: string
-  customer_name?: string
-  expires_at?: string
-}
-
-export interface PaymentLinks {
-  monthly: string
-  annual: string
-  lifetime: string
-  portal: string
+export interface LicenseValidationResponse {
+  success: boolean
+  license?: {
+    type: 'lifetime' | 'monthly' | 'annual'
+    status: 'active' | 'expired' | 'cancelled'
+    expires_at?: string
+  }
+  error?: string
 }
 
 export class LicenseService {
   private static instance: LicenseService
-  private licenseServer: LicenseServer
   private mainWindow: BrowserWindow | null = null
-  private isInitialized = false
-  private validationTimer: NodeJS.Timeout | null = null
+  private backendUrl: string
+  private validationInProgress = false
 
   public static getInstance(): LicenseService {
     if (!LicenseService.instance) {
@@ -45,7 +33,8 @@ export class LicenseService {
   }
 
   private constructor() {
-    this.licenseServer = new LicenseServer()
+    // Your backend URL - you'll need to provide this
+    this.backendUrl = process.env.LICENSE_BACKEND_URL || 'https://your-backend-url.railway.app'
   }
 
   public setMainWindow(window: BrowserWindow): void {
@@ -53,302 +42,245 @@ export class LicenseService {
   }
 
   /**
-   * Initialize the license service
+   * Validate license key with backend server
    */
-  public async initialize(): Promise<void> {
-    if (this.isInitialized) return
-
-    try {
-      console.log('🔐 [LicenseService] Initializing...')
-      
-      // Initialize the embedded license server
-      await this.licenseServer.initialize()
-      
-      // Check current license state
-      const licenseState = await this.getCurrentLicenseState()
-      console.log('📝 [LicenseService] Current license state:', licenseState.status)
-      
-      // Start validation timer for subscription licenses
-      this.startValidationTimer()
-      
-      this.isInitialized = true
-      console.log('✅ [LicenseService] Initialized successfully')
-    } catch (error) {
-      console.error('❌ [LicenseService] Initialization failed:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Validate a license key
-   */
-  public async validateLicense(licenseKey: string): Promise<LicenseValidationResult> {
-    if (!this.isInitialized) {
-      throw new Error('LicenseService not initialized')
+  public async validateLicense(licenseKey: string): Promise<LicenseValidationResponse> {
+    if (this.validationInProgress) {
+      throw new Error('License validation already in progress')
     }
 
+    this.validationInProgress = true
+    
     try {
-      console.log('🔍 [LicenseService] Validating license key:', licenseKey.substring(0, 10) + '...')
+      console.log('🔐 [LicenseService] Validating license with backend...')
       
-      const result = await this.licenseServer.validateLicense(licenseKey)
+      const response = await fetch(`${this.backendUrl}/validate-license`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ license_key: licenseKey })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.json() as any
       
-      if (result.valid) {
-        console.log('✅ [LicenseService] License validation successful:', result.license_type)
+      if (data.success && data.license) {
+        // Store valid license in local database
+        await this.storeLicenseLocally(licenseKey, data.license)
+        console.log('✅ [LicenseService] License validated and stored')
         
-        // Notify renderer about license status change
-        if (this.mainWindow) {
-          this.mainWindow.webContents.send('license:statusChanged', {
-            status: 'active',
-            license_type: result.license_type,
-            customer_name: result.customer_name
-          })
+        return {
+          success: true,
+          license: data.license
         }
       } else {
-        console.log('❌ [LicenseService] License validation failed:', result.reason)
+        console.log('❌ [LicenseService] License validation failed:', data.error)
+        return {
+          success: false,
+          error: data.error || 'Invalid license key'
+        }
       }
       
-      return result
     } catch (error) {
-      console.error('❌ [LicenseService] License validation error:', error)
-      return { valid: false, reason: 'validation_error' }
-    }
-  }
-
-  /**
-   * Get current license state
-   */
-  public async getCurrentLicenseState(): Promise<LicenseState> {
-    if (!this.isInitialized) {
-      throw new Error('LicenseService not initialized')
-    }
-
-    try {
-      return await this.licenseServer.getCurrentLicenseState()
-    } catch (error) {
-      console.error('❌ [LicenseService] Error getting license state:', error)
+      console.error('❌ [LicenseService] Network error during validation:', error)
+      
+      // Check if we have a cached valid license for offline use
+      const cachedStatus = await this.getCachedLicenseStatus(licenseKey)
+      if (cachedStatus.isValid) {
+        console.log('🔄 [LicenseService] Using cached license due to network error')
+        return {
+          success: true,
+          license: {
+            type: cachedStatus.licenseType!,
+            status: 'active'
+          }
+        }
+      }
+      
       return {
-        status: 'unlicensed',
-        license_type: undefined,
-        license_key: undefined
+        success: false,
+        error: error instanceof Error ? error.message : 'Network error'
+      }
+    } finally {
+      this.validationInProgress = false
+    }
+  }
+
+  /**
+   * Get current license status from local storage
+   */
+  public async getCurrentLicenseStatus(): Promise<LicenseStatus> {
+    try {
+      const licenseKey = database.getSetting('license_key')
+      if (!licenseKey) {
+        return {
+          isValid: false,
+          licenseType: null,
+          lastValidated: new Date().toISOString()
+        }
+      }
+
+      return await this.getCachedLicenseStatus(licenseKey)
+    } catch (error) {
+      console.error('❌ [LicenseService] Error getting license status:', error)
+      return {
+        isValid: false,
+        licenseType: null,
+        lastValidated: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error'
       }
     }
   }
 
   /**
-   * Check if app is licensed and operational
+   * Check if license needs revalidation based on type
    */
-  public async isAppLicensed(): Promise<boolean> {
+  public async shouldRevalidate(): Promise<boolean> {
+    const status = await this.getCurrentLicenseStatus()
+    
+    if (!status.isValid || !status.licenseType) {
+      return true
+    }
+
+    // Lifetime licenses never need revalidation
+    if (status.licenseType === 'lifetime') {
+      return false
+    }
+
+    const lastValidated = new Date(status.lastValidated)
+    const now = new Date()
+    
+    // Monthly licenses: revalidate every 30 days
+    if (status.licenseType === 'monthly') {
+      const daysSinceValidation = Math.floor((now.getTime() - lastValidated.getTime()) / (1000 * 60 * 60 * 24))
+      return daysSinceValidation >= 30
+    }
+    
+    // Annual licenses: revalidate every 365 days
+    if (status.licenseType === 'annual') {
+      const daysSinceValidation = Math.floor((now.getTime() - lastValidated.getTime()) / (1000 * 60 * 60 * 24))
+      return daysSinceValidation >= 365
+    }
+
+    return true
+  }
+
+  /**
+   * Perform automatic license check on app startup
+   */
+  public async performStartupLicenseCheck(): Promise<boolean> {
     try {
-      const state = await this.getCurrentLicenseState()
-      
-      if (state.status === 'unlicensed') {
+      const licenseKey = database.getSetting('license_key')
+      if (!licenseKey) {
+        console.log('🔓 [LicenseService] No license key found')
         return false
       }
 
-      // For lifetime licenses, always return true if active
-      if (state.license_type === 'lifetime' && state.status === 'active') {
+      const shouldRevalidate = await this.shouldRevalidate()
+      if (!shouldRevalidate) {
+        console.log('✅ [LicenseService] License still valid, no revalidation needed')
         return true
       }
 
-      // For subscription licenses, check if revalidation is needed
-      if (state.license_type === 'subscription') {
-        const needsRevalidation = await this.licenseServer.needsRevalidation()
-        
-        if (needsRevalidation && state.license_key) {
-          // Try to revalidate
-          const validation = await this.validateLicense(state.license_key)
-          return validation.valid
-        }
-        
-        return state.status === 'active'
-      }
-
-      return false
+      console.log('🔄 [LicenseService] License needs revalidation...')
+      const result = await this.validateLicense(licenseKey)
+      
+      return result.success
     } catch (error) {
-      console.error('❌ [LicenseService] Error checking license status:', error)
-      return false
+      console.error('❌ [LicenseService] Startup license check failed:', error)
+      
+      // Check cached license as fallback
+      const cachedStatus = await this.getCurrentLicenseStatus()
+      return cachedStatus.isValid
     }
   }
 
   /**
-   * Start automatic validation timer for subscription licenses
+   * Store license information locally
    */
-  private startValidationTimer(): void {
-    // Check every hour if revalidation is needed
-    this.validationTimer = setInterval(async () => {
-      try {
-        const state = await this.getCurrentLicenseState()
-        
-        if (state.license_type === 'subscription' && state.license_key) {
-          const needsRevalidation = await this.licenseServer.needsRevalidation()
-          
-          if (needsRevalidation) {
-            console.log('⏰ [LicenseService] Automatic revalidation triggered')
-            await this.validateLicense(state.license_key)
-          }
-        }
-      } catch (error) {
-        console.error('❌ [LicenseService] Validation timer error:', error)
-      }
-    }, 60 * 60 * 1000) // 1 hour
-  }
-
-  /**
-   * Get payment links for purchasing licenses
-   */
-  public getPaymentLinks(): PaymentLinks {
-    return this.licenseServer.getPaymentLinks()
-  }
-
-  /**
-   * Open payment link in user's browser
-   */
-  public async openPaymentLink(linkType: 'monthly' | 'annual' | 'lifetime' | 'portal'): Promise<void> {
+  private async storeLicenseLocally(licenseKey: string, license: any): Promise<void> {
     try {
-      const links = this.getPaymentLinks()
-      const url = links[linkType]
+      database.setSetting('license_key', licenseKey)
+      database.setSetting('license_type', license.type)
+      database.setSetting('license_status', license.status)
+      database.setSetting('license_validated_at', new Date().toISOString())
       
-      if (!url || url.includes('your-')) {
-        throw new Error(`Payment link for ${linkType} not configured`)
+      if (license.expires_at) {
+        database.setSetting('license_expires_at', license.expires_at)
       }
       
-      console.log(`🌐 [LicenseService] Opening ${linkType} payment link`)
-      await shell.openExternal(url)
+      console.log('💾 [LicenseService] License stored locally')
     } catch (error) {
-      console.error(`❌ [LicenseService] Failed to open ${linkType} payment link:`, error)
+      console.error('❌ [LicenseService] Failed to store license locally:', error)
       throw error
     }
   }
 
   /**
-   * Show license enforcement dialog
+   * Get cached license status
    */
-  public async showLicenseDialog(): Promise<void> {
-    if (!this.mainWindow) return
-
-    // Send message to renderer to show license dialog
-    this.mainWindow.webContents.send('license:showDialog', {
-      title: 'License Required',
-      message: 'A valid license is required to use Isla Journal. Please enter your license key or purchase a license.',
-      actions: ['enter_key', 'purchase']
-    })
-  }
-
-  /**
-   * Lock the app due to invalid license
-   */
-  public async lockApp(reason: string): Promise<void> {
-    if (!this.mainWindow) return
-
-    console.log('🔒 [LicenseService] Locking app due to:', reason)
-    
-    // Disable all functionality except license validation
-    this.mainWindow.webContents.send('license:lockApp', {
-      reason,
-      timestamp: new Date().toISOString()
-    })
-  }
-
-  /**
-   * Unlock the app after successful license validation
-   */
-  public async unlockApp(): Promise<void> {
-    if (!this.mainWindow) return
-
-    console.log('🔓 [LicenseService] Unlocking app')
-    
-    this.mainWindow.webContents.send('license:unlockApp', {
-      timestamp: new Date().toISOString()
-    })
-  }
-
-  /**
-   * Perform startup license check
-   */
-  public async performStartupCheck(): Promise<boolean> {
+  private async getCachedLicenseStatus(licenseKey: string): Promise<LicenseStatus> {
     try {
-      console.log('🚀 [LicenseService] Performing startup license check...')
-      
-      const isLicensed = await this.isAppLicensed()
-      
-      if (!isLicensed) {
-        console.log('⚠️ [LicenseService] App is not properly licensed')
-        await this.showLicenseDialog()
-        return false
+      const storedKey = database.getSetting('license_key')
+      if (storedKey !== licenseKey) {
+        return {
+          isValid: false,
+          licenseType: null,
+          lastValidated: new Date().toISOString()
+        }
       }
-      
-      console.log('✅ [LicenseService] App is properly licensed')
-      return true
+
+      const licenseType = database.getSetting('license_type') as 'lifetime' | 'monthly' | 'annual' | null
+      const licenseStatus = database.getSetting('license_status')
+      const lastValidated = database.getSetting('license_validated_at') || new Date().toISOString()
+      const expiresAt = database.getSetting('license_expires_at')
+
+      const isValid = licenseStatus === 'active'
+
+      return {
+        isValid,
+        licenseType,
+        expiresAt,
+        lastValidated
+      }
     } catch (error) {
-      console.error('❌ [LicenseService] Startup check failed:', error)
-      return false
+      console.error('❌ [LicenseService] Error reading cached license:', error)
+      return {
+        isValid: false,
+        licenseType: null,
+        lastValidated: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Cache read error'
+      }
     }
   }
 
   /**
-   * Clear current license (for testing or license reset)
+   * Clear stored license (logout)
    */
   public async clearLicense(): Promise<void> {
     try {
-      // Update license state to unlicensed
-      await this.licenseServer.updateLicenseState({
-        license_key: null,
-        license_type: null,
-        status: 'unlicensed',
-        last_validated: null,
-        next_validation: null,
-        customer_name: null,
-        expires_at: null
-      })
+      database.setSetting('license_key', '')
+      database.setSetting('license_type', '')
+      database.setSetting('license_status', '')
+      database.setSetting('license_validated_at', '')
+      database.setSetting('license_expires_at', '')
       
       console.log('🗑️ [LicenseService] License cleared')
-      
-      // Notify renderer
-      if (this.mainWindow) {
-        this.mainWindow.webContents.send('license:statusChanged', {
-          status: 'unlicensed'
-        })
-      }
     } catch (error) {
-      console.error('❌ [LicenseService] Failed to clear license:', error)
+      console.error('❌ [LicenseService] Error clearing license:', error)
       throw error
     }
   }
 
   /**
-   * Get license usage statistics
+   * Set backend URL (for development/testing)
    */
-  public async getLicenseStats(): Promise<any> {
-    try {
-      const state = await this.getCurrentLicenseState()
-      
-      return {
-        current_status: state.status,
-        license_type: state.license_type,
-        last_validated: state.last_validated,
-        next_validation: state.next_validation,
-        customer_name: state.customer_name,
-        expires_at: state.expires_at
-      }
-    } catch (error) {
-      console.error('❌ [LicenseService] Error getting license stats:', error)
-      return null
-    }
-  }
-
-  /**
-   * Stop validation timer and cleanup
-   */
-  public cleanup(): void {
-    if (this.validationTimer) {
-      clearInterval(this.validationTimer)
-      this.validationTimer = null
-    }
-    
-    if (this.licenseServer) {
-      this.licenseServer.close()
-    }
-    
-    console.log('🧹 [LicenseService] Cleanup completed')
+  public setBackendUrl(url: string): void {
+    this.backendUrl = url
+    console.log('🔧 [LicenseService] Backend URL set to:', url)
   }
 } 
