@@ -19,8 +19,7 @@
     "dist:win": "npm run build && electron-builder --win --publish=never",
     "dist:mac": "npm run build && electron-builder --mac --publish=never",
     "dist:linux": "npm run build && electron-builder --linux --publish=never",
-    "postinstall": "electron-builder install-app-deps && electron-rebuild",
-    "electron:rebuild": "electron-rebuild"
+    "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
     "journal",
@@ -34,7 +33,6 @@
   "license": "MIT",
   "homepage": "./",
   "devDependencies": {
-    "@electron/notarize": "^2.1.0",
     "@types/chokidar": "^1.7.5",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
@@ -46,12 +44,10 @@
     "cross-env": "^7.0.3",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
-    "electron-rebuild": "^3.2.9",
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },
   "dependencies": {
-    "@electron/rebuild": "^4.0.1",
     "@monaco-editor/react": "^4.7.0",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.2.0",
@@ -76,7 +72,6 @@
       "output": "release",
       "buildResources": "build"
     },
-
     "files": [
       "dist/**/*",
       "node_modules/**/*",
@@ -84,14 +79,8 @@
       "!node_modules/**/test/**/*",
       "!node_modules/**/*.d.ts"
     ],
-    "nodeGypRebuild": false,
-    "buildDependenciesFromSource": true,
-
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "build/icon.icns",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false,
       "target": [
         {
           "target": "dmg",
@@ -125,7 +114,6 @@
       ]
     },
     "win": {
-      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -147,7 +135,6 @@
       "shortcutName": "Isla Journal"
     },
     "linux": {
-      "icon": "build/icons/",
       "category": "Office",
       "target": [
         {

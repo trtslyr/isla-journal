@@ -41,36 +41,13 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Setup Python (for native compilation)
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install build tools (macOS)
-        if: matrix.platform == 'mac'
-        run: |
-          # Ensure Xcode command line tools are available
-          xcode-select --install || true
-          
-      - name: Install build tools (Windows)
-        if: matrix.platform == 'win'
-        run: |
-          npm install -g windows-build-tools || true
-          
-      - name: Setup native build environment
-        run: |
-          # Clear npm cache
-          npm cache clean --force
-          
-      - name: Force rebuild native dependencies
-        run: |
-          # Remove existing native builds
-          find node_modules -name "*.node" -delete || true
-          # Rebuild specifically for Electron
-          npx electron-rebuild --force
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build app
         run: npm run build
@@ -78,29 +55,15 @@ jobs:
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
         run: |
-          echo "🍎 Building for macOS ${{ matrix.arch }}"
-          echo "Working directory: $(pwd)"
-          echo "Node modules status:"
-          ls -la node_modules/better-sqlite3/ || echo "better-sqlite3 not found"
-          
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             npm run dist:mac -- --arm64
           else
             npm run dist:mac -- --x64
           fi
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASS: ${{ secrets.APPLE_ID_PASS }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          DEBUG: electron-builder
 
       - name: Build distributables (Windows)
         if: matrix.platform == 'win'
         run: npm run dist:win
-        env:
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Build distributables (Linux)
         if: matrix.platform == 'linux'
@@ -131,57 +94,15 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release-artifacts
 
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name || github.event.inputs.version }}
-          release_name: Isla Journal ${{ github.ref_name || github.event.inputs.version }}
-          body: |
-            ## 🏝️ Isla Journal Release ${{ github.ref_name || github.event.inputs.version }}
-            
-            ### Download for your platform:
-            
-            **🍎 macOS:**
-            - Apple Silicon (M1/M2/M3): `Isla Journal-*-arm64.dmg`
-            - Intel Macs: `Isla Journal-*-x64.dmg`
-            
-            **🪟 Windows:**
-            - `Isla Journal Setup *.exe`
-            
-            **🐧 Linux:**
-            - AppImage: `Isla Journal-*.AppImage` (Universal)
-            - Debian/Ubuntu: `isla-journal_*_amd64.deb`
-            - RedHat/Fedora: `isla-journal-*.x86_64.rpm`
-            
-            ### Features:
-            - ✅ Fully offline AI-powered journaling
-            - ✅ Cross-platform compatibility
-            - ✅ Smart device-optimized AI model selection
-            - ✅ Beautiful VS Code-style interface
-            - ✅ RAG-powered content search
-            
-            ---
-            
-            **First time using Isla Journal?**
-            1. Download the appropriate file for your system
-            2. Install and launch the app
-            3. The AI model will auto-download on first use
-            4. Start journaling with AI assistance!
+          name: Release ${{ github.ref_name || github.event.inputs.version }}
           draft: false
           prerelease: false
-
-      - name: Upload Release Assets
-        run: |
-          for file in artifacts/*/release/*; do
-            if [ -f "$file" ]; then
-              echo "Uploading $file"
-              gh release upload "${{ github.ref_name || github.event.inputs.version }}" "$file" --clobber
-            fi
-          done
+          files: release-artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
