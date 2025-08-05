@@ -50,16 +50,22 @@ const createWindow = (): void => {
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Log cross-platform information
   logPlatformInfo()
   
-  // Initialize database
+  // Initialize database (now async with proper error handling)
   try {
-    database.initialize()
+    await database.initialize()
+    console.log('🚀 [Main] Database initialization completed')
   } catch (error) {
     console.error('❌ [Main] Failed to initialize database:', error)
-    // Continue without database for now - could show error dialog
+    // Show error dialog to user
+    const { dialog } = require('electron')
+    dialog.showErrorBox(
+      'Database Initialization Error',
+      `Failed to initialize the database: ${error.message}\n\nThe application may not function properly.`
+    )
   }
 
   createWindow()
@@ -265,6 +271,9 @@ ipcMain.handle('file:openDirectory', async () => {
   // IPC handler to read directory contents with cross-platform path handling
   ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
     try {
+      // Ensure database is ready before any operations
+      await database.ensureReady()
+      
       const normalizedDirPath = normalizePath(dirPath)
       console.log('📁 Reading directory:', normalizedDirPath)
       console.log('🔍 [Directory] Original path:', dirPath, '→ Normalized:', normalizedDirPath)
@@ -500,6 +509,7 @@ ipcMain.handle('file:createDirectory', async (_, parentPath: string, dirName: st
 // Database operations handlers
 ipcMain.handle('db:saveFile', async (_, filePath: string, fileName: string, content: string) => {
   try {
+    await database.ensureReady()
     database.saveFile(filePath, fileName, content)
     return true
   } catch (error) {
@@ -510,6 +520,7 @@ ipcMain.handle('db:saveFile', async (_, filePath: string, fileName: string, cont
 
 ipcMain.handle('db:getFile', async (_, filePath: string) => {
   try {
+    await database.ensureReady()
     return database.getFile(filePath)
   } catch (error) {
     console.error('❌ [IPC] Error getting file from database:', error)
@@ -521,6 +532,7 @@ ipcMain.handle('db:getFile', async (_, filePath: string) => {
 
 ipcMain.handle('db:clearAll', async () => {
   try {
+    await database.ensureReady()
     database.clearAllContent()
     console.log('🗑️ [IPC] Database cleared successfully')
     return true
@@ -532,6 +544,7 @@ ipcMain.handle('db:clearAll', async () => {
 
 ipcMain.handle('db:getStats', async () => {
   try {
+    await database.ensureReady()
     return database.getStats()
   } catch (error) {
     console.error('❌ [IPC] Error getting database stats:', error)
@@ -541,6 +554,7 @@ ipcMain.handle('db:getStats', async () => {
 
 ipcMain.handle('db:reindexAll', async () => {
   try {
+    await database.ensureReady()
     console.log('🔄 [IPC] Starting reindex of all files...')
     
     // Get the current selected directory
@@ -658,6 +672,7 @@ ipcMain.handle('llm:getAvailableModels', async () => {
 // Chat IPC handlers
 ipcMain.handle('chat:create', async (_, title: string) => {
   try {
+    await database.ensureReady()
     return database.createChat(title)
   } catch (error) {
     console.error('❌ [IPC] Error creating chat:', error)
@@ -667,6 +682,7 @@ ipcMain.handle('chat:create', async (_, title: string) => {
 
 ipcMain.handle('chat:getAll', async () => {
   try {
+    await database.ensureReady()
     return database.getAllChats()
   } catch (error) {
     console.error('❌ [IPC] Error getting all chats:', error)
@@ -676,6 +692,7 @@ ipcMain.handle('chat:getAll', async () => {
 
 ipcMain.handle('chat:getActive', async () => {
   try {
+    await database.ensureReady()
     return database.getActiveChat()
   } catch (error) {
     console.error('❌ [IPC] Error getting active chat:', error)
@@ -685,6 +702,7 @@ ipcMain.handle('chat:getActive', async () => {
 
 ipcMain.handle('chat:setActive', async (_, chatId: number) => {
   try {
+    await database.ensureReady()
     database.setActiveChat(chatId)
     return true
   } catch (error) {
@@ -695,6 +713,7 @@ ipcMain.handle('chat:setActive', async (_, chatId: number) => {
 
 ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string) => {
   try {
+    await database.ensureReady()
     return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content)
   } catch (error) {
     console.error('❌ [IPC] Error adding chat message:', error)
@@ -704,6 +723,7 @@ ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, conten
 
 ipcMain.handle('chat:getMessages', async (_, chatId: number) => {
   try {
+    await database.ensureReady()
     return database.getChatMessages(chatId)
   } catch (error) {
     console.error('❌ [IPC] Error getting chat messages:', error)
@@ -713,6 +733,7 @@ ipcMain.handle('chat:getMessages', async (_, chatId: number) => {
 
 ipcMain.handle('chat:delete', async (_, chatId: number) => {
   try {
+    await database.ensureReady()
     database.deleteChat(chatId)
     return true
   } catch (error) {
@@ -723,6 +744,7 @@ ipcMain.handle('chat:delete', async (_, chatId: number) => {
 
 ipcMain.handle('chat:rename', async (_, chatId: number, newTitle: string) => {
   try {
+    await database.ensureReady()
     database.renameChat(chatId, newTitle)
     return true
   } catch (error) {
@@ -734,6 +756,7 @@ ipcMain.handle('chat:rename', async (_, chatId: number, newTitle: string) => {
 // RAG/Content Search IPC handlers
 ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
   try {
+    await database.ensureReady()
     console.log(`🔍 [IPC] Content search: ${query}`)
     return contentService.searchOnly(query, limit)
   } catch (error) {
@@ -744,6 +767,7 @@ ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
 
 ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number) => {
   try {
+    await database.ensureReady()
     console.log(`🧠 [IPC] RAG search and answer: ${query}`)
     
     // Get recent conversation history if chatId provided
@@ -765,6 +789,7 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
 
 ipcMain.handle('content:getFile', async (_, fileId: number) => {
   try {
+    await database.ensureReady()
     return contentService.getFileContent(fileId)
   } catch (error) {
     console.error('❌ [IPC] Error getting file content:', error)
@@ -775,6 +800,7 @@ ipcMain.handle('content:getFile', async (_, fileId: number) => {
 // Settings IPC handlers
 ipcMain.handle('settings:get', async (_, key: string) => {
   try {
+    await database.ensureReady()
     return database.getSetting(key)
   } catch (error) {
     console.error('❌ [IPC] Error getting setting:', error)
@@ -784,6 +810,7 @@ ipcMain.handle('settings:get', async (_, key: string) => {
 
 ipcMain.handle('settings:set', async (_, key: string, value: string) => {
   try {
+    await database.ensureReady()
     database.setSetting(key, value)
     return true
   } catch (error) {

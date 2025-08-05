@@ -66,6 +66,8 @@ class IslaDatabase {
   private db: Database.Database | null = null
   private dbPath: string
   private isWindows: boolean
+  private isInitialized: boolean = false
+  private initializationPromise: Promise<void> | null = null
 
   constructor() {
     this.isWindows = os.platform() === 'win32'
@@ -165,7 +167,36 @@ class IslaDatabase {
   /**
    * Initialize database and create tables with Windows-specific optimizations
    */
-  public initialize(): void {
+  public async initialize(): Promise<void> {
+    // Return existing promise if initialization is already in progress
+    if (this.initializationPromise) {
+      return this.initializationPromise
+    }
+
+    // If already initialized, return immediately
+    if (this.isInitialized && this.db) {
+      return Promise.resolve()
+    }
+
+    // Create and store the initialization promise
+    this.initializationPromise = this.performInitialization()
+    
+    try {
+      await this.initializationPromise
+      this.isInitialized = true
+      console.log('✅ [Database] SQLite initialized successfully')
+    } catch (error) {
+      // Reset state on failure
+      this.isInitialized = false
+      this.initializationPromise = null
+      throw error
+    }
+  }
+
+  /**
+   * Perform the actual database initialization
+   */
+  private async performInitialization(): Promise<void> {
     try {
       // Ensure database directory exists
       const dbDir = path.dirname(this.dbPath)
@@ -177,7 +208,7 @@ class IslaDatabase {
         mkdirSync(dbDir, dirOptions)
       }
 
-      // Windows-specific database options
+      // Windows-specific database options with retry logic
       const dbOptions: Database.Options = {}
       
       if (this.isWindows) {
@@ -187,8 +218,29 @@ class IslaDatabase {
         dbOptions.timeout = 10000 // 10 second timeout for Windows file locking
       }
 
-      this.db = new Database(this.dbPath, dbOptions)
-      console.log('🗄️ [Database] Connected to SQLite database')
+      // Retry logic for Windows file locking issues
+      let retryCount = 0
+      const maxRetries = this.isWindows ? 3 : 1
+      
+      while (retryCount < maxRetries) {
+        try {
+          this.db = new Database(this.dbPath, dbOptions)
+          console.log('🗄️ [Database] Connected to SQLite database')
+          break // Success, exit retry loop
+        } catch (dbError) {
+          retryCount++
+          if (this.isWindows && dbError.message.includes('database is locked') && retryCount < maxRetries) {
+            console.log(`🪟 [Database] Windows lock detected, retry ${retryCount}/${maxRetries}...`)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)) // Exponential backoff
+            continue
+          }
+          throw dbError // Re-throw if not a retryable Windows lock error
+        }
+      }
+
+      if (!this.db) {
+        throw new Error('Failed to create database connection after retries')
+      }
 
       // Enhanced Windows-compatible SQLite pragmas
       if (this.isWindows) {
@@ -214,7 +266,6 @@ class IslaDatabase {
       console.log('📋 [Database] Tables and indexes created')
       console.log('🔧 [Database] Schema validation completed (FTS removed)')
 
-      console.log('✅ [Database] SQLite initialized successfully')
     } catch (error) {
       console.error('❌ [Database] Failed to initialize:', error)
       
@@ -226,6 +277,32 @@ class IslaDatabase {
         throw error
       }
     }
+  }
+
+  /**
+   * Ensure database is initialized and ready for operations
+   */
+  public async ensureReady(): Promise<void> {
+    if (!this.isInitialized || !this.db) {
+      if (this.initializationPromise) {
+        // Wait for ongoing initialization
+        await this.initializationPromise
+      } else {
+        // Start initialization
+        await this.initialize()
+      }
+    }
+    
+    if (!this.db) {
+      throw new Error('Database not initialized')
+    }
+  }
+
+  /**
+   * Check if database is ready (synchronous check)
+   */
+  public isReady(): boolean {
+    return this.isInitialized && this.db !== null
   }
 
   /**
