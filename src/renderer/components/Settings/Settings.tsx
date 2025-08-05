@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import './Settings.css'
 
 interface SettingsProps {
@@ -6,8 +6,108 @@ interface SettingsProps {
   onClose: () => void
 }
 
+interface LicenseState {
+  status: 'unlicensed' | 'active' | 'expired' | 'invalid'
+  license_type?: 'lifetime' | 'subscription'
+  license_key?: string
+  last_validated?: string
+  next_validation?: string
+  customer_name?: string
+  expires_at?: string
+}
+
+interface PaymentLinks {
+  monthly: string
+  annual: string
+  lifetime: string
+  portal: string
+}
+
 const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
+  const [licenseKey, setLicenseKey] = useState('')
+  const [licenseState, setLicenseState] = useState<LicenseState | null>(null)
+  const [paymentLinks, setPaymentLinks] = useState<PaymentLinks | null>(null)
+  const [isValidating, setIsValidating] = useState(false)
+  const [validationMessage, setValidationMessage] = useState('')
+
   if (!isOpen) return null
+
+  // Load license state and payment links when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      loadLicenseData()
+    }
+  }, [isOpen])
+
+  const loadLicenseData = async () => {
+    try {
+      const [state, links] = await Promise.all([
+        window.electronAPI.licenseGetState(),
+        window.electronAPI.licenseGetPaymentLinks()
+      ])
+      
+      setLicenseState(state)
+      setPaymentLinks(links)
+      
+      // Pre-fill license key if available
+      if (state.license_key) {
+        setLicenseKey(state.license_key)
+      }
+    } catch (error) {
+      console.error('Failed to load license data:', error)
+    }
+  }
+
+  const handleValidateLicense = async () => {
+    if (!licenseKey.trim()) {
+      setValidationMessage('Please enter a license key')
+      return
+    }
+
+    setIsValidating(true)
+    setValidationMessage('')
+
+    try {
+      const result = await window.electronAPI.licenseValidate(licenseKey.trim())
+      
+      if (result.valid) {
+        setValidationMessage(`✅ Valid ${result.license_type} license for ${result.customer_name}`)
+        // Reload license state
+        await loadLicenseData()
+      } else {
+        switch (result.reason) {
+          case 'missing_key':
+            setValidationMessage('❌ Please enter a license key')
+            break
+          case 'invalid_key':
+            setValidationMessage('❌ Invalid license key')
+            break
+          case 'expired':
+            setValidationMessage('❌ License has expired')
+            break
+          case 'database_error':
+            setValidationMessage('❌ Database error occurred')
+            break
+          default:
+            setValidationMessage('❌ License validation failed')
+        }
+      }
+    } catch (error) {
+      console.error('License validation error:', error)
+      setValidationMessage('❌ Validation error occurred')
+    } finally {
+      setIsValidating(false)
+    }
+  }
+
+  const handleOpenPaymentLink = async (linkType: 'monthly' | 'annual' | 'lifetime' | 'portal') => {
+    try {
+      await window.electronAPI.licenseOpenPaymentLink(linkType)
+    } catch (error) {
+      console.error(`Failed to open ${linkType} payment link:`, error)
+      alert(`Failed to open payment link. Please check your payment links configuration.`)
+    }
+  }
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
@@ -29,13 +129,102 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
             <h3>License Key</h3>
             <div className="settings-item">
               <label>Enter your license key:</label>
-              <input 
-                type="text" 
-                placeholder="Enter license key..." 
-                className="settings-input"
-              />
-              <button className="settings-btn">Validate</button>
+              <div className="license-input-group">
+                <input 
+                  type="text" 
+                  placeholder="Enter license key..." 
+                  className="settings-input"
+                  value={licenseKey}
+                  onChange={(e) => setLicenseKey(e.target.value)}
+                  disabled={isValidating}
+                />
+                <button 
+                  className="settings-btn"
+                  onClick={handleValidateLicense}
+                  disabled={isValidating || !licenseKey.trim()}
+                >
+                  {isValidating ? 'Validating...' : 'Validate'}
+                </button>
+              </div>
+              {validationMessage && (
+                <div className="validation-message">
+                  {validationMessage}
+                </div>
+              )}
             </div>
+            
+            {licenseState && licenseState.status === 'active' && (
+              <div className="settings-item">
+                <div className="license-status active">
+                  <div className="license-info">
+                    <span className="license-label">Status:</span>
+                    <span className="license-value">✅ Active ({licenseState.license_type})</span>
+                  </div>
+                  {licenseState.customer_name && (
+                    <div className="license-info">
+                      <span className="license-label">Licensed to:</span>
+                      <span className="license-value">{licenseState.customer_name}</span>
+                    </div>
+                  )}
+                  {licenseState.expires_at && (
+                    <div className="license-info">
+                      <span className="license-label">Expires:</span>
+                      <span className="license-value">
+                        {new Date(licenseState.expires_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
+                  {licenseState.license_type === 'lifetime' && (
+                    <div className="license-info">
+                      <span className="license-label">Validity:</span>
+                      <span className="license-value">🎉 Lifetime Access</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Purchase License Section */}
+          <div className="settings-section">
+            <h3>Purchase License</h3>
+            <div className="settings-item">
+              <label>Choose a license plan:</label>
+              <div className="payment-links">
+                <button 
+                  className="payment-btn monthly"
+                  onClick={() => handleOpenPaymentLink('monthly')}
+                >
+                  💳 Monthly Subscription
+                  <span className="payment-description">Billed monthly</span>
+                </button>
+                <button 
+                  className="payment-btn annual"
+                  onClick={() => handleOpenPaymentLink('annual')}
+                >
+                  💳 Annual Subscription
+                  <span className="payment-description">Billed yearly (save 20%)</span>
+                </button>
+                <button 
+                  className="payment-btn lifetime"
+                  onClick={() => handleOpenPaymentLink('lifetime')}
+                >
+                  💳 Lifetime License
+                  <span className="payment-description">One-time payment</span>
+                </button>
+              </div>
+            </div>
+            
+            {licenseState && licenseState.status === 'active' && licenseState.license_type === 'subscription' && (
+              <div className="settings-item">
+                <button 
+                  className="settings-btn portal"
+                  onClick={() => handleOpenPaymentLink('portal')}
+                >
+                  🔗 Manage Subscription
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Token Usage Section */}

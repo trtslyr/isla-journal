@@ -51,7 +51,7 @@ const createWindow = (): void => {
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Initialize database
   try {
     database.initialize()
@@ -61,6 +61,23 @@ app.whenReady().then(() => {
   }
 
   createWindow()
+
+  // Initialize License service (critical for app operation)
+  const licenseService = LicenseService.getInstance()
+  licenseService.setMainWindow(mainWindow!)
+  
+  try {
+    await licenseService.initialize()
+    
+    // Perform startup license check
+    const isLicensed = await licenseService.performStartupCheck()
+    if (!isLicensed) {
+      console.log('⚠️ [Main] App startup without valid license - functionality limited')
+    }
+  } catch (error) {
+    console.error('❌ [Main] Failed to initialize license service:', error)
+    // Continue but show license dialog
+  }
 
   // Initialize LLM service (async, don't block app startup)
   const llamaService = LlamaService.getInstance()
@@ -110,9 +127,17 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Clean up database when app is about to quit
+// Clean up database and license service when app is about to quit
 app.on('before-quit', () => {
   database.close()
+  
+  // Cleanup license service
+  try {
+    const licenseService = LicenseService.getInstance()
+    licenseService.cleanup()
+  } catch (error) {
+    console.error('❌ [Main] License service cleanup error:', error)
+  }
 })
 
 // Security: Prevent new window creation (handled by setWindowOpenHandler above)
@@ -128,6 +153,9 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { DeviceDetectionService } from './services/deviceDetection'
 import { contentService } from './services/contentService'
+
+// License Service
+import { LicenseService } from './services/licenseService'
 
 // Basic app info handlers
 ipcMain.handle('app:getVersion', () => {
@@ -730,6 +758,89 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     return { success: true, newPath }
   } catch (error) {
     console.error('❌ [IPC] Error moving file/directory:', error)
+    throw error
+  }
+})
+
+// ========================
+// LICENSE IPC HANDLERS
+// ========================
+
+// Validate license key
+ipcMain.handle('license:validate', async (_, licenseKey: string) => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    return await licenseService.validateLicense(licenseKey)
+  } catch (error) {
+    console.error('❌ [IPC] Error validating license:', error)
+    throw error
+  }
+})
+
+// Get current license state
+ipcMain.handle('license:getState', async () => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    return await licenseService.getCurrentLicenseState()
+  } catch (error) {
+    console.error('❌ [IPC] Error getting license state:', error)
+    throw error
+  }
+})
+
+// Check if app is licensed
+ipcMain.handle('license:isLicensed', async () => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    return await licenseService.isAppLicensed()
+  } catch (error) {
+    console.error('❌ [IPC] Error checking license status:', error)
+    return false
+  }
+})
+
+// Get payment links
+ipcMain.handle('license:getPaymentLinks', async () => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    return licenseService.getPaymentLinks()
+  } catch (error) {
+    console.error('❌ [IPC] Error getting payment links:', error)
+    throw error
+  }
+})
+
+// Open payment link
+ipcMain.handle('license:openPaymentLink', async (_, linkType: 'monthly' | 'annual' | 'lifetime' | 'portal') => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    await licenseService.openPaymentLink(linkType)
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error opening payment link:', error)
+    throw error
+  }
+})
+
+// Clear license (for testing)
+ipcMain.handle('license:clear', async () => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    await licenseService.clearLicense()
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error clearing license:', error)
+    throw error
+  }
+})
+
+// Get license statistics
+ipcMain.handle('license:getStats', async () => {
+  try {
+    const licenseService = LicenseService.getInstance()
+    return await licenseService.getLicenseStats()
+  } catch (error) {
+    console.error('❌ [IPC] Error getting license stats:', error)
     throw error
   }
 }) 

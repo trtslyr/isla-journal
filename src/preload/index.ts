@@ -48,7 +48,31 @@ const electronAPI = {
   chatGetMessages: (chatId: number) => ipcRenderer.invoke('chat:getMessages', chatId),
   chatAddMessage: (chatId: number, role: string, content: string) => 
     ipcRenderer.invoke('chat:addMessage', chatId, role, content),
-  chatClearMessages: (chatId: number) => ipcRenderer.invoke('chat:clearMessages', chatId)
+  chatClearMessages: (chatId: number) => ipcRenderer.invoke('chat:clearMessages', chatId),
+  
+  // License operations
+  licenseValidate: (licenseKey: string) => ipcRenderer.invoke('license:validate', licenseKey),
+  licenseGetState: () => ipcRenderer.invoke('license:getState'),
+  licenseIsLicensed: () => ipcRenderer.invoke('license:isLicensed'),
+  licenseGetPaymentLinks: () => ipcRenderer.invoke('license:getPaymentLinks'),
+  licenseOpenPaymentLink: (linkType: 'monthly' | 'annual' | 'lifetime' | 'portal') => 
+    ipcRenderer.invoke('license:openPaymentLink', linkType),
+  licenseClear: () => ipcRenderer.invoke('license:clear'),
+  licenseGetStats: () => ipcRenderer.invoke('license:getStats'),
+  
+  // License event listeners
+  onLicenseStatusChanged: (callback: (event: any, data: any) => void) => {
+    ipcRenderer.on('license:statusChanged', callback)
+  },
+  onLicenseShowDialog: (callback: (event: any, data: any) => void) => {
+    ipcRenderer.on('license:showDialog', callback)
+  },
+  onLicenseLockApp: (callback: (event: any, data: any) => void) => {
+    ipcRenderer.on('license:lockApp', callback)
+  },
+  onLicenseUnlockApp: (callback: (event: any, data: any) => void) => {
+    ipcRenderer.on('license:unlockApp', callback)
+  }
 }
 
 // Expose the API to the renderer process

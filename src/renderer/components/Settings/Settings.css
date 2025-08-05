@@ -369,4 +369,113 @@
     margin-right: 0;
     margin-bottom: 8px;
   }
+}
+
+/* License Input Group */
+.license-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.license-input-group .settings-input {
+  flex: 1;
+}
+
+.validation-message {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+/* License Status */
+.license-status.active {
+  background: #1a5a1a;
+  border: 1px solid #2d8a2d;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.license-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.license-info:last-child {
+  margin-bottom: 0;
+}
+
+.license-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.license-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Payment Links */
+.payment-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.payment-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 16px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.payment-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+  transform: translateY(-1px);
+}
+
+.payment-btn.monthly {
+  border-color: #3b82f6;
+}
+
+.payment-btn.annual {
+  border-color: #10b981;
+  background: #0f4a3a;
+}
+
+.payment-btn.lifetime {
+  border-color: #f59e0b;
+  background: #4a3d0f;
+}
+
+.payment-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  font-weight: normal;
+}
+
+.settings-btn.portal {
+  background: #6366f1;
+  border-color: #6366f1;
+}
+
+.settings-btn.portal:hover {
+  background: #5855eb;
+  border-color: #5855eb;
 } 
