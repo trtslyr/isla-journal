@@ -715,8 +715,12 @@ class IslaDatabase {
         console.log(`🗑️ [Database] Deleted ${fileType}: ${filePath}`)
       } catch (error) {
         retries++
-        if (retries < maxRetries && error.code === 'EBUSY') {
-          console.log(`🪟 [Database] ${fileType} busy, retrying (${retries}/${maxRetries})...`)
+        // Windows-specific error handling
+        const isWindowsError = error.code === 'EBUSY' || error.code === 'EACCES' || error.code === 'EPERM'
+        const isRetryable = retries < maxRetries && (isWindowsError || error.code === 'ENOENT')
+        
+        if (isRetryable) {
+          console.log(`🪟 [Database] ${fileType} busy/locked, retrying (${retries}/${maxRetries})...`)
           setTimeout(attemptDelete, 100 * retries) // Exponential backoff
         } else if (retries < maxRetries) {
           console.log(`🪟 [Database] Retrying ${fileType} deletion (${retries}/${maxRetries})...`)

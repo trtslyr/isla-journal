@@ -13,6 +13,7 @@ export interface ValidationResult {
   subscriptionStatus?: string;
   licenseKey?: string;
   error?: string;
+  isNetworkError?: boolean;
 }
 
 export class LicenseValidator {
@@ -65,7 +66,8 @@ export class LicenseValidator {
       console.error('Lifetime license validation error:', error);
       return {
         valid: false,
-        error: 'Network error. Please check your connection and try again.'
+        error: 'Network error. Please check your connection and try again.',
+        isNetworkError: true
       };
     }
   }
@@ -101,7 +103,8 @@ export class LicenseValidator {
       console.error('Subscription license validation error:', error);
       return {
         valid: false,
-        error: 'Network error. Please check your connection and try again.'
+        error: 'Network error. Please check your connection and try again.',
+        isNetworkError: true
       };
     }
   }

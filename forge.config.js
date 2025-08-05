@@ -10,21 +10,25 @@ module.exports = {
     appVersion: '0.1.0',
     buildVersion: '1',
     appCopyright: 'Copyright © 2025 Taylor Wall',
-    // Add icon paths when you have them
-    // icon: './build/icon' // Will use icon.ico, icon.icns automatically
+    // Icon configuration for all platforms
+    icon: './build/icon', // Will use icon.ico, icon.icns, icon.png automatically
+    // Force icon usage
+    overwrite: true
   },
   rebuildConfig: {},
   makers: [
-    // Windows
+    // Windows - Squirrel Installer (.exe)
     {
       name: '@electron-forge/maker-squirrel',
       config: {
         name: 'isla_journal',
         authors: 'Taylor Wall',
-        description: 'AI-powered offline journal and writing companion'
+        description: 'AI-powered offline journal and writing companion',
+        setupExe: 'IslaJournalSetup.exe',
+        setupIcon: './build/icon.ico'
       },
     },
-    // macOS
+    // macOS - DMG installer
     {
       name: '@electron-forge/maker-dmg',
       config: {
@@ -32,31 +36,11 @@ module.exports = {
         title: 'Isla Journal Installer'
       }
     },
+    // macOS - ZIP backup
     {
       name: '@electron-forge/maker-zip',
       platforms: ['darwin'],
-    },
-    // Linux
-    {
-      name: '@electron-forge/maker-deb',
-      config: {
-        options: {
-          maintainer: 'Taylor Wall',
-          homepage: 'https://github.com/trtslyr/isla-journal',
-          description: 'AI-powered offline journal and writing companion'
-        }
-      },
-    },
-    {
-      name: '@electron-forge/maker-rpm',
-      config: {
-        options: {
-          maintainer: 'Taylor Wall',
-          homepage: 'https://github.com/trtslyr/isla-journal',
-          description: 'AI-powered offline journal and writing companion'
-        }
-      },
-    },
+    }
   ],
   publishers: [
     {

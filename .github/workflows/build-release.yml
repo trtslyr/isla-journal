@@ -10,7 +10,11 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: windows
     
     runs-on: ${{ matrix.os }}
     
@@ -27,32 +31,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Generate icons
+        run: npm run icons
+        continue-on-error: true
+      
       - name: Build application
         run: npm run build
       
       - name: Build distributables
         run: npm run make
       
-      - name: Upload artifacts (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: macos-build
-          path: out/make/*.dmg
+          name: windows-installer
+          path: out/make/squirrel.windows/**/*Setup.exe
+          retention-days: 30
       
-      - name: Upload artifacts (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Upload Mac artifacts
+        if: matrix.platform == 'mac'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-build
-          path: out/make/squirrel.windows/**/*.exe
-      
-      - name: Upload artifacts (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: out/make/**/*.deb
+          name: mac-installer
+          path: out/make/**/*.dmg
+          retention-days: 30
 
   release:
     needs: build
@@ -60,16 +63,33 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
-      - name: Download all artifacts
+      - name: Download Windows artifacts
         uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: ./release-files/
+      
+      - name: Download Mac artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-installer
+          path: ./release-files/
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            macos-build/*
-            windows-build/*
-            linux-build/*
+          files: ./release-files/**/*
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Isla Journal ${{ github.ref_name }}
+            
+            ### Downloads
+            - **Windows**: Download the `.exe` installer
+            - **macOS**: Download the `.dmg` installer
+            
+            ### Installation
+            - **Windows**: Run the installer, may show security warning (normal for unsigned apps)
+            - **macOS**: Open the DMG and drag to Applications folder
           draft: false
           prerelease: false
         env:

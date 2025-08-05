@@ -23,10 +23,20 @@ export const useLicenseCheck = () => {
             setLicenseStatus(freshResult);
             console.log('✅ [License] License revalidated successfully');
           } else {
-            // License no longer valid - clear and lock app
-            console.log('❌ [License] License no longer valid, locking app');
-            LicenseStorage.clearLicense();
-            setLicenseStatus(freshResult);
+            // Check if we should lock the app or continue with cached license
+            if (LicenseStorage.shouldLockOnValidationFailure(freshResult, stored.data)) {
+              console.log('❌ [License] License validation failed, locking app');
+              LicenseStorage.clearLicense();
+              setLicenseStatus(freshResult);
+            } else {
+              // Continue with cached license during grace period
+              console.log('⚠️ [License] Validation failed but within grace period, using cached license');
+              console.log(`🔌 [License] ${freshResult.isNetworkError ? 'Network error' : 'Validation error'}: ${freshResult.error}`);
+              setLicenseStatus({
+                ...stored.data,
+                error: `Working offline: ${freshResult.error}`
+              });
+            }
           }
         } else {
           // Use cached license

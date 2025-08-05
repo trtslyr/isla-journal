@@ -4,12 +4,19 @@ export class LicenseStorage {
   private static readonly LICENSE_KEY = 'license_key';
   private static readonly LICENSE_DATA = 'license_data';
   private static readonly LAST_VALIDATION = 'license_last_validation';
+  private static readonly LAST_SUCCESSFUL_VALIDATION = 'license_last_successful_validation';
+  private static readonly OFFLINE_GRACE_DAYS = 7; // Allow 7 days offline for subscriptions
 
   // Store validated license
   static storeLicense(licenseKey: string, validationResult: ValidationResult): void {
     localStorage.setItem(this.LICENSE_KEY, licenseKey);
     localStorage.setItem(this.LICENSE_DATA, JSON.stringify(validationResult));
     localStorage.setItem(this.LAST_VALIDATION, new Date().toISOString());
+    
+    // Track successful online validations for offline grace period
+    if (validationResult.valid && !validationResult.isNetworkError) {
+      localStorage.setItem(this.LAST_SUCCESSFUL_VALIDATION, new Date().toISOString());
+    }
   }
 
   // Get stored license
@@ -78,5 +85,38 @@ export class LicenseStorage {
     }
     
     return 'valid';
+  }
+
+  // Check if we're within the offline grace period for subscription licenses
+  static isWithinOfflineGracePeriod(): boolean {
+    const lastSuccessfulStr = localStorage.getItem(this.LAST_SUCCESSFUL_VALIDATION);
+    if (!lastSuccessfulStr) {
+      return false; // No successful validation recorded
+    }
+
+    const lastSuccessful = new Date(lastSuccessfulStr);
+    const now = new Date();
+    const daysSinceSuccess = (now.getTime() - lastSuccessful.getTime()) / (1000 * 60 * 60 * 24);
+    
+    return daysSinceSuccess <= this.OFFLINE_GRACE_DAYS;
+  }
+
+  // Check if a license validation failure should lock the app
+  static shouldLockOnValidationFailure(validationResult: ValidationResult, storedLicense: ValidationResult): boolean {
+    // Network errors shouldn't immediately lock the app
+    if (validationResult.isNetworkError) {
+      // For lifetime licenses, never lock on network errors
+      if (storedLicense.licenseType === 'lifetime') {
+        return false;
+      }
+      
+      // For subscriptions, only lock if outside grace period
+      if (storedLicense.licenseType === 'subscription') {
+        return !this.isWithinOfflineGracePeriod();
+      }
+    }
+    
+    // For actual license invalidity (not network errors), always lock
+    return true;
   }
 } 

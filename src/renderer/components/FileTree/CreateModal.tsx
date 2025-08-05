@@ -29,8 +29,10 @@ const CreateModal: React.FC<CreateModalProps> = ({ isOpen, type, onConfirm, onCa
       return
     }
     
-    if (trimmedName.includes('/') || trimmedName.includes('\\')) {
-      setError('Name cannot contain / or \\')
+    // Check for actually invalid characters (Windows: < > : " | ? * )
+    const invalidChars = /[<>:"|?*]/g
+    if (invalidChars.test(trimmedName)) {
+      setError('Name cannot contain < > : " | ? * characters')
       return
     }
     

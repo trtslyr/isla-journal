@@ -184,7 +184,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
   // Get font settings from CSS variables
   const getFontSettings = () => {
     const computedStyle = getComputedStyle(document.documentElement)
-    const fontFamily = computedStyle.getPropertyValue('--app-font-family').trim() || 'JetBrains Mono, Consolas, "Courier New", monospace'
+    const fontFamily = computedStyle.getPropertyValue('--app-font-family').trim() || 'JetBrains Mono, Consolas, "Courier New", "Segoe UI", monospace'
     const fontSize = parseInt(computedStyle.getPropertyValue('--app-font-size').replace('px', '')) || 14
     
     return { fontFamily, fontSize }

@@ -12,9 +12,11 @@
     "build:preload": "tsc -p tsconfig.preload.json",
     "package": "npm run build && electron-forge package",
     "make": "npm run build && electron-forge make",
-    "make:all": "npm run build && electron-forge make --platform=win32,darwin,linux",
+    "make:all": "npm run build && electron-forge make --platform=win32 --platform=darwin --platform=linux",
     "publish": "npm run build && electron-forge publish",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "icons": "node scripts/generate-icons.js",
+    "dev:icon": "node scripts/dev-with-icon.js"
   },
   "keywords": [
     "journal",
@@ -33,6 +35,7 @@
     "@electron-forge/maker-dmg": "^7.8.3",
     "@electron-forge/maker-rpm": "^7.8.3",
     "@electron-forge/maker-squirrel": "^7.8.3",
+    "@electron-forge/maker-wix": "^7.8.3",
     "@electron-forge/maker-zip": "^7.8.3",
     "@electron-forge/plugin-auto-unpack-natives": "^7.8.3",
     "@electron-forge/plugin-fuses": "^7.8.3",
@@ -49,6 +52,8 @@
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
     "electron": "^27.0.0",
+    "electron-builder": "^26.0.12",
+    "electron-icon-builder": "^2.0.1",
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },

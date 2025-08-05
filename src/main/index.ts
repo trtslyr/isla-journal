@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, shell, dialog } from 'electron'
 import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
+import { existsSync } from 'fs'
 import path, { join, normalize, resolve } from 'path'
 import os from 'os'
 import { isDev } from './utils/is-dev'
@@ -16,6 +17,19 @@ if (require('electron-squirrel-startup')) {
 let mainWindow: BrowserWindow | null = null
 
 const createWindow = (): void => {
+  // Determine icon path
+  const iconPath = process.platform === 'darwin' 
+    ? join(process.cwd(), 'build/icon.icns')
+    : process.platform === 'win32'
+    ? join(process.cwd(), 'build/icon.ico')
+    : join(process.cwd(), 'build/icon.png')
+  
+  console.log('🎨 [Icon] Platform:', process.platform)
+  console.log('🎨 [Icon] Icon path:', iconPath)
+  console.log('🎨 [Icon] Icon exists:', require('fs').existsSync(iconPath))
+  console.log('🎨 [Icon] Current working directory:', process.cwd())
+  console.log('🎨 [Icon] Absolute icon path:', require('path').resolve(iconPath))
+  
   // Create the browser window.
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -24,18 +38,23 @@ const createWindow = (): void => {
     minHeight: 600,
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    icon: iconPath,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, '../preload/index.js'),
-      webSecurity: false  // TEMPORARILY DISABLED TO TEST CLIPBOARD
+      // Suppress development security warnings (these are false positives from Electron Forge)
+      ...(isDev && {
+        webSecurity: true, // Explicitly enable web security
+        allowRunningInsecureContent: false // Explicitly disable insecure content
+      })
     }
   })
 
   // Load the app
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
-    mainWindow.webContents.openDevTools()
+    // mainWindow.webContents.openDevTools() // Commented out for cleaner dev experience
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -44,9 +63,9 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    if (isDev) {
-      mainWindow?.webContents.openDevTools()
-    }
+    // if (isDev) {
+    //   mainWindow?.webContents.openDevTools() // Commented out for cleaner dev experience
+    // }
   })
 
   // Handle external links
@@ -250,7 +269,9 @@ ipcMain.handle('file:openDirectory', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory'],
-      title: 'Select Journal Directory'
+      title: 'Select Journal Directory',
+      // Windows-specific: Ensure proper default directory
+      defaultPath: process.platform === 'win32' ? process.env.USERPROFILE : undefined
     })
     
     if (result.canceled || result.filePaths.length === 0) {
@@ -284,12 +305,12 @@ ipcMain.handle('file:openDirectory', async () => {
         // First time - this is a root directory selection
         console.log('📁 [First Time] No previous directory found, setting root directory')
         isRootDirectoryChange = true
-      } else if (currentSavedDirectory !== dirPath && !dirPath.startsWith(currentSavedDirectory + '/')) {
+      } else if (currentSavedDirectory !== dirPath && !path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
         // This is a genuine root directory change (not a subdirectory)
         console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', dirPath)
         shouldClearDatabase = true
         isRootDirectoryChange = true
-      } else if (dirPath.startsWith(currentSavedDirectory + '/')) {
+      } else if (!path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
         // This is just subdirectory expansion - don't change root directory or clear database
         console.log('📂 [Subdirectory Expansion]:', dirPath)
       } else if (currentSavedDirectory === dirPath) {
@@ -450,6 +471,13 @@ ipcMain.handle('file:writeFile', async (_, filePath: string, content: string) =>
   try {
     const normalizedPath = normalizePath(filePath)
     console.log('💾 [File] Writing:', normalizedPath)
+    
+    // Windows-specific: Ensure parent directory exists
+    const dirPath = path.dirname(normalizedPath)
+    if (!existsSync(dirPath)) {
+      await mkdir(dirPath, { recursive: true })
+    }
+    
     await writeFile(normalizedPath, content, 'utf-8')
     
     // If it's a markdown file, also update the database for RAG
@@ -950,7 +978,14 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
 // System operations
 ipcMain.handle('system:openExternal', async (_, url: string) => {
   try {
-    await shell.openExternal(url)
+    // Windows-specific: Handle different URL schemes
+    let processedUrl = url
+    if (process.platform === 'win32' && url.startsWith('file://')) {
+      // Windows file URLs need special handling
+      processedUrl = url.replace(/^file:\/\//, '')
+    }
+    
+    await shell.openExternal(processedUrl)
     return true
   } catch (error) {
     console.error('❌ [IPC] Error opening external URL:', error)

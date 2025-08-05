@@ -348,7 +348,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       'jetbrains-mono': 'JetBrains Mono, Consolas, "Courier New", monospace',
       'fira-code': 'Fira Code, "JetBrains Mono", Consolas, monospace',
       'source-code-pro': 'Source Code Pro, "JetBrains Mono", Consolas, monospace',
-      'monaco': 'Monaco, "JetBrains Mono", Consolas, monospace'
+      'monaco': 'Monaco, "JetBrains Mono", Consolas, "Segoe UI", monospace'
     }
     
     const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']

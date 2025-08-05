@@ -38,8 +38,10 @@ const RenameModal: React.FC<RenameModalProps> = ({ isOpen, item, onConfirm, onCa
       : newName.trim()
 
     // Basic validation
-    if (finalName.includes('/') || finalName.includes('\\')) {
-      setError('Name cannot contain / or \\ characters')
+    // Check for actually invalid characters (Windows: < > : " | ? * )
+    const invalidChars = /[<>:"|?*]/g
+    if (invalidChars.test(finalName)) {
+      setError('Name cannot contain < > : " | ? * characters')
       return
     }
 
