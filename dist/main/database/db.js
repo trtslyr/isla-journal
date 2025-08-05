@@ -50,9 +50,7 @@ class IslaDatabase {
             // Create tables if they don't exist
             this.createTables();
             console.log('📋 [Database] Tables and indexes created');
-            // Fix any database schema issues
-            this.fixDatabaseSchema();
-            console.log('🔧 [Database] Schema validation completed');
+            console.log('🔧 [Database] Schema validation completed (FTS removed)');
             console.log('✅ [Database] SQLite initialized successfully');
         }
         catch (error) {
@@ -89,16 +87,7 @@ class IslaDatabase {
         FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
       )
     `);
-        // FTS virtual table for powerful text search
-        this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS fts_content USING fts5(
-        content,
-        file_path,
-        file_name,
-        content='content_chunks',
-        content_rowid='id'
-      )
-    `);
+        // FTS removed - using direct content_chunks search instead
         // Search index table - for full-text search
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS search_index (
@@ -182,15 +171,8 @@ class IslaDatabase {
       INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
       VALUES (?, ?, ?)
     `);
-        const insertFTS = this.db.prepare(`
-      INSERT INTO fts_content (content, file_path, file_name, rowid)
-      VALUES (?, ?, ?, ?)
-    `);
         chunks.forEach((chunk, index) => {
-            const result = insertChunk.run(fileId, chunk, index);
-            const chunkId = result.lastInsertRowid;
-            // Add to FTS index
-            insertFTS.run(chunk, filePath, fileName, chunkId);
+            insertChunk.run(fileId, chunk, index);
         });
         console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName}`);
     }
@@ -277,31 +259,7 @@ class IslaDatabase {
         const select = this.db.prepare('SELECT * FROM files WHERE path = ?');
         return select.get(filePath) || null;
     }
-    /**
-     * Search for files using FTS
-     */
-    searchFiles(query, limit = 10) {
-        if (!this.db)
-            throw new Error('Database not initialized');
-        try {
-            const stmt = this.db.prepare(`
-        SELECT DISTINCT 
-          file_path,
-          file_name,
-          snippet(fts_content, 0, '<mark>', '</mark>', '...', 32) as snippet,
-          rank
-        FROM fts_content 
-        WHERE fts_content MATCH ? 
-        ORDER BY rank 
-        LIMIT ?
-      `);
-            return stmt.all(query, limit);
-        }
-        catch (error) {
-            console.error('Search error:', error);
-            return [];
-        }
-    }
+    // searchFiles method removed - FTS not needed, using searchContent instead
     /**
      * Clear all indexed content (useful when switching directories)
      */
@@ -312,30 +270,10 @@ class IslaDatabase {
         try {
             // Clear all content in transaction for consistency
             const transaction = this.db.transaction(() => {
-                // Clear backing tables first
+                // Clear backing tables
                 this.db.prepare('DELETE FROM content_chunks').run();
                 this.db.prepare('DELETE FROM search_index').run();
                 this.db.prepare('DELETE FROM files').run();
-                // Clear FTS table safely
-                try {
-                    this.db.prepare('DELETE FROM fts_content').run();
-                    // Rebuild FTS table to ensure consistency
-                    this.db.prepare('INSERT INTO fts_content(fts_content) VALUES("rebuild")').run();
-                }
-                catch (ftsError) {
-                    console.log('🔧 [Database] FTS table needs rebuilding during clear...');
-                    // Drop and recreate FTS table if it has issues
-                    this.db.exec('DROP TABLE IF EXISTS fts_content');
-                    this.db.exec(`
-            CREATE VIRTUAL TABLE fts_content USING fts5(
-              content,
-              file_path,
-              file_name,
-              content='content_chunks',
-              content_rowid='id'
-            )
-          `);
-                }
             });
             transaction();
             console.log('✅ [Database] All indexed content cleared');
@@ -410,24 +348,8 @@ class IslaDatabase {
         try {
             const fileCount = this.db.prepare('SELECT COUNT(*) as count FROM files').get();
             const chunkCount = this.db.prepare('SELECT COUNT(*) as count FROM content_chunks').get();
-            // Try to get FTS stats, but handle errors gracefully
-            let indexSize = 0;
-            try {
-                const indexResult = this.db.prepare('SELECT COUNT(*) as count FROM fts_content').get();
-                indexSize = indexResult.count;
-            }
-            catch (ftsError) {
-                console.log('⚠️ [Database] FTS stats unavailable, rebuilding index...');
-                try {
-                    this.fixDatabaseSchema();
-                    const indexResult = this.db.prepare('SELECT COUNT(*) as count FROM fts_content').get();
-                    indexSize = indexResult.count;
-                }
-                catch (rebuildError) {
-                    console.log('⚠️ [Database] FTS rebuild failed, using 0 for index size');
-                    indexSize = 0;
-                }
-            }
+            // indexSize now represents content_chunks (our actual search index)
+            const indexSize = chunkCount.count;
             return {
                 fileCount: fileCount.count,
                 chunkCount: chunkCount.count,
@@ -644,48 +566,7 @@ class IslaDatabase {
             return null;
         }
     }
-    /**
-     * Fix database schema issues and rebuild FTS if corrupted
-     */
-    fixDatabaseSchema() {
-        if (!this.db)
-            throw new Error('Database not initialized');
-        try {
-            // Check if FTS table is corrupted by running a simple query
-            try {
-                this.db.prepare('SELECT COUNT(*) FROM fts_content').get();
-            }
-            catch (ftsError) {
-                console.log('🔧 [Database] FTS table corrupted, rebuilding...');
-                // Drop and recreate FTS table
-                this.db.exec('DROP TABLE IF EXISTS fts_content');
-                // Recreate FTS table with correct schema
-                this.db.exec(`
-          CREATE VIRTUAL TABLE fts_content USING fts5(
-            content,
-            file_path,
-            file_name,
-            content='content_chunks',
-            content_rowid='id'
-          )
-        `);
-                // Rebuild FTS index from existing chunks
-                this.db.exec(`
-          INSERT INTO fts_content(content, file_path, file_name)
-          SELECT 
-            cc.chunk_text,
-            f.path,
-            f.name
-          FROM content_chunks cc
-          JOIN files f ON cc.file_id = f.id
-        `);
-                console.log('✅ [Database] FTS table rebuilt successfully');
-            }
-        }
-        catch (error) {
-            console.error('❌ [Database] Error fixing schema:', error);
-        }
-    }
+    // fixDatabaseSchema method removed - no longer needed without FTS
     /**
      * Close database connection
      */

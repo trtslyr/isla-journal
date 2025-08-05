@@ -19,6 +19,7 @@ const electronAPI = {
     // Database operations
     dbClearAll: () => electron_1.ipcRenderer.invoke('db:clearAll'),
     dbGetStats: () => electron_1.ipcRenderer.invoke('db:getStats'),
+    dbReindexAll: () => electron_1.ipcRenderer.invoke('db:reindexAll'),
     // Settings operations
     settingsGet: (key) => electron_1.ipcRenderer.invoke('settings:get', key),
     settingsSet: (key, value) => electron_1.ipcRenderer.invoke('settings:set', key, value),

@@ -13,14 +13,83 @@ interface SettingsProps {
 const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScreen }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
+  const [databaseStats, setDatabaseStats] = useState({ fileCount: 0, chunkCount: 0, indexSize: 0 })
+  const [isClearing, setIsClearing] = useState(false)
+  const [isReindexing, setIsReindexing] = useState(false)
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
-  // Clear validation message when modal opens
+  // Clear validation message and load database stats when modal opens
   useEffect(() => {
     if (isOpen) {
       setValidationMessage('')
+      // Small delay to ensure electronAPI is loaded
+      setTimeout(() => {
+        loadDatabaseStats()
+      }, 100)
     }
   }, [isOpen])
+
+  const loadDatabaseStats = async () => {
+    try {
+      // Check if electronAPI is available
+      if (!window.electronAPI?.dbGetStats) {
+        console.log('⚠️ [Settings] electronAPI not available yet')
+        return
+      }
+      
+      const stats = await window.electronAPI.dbGetStats()
+      setDatabaseStats(stats)
+    } catch (error) {
+      console.error('Failed to load database stats:', error)
+      setDatabaseStats({ fileCount: 0, chunkCount: 0, indexSize: 0 })
+    }
+  }
+
+  const handleClearDatabase = async () => {
+    if (!window.electronAPI?.dbClearAll) {
+      setValidationMessage('[ERROR] Database functions not available')
+      return
+    }
+
+    if (!confirm('Are you sure you want to clear the entire database? This will remove all indexed content and cannot be undone.')) {
+      return
+    }
+
+    setIsClearing(true)
+    try {
+      await window.electronAPI.dbClearAll()
+      await loadDatabaseStats()
+      setValidationMessage('[OK] Database cleared successfully!')
+    } catch (error) {
+      console.error('Failed to clear database:', error)
+      setValidationMessage('[ERROR] Failed to clear database')
+    } finally {
+      setIsClearing(false)
+    }
+  }
+
+  const handleReindexAll = async () => {
+    if (!window.electronAPI?.dbReindexAll) {
+      setValidationMessage('[ERROR] Database functions not available')
+      return
+    }
+
+    if (!confirm('Are you sure you want to reindex all files? This will take some time and rebuild the entire search index.')) {
+      return
+    }
+
+    setIsReindexing(true)
+    try {
+      const stats = await window.electronAPI.dbReindexAll()
+      setDatabaseStats(stats)
+      setValidationMessage('[OK] All files reindexed successfully!')
+    } catch (error) {
+      console.error('Failed to reindex files:', error)
+      setValidationMessage('[ERROR] Failed to reindex files')
+    } finally {
+      setIsReindexing(false)
+    }
+  }
 
   if (!isOpen) return null
 
@@ -249,21 +318,35 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
             <div className="settings-item">
               <div className="storage-stats">
                 <div className="storage-item">
-                  <span className="storage-label">Database Size:</span>
-                  <span className="storage-value">45.2 MB</span>
-                </div>
-                <div className="storage-item">
                   <span className="storage-label">Files Indexed:</span>
-                  <span className="storage-value">1,247 files</span>
+                  <span className="storage-value">{databaseStats.fileCount.toLocaleString()} files</span>
                 </div>
                 <div className="storage-item">
                   <span className="storage-label">Chunks Indexed:</span>
-                  <span className="storage-value">8,934 chunks</span>
+                  <span className="storage-value">{databaseStats.chunkCount.toLocaleString()} chunks</span>
+                </div>
+                <div className="storage-item">
+                  <span className="storage-label">Search Index Size:</span>
+                  <span className="storage-value">{databaseStats.indexSize.toLocaleString()} entries</span>
                 </div>
               </div>
               <div className="storage-actions">
-                <button className="settings-btn danger">Clear Database</button>
-                <button className="settings-btn">Reindex All</button>
+                <button 
+                  className="settings-btn danger" 
+                  onClick={handleClearDatabase}
+                  disabled={isClearing}
+                  title="Clear all indexed content"
+                >
+                  {isClearing ? 'Clearing...' : 'Clear Database'}
+                </button>
+                <button 
+                  className="settings-btn"
+                  onClick={handleReindexAll}
+                  disabled={isReindexing}
+                  title="Reindex all files from scratch"
+                >
+                  {isReindexing ? 'Reindexing...' : 'Reindex All'}
+                </button>
               </div>
             </div>
           </div>

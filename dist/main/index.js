@@ -481,15 +481,7 @@ electron_1.ipcMain.handle('db:getFile', async (_, filePath) => {
         throw error;
     }
 });
-electron_1.ipcMain.handle('db:searchFiles', async (_, query) => {
-    try {
-        return database_1.database.searchFiles(query);
-    }
-    catch (error) {
-        console.error('❌ [IPC] Error searching files in database:', error);
-        throw error;
-    }
-});
+// db:searchFiles removed - FTS not needed
 electron_1.ipcMain.handle('db:clearAll', async () => {
     try {
         database_1.database.clearAllContent();
@@ -507,6 +499,28 @@ electron_1.ipcMain.handle('db:getStats', async () => {
     }
     catch (error) {
         console.error('❌ [IPC] Error getting database stats:', error);
+        throw error;
+    }
+});
+electron_1.ipcMain.handle('db:reindexAll', async () => {
+    try {
+        console.log('🔄 [IPC] Starting reindex of all files...');
+        // Get the current selected directory
+        const selectedDirectory = database_1.database.getSetting('selectedDirectory');
+        if (!selectedDirectory) {
+            throw new Error('No directory selected for reindexing');
+        }
+        // Clear existing content first
+        database_1.database.clearAllContent();
+        console.log('🗑️ [IPC] Cleared existing content');
+        // Recursively reindex all markdown files in the directory
+        await processDirectoryRecursively(selectedDirectory);
+        const stats = database_1.database.getStats();
+        console.log('✅ [IPC] Reindexing completed:', stats);
+        return stats;
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error reindexing all files:', error);
         throw error;
     }
 });

@@ -92,10 +92,6 @@ declare class IslaDatabase {
      */
     getFile(filePath: string): FileRecord | null;
     /**
-     * Search for files using FTS
-     */
-    searchFiles(query: string, limit?: number): SearchResult[];
-    /**
      * Clear all indexed content (useful when switching directories)
      */
     clearAllContent(): void;
@@ -164,10 +160,6 @@ declare class IslaDatabase {
      * Get file by path with error handling
      */
     getFileByPath(filePath: string): FileRecord | null;
-    /**
-     * Fix database schema issues and rebuild FTS if corrupted
-     */
-    fixDatabaseSchema(): void;
     /**
      * Close database connection
      */

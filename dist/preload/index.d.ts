@@ -12,6 +12,7 @@ declare const electronAPI: {
     moveFile: (sourcePath: string, targetDirectoryPath: string) => Promise<any>;
     dbClearAll: () => Promise<any>;
     dbGetStats: () => Promise<any>;
+    dbReindexAll: () => Promise<any>;
     settingsGet: (key: string) => Promise<any>;
     settingsSet: (key: string, value: string) => Promise<any>;
     searchContent: (query: string) => Promise<any>;
