@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const [licenseKey, setLicenseKey] = useState('')
   const [licenseValidationMessage, setLicenseValidationMessage] = useState('')
   const [isValidatingLicense, setIsValidatingLicense] = useState(false)
+  const [forceLicenseScreen, setForceLicenseScreen] = useState(false)
   
   // Tab management
   const [tabs, setTabs] = useState<EditorTab[]>([
@@ -690,6 +691,7 @@ Click **"📁 Open Directory"** in the file tree to:
       if (result.valid) {
         setLicenseValidationMessage('✅ License validated successfully! Welcome to Isla Journal!')
         setLicenseKey('') // Clear input
+        setForceLicenseScreen(false) // Reset force state when valid license is entered
         // The license check hook will automatically update the UI
       } else {
         setLicenseValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
@@ -700,6 +702,11 @@ Click **"📁 Open Directory"** in the file tree to:
     } finally {
       setIsValidatingLicense(false)
     }
+  }
+
+  // Function to force license screen to show
+  const forceLicenseScreenToShow = () => {
+    setForceLicenseScreen(true)
   }
 
   // Function to open external URLs
@@ -1035,12 +1042,13 @@ Click **"📁 Open Directory"** in the file tree to:
           <Settings
             isOpen={showSettings}
             onClose={() => setShowSettings(false)}
+            onForceLicenseScreen={forceLicenseScreenToShow}
           />
         </>
       )}
       
       {/* License Check Overlay */}
-      {!licenseLoading && !isLicensed && (
+      {!licenseLoading && (!isLicensed || forceLicenseScreen) && (
         <div className="license-overlay">
           <div className="license-prompt">
             <div className="license-prompt-header">

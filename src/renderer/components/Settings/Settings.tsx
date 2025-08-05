@@ -7,9 +7,10 @@ import { useLicenseCheck } from '../../hooks/useLicenseCheck'
 interface SettingsProps {
   isOpen: boolean
   onClose: () => void
+  onForceLicenseScreen: () => void
 }
 
-const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
+const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScreen }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
@@ -50,6 +51,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     if (confirm('Are you sure you want to clear your license? The app will be locked immediately.')) {
       try {
         clearLicense()
+        // Force the license screen to show
+        onForceLicenseScreen()
         // Close settings modal immediately to show license screen
         onClose()
       } catch (error) {
