@@ -3,7 +3,8 @@ import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import path, { join, normalize, resolve } from 'path'
 import os from 'os'
-import { isDev } from './utils/is-dev'
+// Inline isDev utility to avoid Windows path resolution issues
+const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { DeviceDetectionService } from './services/deviceDetection'
