@@ -67,7 +67,7 @@
   },
   "build": {
     "appId": "com.taylorwall.isla-journal",
-    "productName": "Isla",
+    "productName": "Isla Journal",
     "copyright": "Copyright © 2025 Taylor Wall",
     "directories": {
       "output": "release",
