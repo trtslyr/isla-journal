@@ -1,5 +1,4 @@
 import { app, BrowserWindow, ipcMain, Menu, shell, dialog } from 'electron'
-import { join } from 'path'
 import { isDev } from './utils/is-dev'
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -52,6 +51,9 @@ const createWindow = (): void => {
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  // Log cross-platform information
+  logPlatformInfo()
+  
   // Initialize database
   try {
     database.initialize()
@@ -198,7 +200,8 @@ app.on('before-quit', () => {
 
   // File System Operations
 import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
-import path from 'path'
+import path, { join, normalize, resolve } from 'path'
+import os from 'os'
 
 // Database
 import { database } from './database'
@@ -207,6 +210,25 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { DeviceDetectionService } from './services/deviceDetection'
 import { contentService } from './services/contentService'
+
+// Cross-platform path utility
+const normalizePath = (filePath: string): string => {
+  try {
+    // Resolve to absolute path and normalize
+    const resolved = resolve(filePath)
+    // Convert Windows backslashes to forward slashes for logging consistency
+    const normalized = normalize(resolved)
+    return normalized
+  } catch (error) {
+    console.warn(`⚠️ [Path] Failed to normalize path: ${filePath} - ${error.message}`)
+    return normalize(filePath) // Fallback to basic normalization
+  }
+}
+
+// Cross-platform logging helper
+const logPlatformInfo = () => {
+  console.log(`🌍 [Platform] OS: ${os.platform()}, Arch: ${os.arch()}, Release: ${os.release()}`)
+}
 
 // Basic app info handlers
 ipcMain.handle('app:getVersion', () => {
@@ -240,10 +262,12 @@ ipcMain.handle('file:openDirectory', async () => {
   }
 })
 
-  // IPC handler to read directory contents
+  // IPC handler to read directory contents with cross-platform path handling
   ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
     try {
-      console.log('📁 Reading directory:', dirPath)
+      const normalizedDirPath = normalizePath(dirPath)
+      console.log('📁 Reading directory:', normalizedDirPath)
+      console.log('🔍 [Directory] Original path:', dirPath, '→ Normalized:', normalizedDirPath)
     
     // Check if this is a root directory switch (not just subdirectory expansion)
     let shouldClearDatabase = false
@@ -286,11 +310,11 @@ ipcMain.handle('file:openDirectory', async () => {
     
     // Save the directory as root directory only if it's a root directory change
     if (isRootDirectoryChange) {
-      database.setSetting('selectedDirectory', dirPath)
-      console.log('📂 [Directory Switch] Set new root directory:', dirPath)
+      database.setSetting('selectedDirectory', normalizedDirPath)
+      console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
     }
     
-    const entries = await readdir(dirPath, { withFileTypes: true })
+    const entries = await readdir(normalizedDirPath, { withFileTypes: true })
     console.log('📋 Found entries:', entries.length)
     
     const files = []
@@ -309,7 +333,7 @@ ipcMain.handle('file:openDirectory', async () => {
         continue
       }
       
-      const fullPath = join(dirPath, entry.name)
+      const fullPath = normalizePath(join(normalizedDirPath, entry.name))
       const stats = await stat(fullPath)
       
       const fileItem = {
@@ -407,28 +431,32 @@ async function processDirectoryRecursively(dirPath: string): Promise<void> {
 
 ipcMain.handle('file:readFile', async (_, filePath: string) => {
   try {
-    const content = await readFile(filePath, 'utf-8')
+    const normalizedPath = normalizePath(filePath)
+    console.log('📖 [File] Reading:', normalizedPath)
+    const content = await readFile(normalizedPath, 'utf-8')
     return content
   } catch (error) {
-    console.error('Error reading file:', error)
+    console.error('❌ [File] Error reading file:', filePath, '→', error.message)
     throw error
   }
 })
 
 ipcMain.handle('file:writeFile', async (_, filePath: string, content: string) => {
   try {
-    await writeFile(filePath, content, 'utf-8')
+    const normalizedPath = normalizePath(filePath)
+    console.log('💾 [File] Writing:', normalizedPath)
+    await writeFile(normalizedPath, content, 'utf-8')
     
     // If it's a markdown file, also update the database for RAG
-    if (filePath.endsWith('.md')) {
-      const fileName = path.basename(filePath)
-      database.saveFile(filePath, fileName, content)
-      console.log('🧠 Updated RAG index for:', fileName)
+    if (normalizedPath.endsWith('.md')) {
+      const fileName = path.basename(normalizedPath)
+      database.saveFile(normalizedPath, fileName, content)
+      console.log('🧠 [File] Updated RAG index for:', fileName)
     }
     
     return true
   } catch (error) {
-    console.error('Error writing file:', error)
+    console.error('❌ [File] Error writing file:', filePath, '→', error.message)
     throw error
   }
 })
@@ -440,13 +468,20 @@ ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string) =
       fileName += '.md'
     }
     
-    const filePath = join(dirPath, fileName)
+    const normalizedDirPath = normalizePath(dirPath)
+    const filePath = normalizePath(join(normalizedDirPath, fileName))
     const initialContent = `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
     
+    console.log('📝 [File] Creating new file:', filePath)
     await writeFile(filePath, initialContent, 'utf-8')
+    
+    // Also add to database for RAG indexing
+    database.saveFile(filePath, fileName, initialContent)
+    console.log('🧠 [File] Added new file to RAG index:', fileName)
+    
     return filePath
   } catch (error) {
-    console.error('Error creating file:', error)
+    console.error('❌ [File] Error creating file:', fileName, '→', error.message)
     throw error
   }
 })

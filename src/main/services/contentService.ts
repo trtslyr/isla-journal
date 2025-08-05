@@ -1,5 +1,7 @@
 import { database } from '../database'
 import { LlamaService } from './llamaService'
+import { readFile } from 'fs/promises'
+import { normalize, resolve } from 'path'
 
 export interface RAGResponse {
   answer: string
@@ -18,25 +20,27 @@ class ContentService {
     try {
       console.log(`🔍 [ContentService] Searching for: ${query}`)
 
-      // 1. Get pinned files content first
+      // 1. Get pinned files content first with cross-platform path handling
       let pinnedContent = ''
       try {
         const pinnedItemsJson = database.getSetting('pinnedItems')
         if (pinnedItemsJson) {
           const pinnedItems = JSON.parse(pinnedItemsJson)
-          const { readFile } = require('fs/promises')
           
           const pinnedSources = []
           for (let i = 0; i < pinnedItems.length; i++) {
             const item = pinnedItems[i]
             if (item.type === 'file' && item.path.endsWith('.md')) {
               try {
-                const content = await readFile(item.path, 'utf-8')
+                // Normalize path for cross-platform compatibility
+                const normalizedPath = normalize(resolve(item.path))
+                const content = await readFile(normalizedPath, 'utf-8')
                 // Get first 300 chars as snippet
                 const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
                 pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
+                console.log(`📌 [ContentService] Successfully read pinned file: ${item.name} (${normalizedPath})`)
               } catch (error) {
-                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name}`)
+                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name} - ${error.message}`)
               }
             }
           }

@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3'
-import { join } from 'path'
+import { join, normalize, resolve } from 'path'
 import { app } from 'electron'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, unlinkSync } from 'fs'
 import path from 'path'
+import os from 'os'
 
 export interface FileRecord {
   id: number
@@ -71,21 +72,53 @@ class IslaDatabase {
   }
 
   /**
-   * Get platform-specific database path
-   * - macOS: ~/Library/Application Support/Isla Journal/
-   * - Windows: %APPDATA%/Isla Journal/
-   * - Linux: ~/.local/share/Isla Journal/
+   * Normalize file paths for cross-platform storage
+   * Converts Windows backslashes to forward slashes for consistent storage
+   */
+  private normalizeFilePath(filePath: string): string {
+    // Resolve to absolute path and normalize
+    const resolved = resolve(filePath)
+    // Convert Windows backslashes to forward slashes for consistent storage
+    return resolved.replace(/\\/g, '/')
+  }
+
+  /**
+   * Get platform-specific database path with enhanced cross-platform support
+   * - macOS: ~/Library/Application Support/Isla Journal/database/
+   * - Windows: %APPDATA%/Isla Journal/database/
+   * - Linux: ~/.local/share/Isla Journal/database/
+   * - Fallback: ~/.isla-journal/database/
    */
   private getDatabasePath(): string {
-    const userDataPath = app.getPath('userData')
-    const dbDir = join(userDataPath, 'database')
-    
-    // Ensure directory exists
-    if (!existsSync(dbDir)) {
-      mkdirSync(dbDir, { recursive: true })
+    try {
+      const userDataPath = app.getPath('userData')
+      const dbDir = normalize(join(userDataPath, 'database'))
+      
+      // Ensure directory exists with cross-platform permissions
+      if (!existsSync(dbDir)) {
+        mkdirSync(dbDir, { recursive: true, mode: 0o755 })
+      }
+      
+      const dbPath = normalize(join(dbDir, 'isla.db'))
+      console.log(`🗄️ [Database] Platform: ${os.platform()}, DB Path: ${dbPath}`)
+      
+      return dbPath
+    } catch (error) {
+      // Fallback to home directory if Electron userData fails
+      console.warn(`⚠️ [Database] Electron userData failed, using fallback: ${error}`)
+      
+      const homeDir = os.homedir()
+      const fallbackDir = normalize(join(homeDir, '.isla-journal', 'database'))
+      
+      if (!existsSync(fallbackDir)) {
+        mkdirSync(fallbackDir, { recursive: true, mode: 0o755 })
+      }
+      
+      const fallbackPath = normalize(join(fallbackDir, 'isla.db'))
+      console.log(`🗄️ [Database] Fallback path: ${fallbackPath}`)
+      
+      return fallbackPath
     }
-    
-    return join(dbDir, 'isla.db')
   }
 
   /**
@@ -213,23 +246,26 @@ class IslaDatabase {
   }
 
   /**
-   * Save or update file content in database
+   * Save or update file content in database with cross-platform path normalization
    */
   public saveFile(filePath: string, fileName: string, content: string): void {
     if (!this.db) throw new Error('Database not initialized')
+
+    // Normalize file path for consistent cross-platform storage
+    const normalizedPath = this.normalizeFilePath(filePath)
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO files (path, name, content, modified_at, size)
       VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
     `)
     
-    const result = stmt.run(filePath, fileName, content, content.length)
+    const result = stmt.run(normalizedPath, fileName, content, content.length)
     const fileId = result.lastInsertRowid as number
 
-    // Update content chunks for FTS
-    this.updateContentChunks(fileId, filePath, fileName, content)
+    // Update content chunks for search
+    this.updateContentChunks(fileId, normalizedPath, fileName, content)
     
-    console.log(`✅ [Database] Saved file: ${fileName}`)
+    console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
   }
 
   /**
@@ -347,13 +383,14 @@ class IslaDatabase {
   }
 
   /**
-   * Get file content from database
+   * Get file content from database with cross-platform path normalization
    */
   public getFile(filePath: string): FileRecord | null {
     if (!this.db) throw new Error('Database not initialized')
 
+    const normalizedPath = this.normalizeFilePath(filePath)
     const select = this.db.prepare('SELECT * FROM files WHERE path = ?')
-    return select.get(filePath) as FileRecord || null
+    return select.get(normalizedPath) as FileRecord || null
   }
 
   // searchFiles method removed - FTS not needed, using searchContent instead
@@ -392,10 +429,25 @@ class IslaDatabase {
         this.db = null
       }
       
-      // Delete the corrupted database file
-      const fs = require('fs')
-      if (fs.existsSync(this.dbPath)) {
-        fs.unlinkSync(this.dbPath)
+      // Delete the corrupted database file with cross-platform path handling
+      const normalizedPath = normalize(this.dbPath)
+      if (existsSync(normalizedPath)) {
+        unlinkSync(normalizedPath)
+        console.log(`🗑️ [Database] Deleted corrupted database: ${normalizedPath}`)
+      }
+      
+      // Also clean up any associated WAL/SHM files (SQLite)
+      const walPath = normalizedPath + '-wal'
+      const shmPath = normalizedPath + '-shm'
+      
+      if (existsSync(walPath)) {
+        unlinkSync(walPath)
+        console.log(`🗑️ [Database] Deleted WAL file: ${walPath}`)
+      }
+      
+      if (existsSync(shmPath)) {
+        unlinkSync(shmPath)
+        console.log(`🗑️ [Database] Deleted SHM file: ${shmPath}`)
       }
       
       // Reinitialize completely
@@ -664,13 +716,14 @@ class IslaDatabase {
   }
 
   /**
-   * Check if a file needs to be processed (new or modified)
+   * Check if a file needs to be processed (new or modified) with cross-platform path handling
    */
   public needsProcessing(filePath: string, currentMtime: Date): boolean {
     if (!this.db) throw new Error('Database not initialized')
 
     try {
-      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(filePath) as { modified_at: string } | undefined
+      const normalizedPath = this.normalizeFilePath(filePath)
+      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath) as { modified_at: string } | undefined
       
       if (!existing) {
         // File doesn't exist in database, needs processing
@@ -688,13 +741,14 @@ class IslaDatabase {
   }
 
   /**
-   * Get file by path with error handling
+   * Get file by path with error handling and cross-platform path normalization
    */
   public getFileByPath(filePath: string): FileRecord | null {
     if (!this.db) throw new Error('Database not initialized')
 
     try {
-      return this.db.prepare('SELECT * FROM files WHERE path = ?').get(filePath) as FileRecord || null
+      const normalizedPath = this.normalizeFilePath(filePath)
+      return this.db.prepare('SELECT * FROM files WHERE path = ?').get(normalizedPath) as FileRecord || null
     } catch (error) {
       console.error('❌ [Database] Error getting file by path:', error)
       return null
