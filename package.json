@@ -19,7 +19,7 @@
     "dist:win": "npm run build && electron-builder --win --publish=never",
     "dist:mac": "npm run build && electron-builder --mac --publish=never",
     "dist:linux": "npm run build && electron-builder --linux --publish=never",
-    "postinstall": "electron-builder install-app-deps && electron-rebuild"
+    "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
     "journal",
@@ -61,7 +61,6 @@
     "ollama": "^0.5.16",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "sqlite3": "^5.1.7",
     "stripe": "^18.4.0",
     "systeminformation": "^5.27.7",
     "uuid": "^11.1.0"
@@ -90,7 +89,6 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "build/icon.icns",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
@@ -128,7 +126,6 @@
       ]
     },
     "win": {
-      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -150,7 +147,6 @@
       "shortcutName": "Isla Journal"
     },
     "linux": {
-      "icon": "build/icons/",
       "category": "Office",
       "target": [
         {
@@ -172,7 +168,7 @@
       ]
     },
     "appImage": {
-      "systemIntegration": "ask"
+      "synopsis": "AI-powered offline journal and writing companion"
     },
     "publish": {
       "provider": "github",
