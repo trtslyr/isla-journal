@@ -47,15 +47,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   }
 
   const handleClearLicense = async () => {
-    if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
+    if (confirm('Are you sure you want to clear your license? The app will be locked immediately.')) {
       try {
         clearLicense()
-        setValidationMessage('License cleared - returning to license screen...')
-        
-        // Close settings modal after a brief delay so user sees the license screen
-        setTimeout(() => {
-          onClose()
-        }, 1500)
+        // Close settings modal immediately to show license screen
+        onClose()
       } catch (error) {
         console.error('Failed to clear license:', error)
         setValidationMessage('❌ Failed to clear license')
