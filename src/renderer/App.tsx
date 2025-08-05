@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { MonacoEditor } from './components/Editor'
 import { FileTree } from './components/FileTree'
-import RenameModal from './components/FileTree/RenameModal'
+
 import Settings from './components/Settings'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
@@ -64,6 +64,74 @@ const App: React.FC = () => {
   
   // Settings modal state
   const [showSettings, setShowSettings] = useState(false)
+  
+  // Theme state
+  const [currentTheme, setCurrentTheme] = useState('dark')
+
+  // Initialize theme on app load
+  useEffect(() => {
+    const initializeTheme = async () => {
+      try {
+        const savedTheme = await window.electronAPI.settingsGet('theme') || 'dark'
+        setCurrentTheme(savedTheme)
+        document.documentElement.setAttribute('data-theme', savedTheme)
+        console.log('🎨 Theme initialized:', savedTheme)
+      } catch (error) {
+        console.error('Failed to initialize theme:', error)
+        // Default to dark theme
+        setCurrentTheme('dark')
+        document.documentElement.setAttribute('data-theme', 'dark')
+      }
+    }
+    
+    const initializeFontSettings = async () => {
+      try {
+        const fontFamily = await window.electronAPI.settingsGet('fontFamily') || 'jetbrains-mono'
+        const fontSize = await window.electronAPI.settingsGet('fontSize') || 14
+        
+        // Map font family keys to actual font names
+        const fontFamilyMap = {
+          'jetbrains-mono': 'JetBrains Mono, Consolas, "Courier New", monospace',
+          'fira-code': 'Fira Code, "JetBrains Mono", Consolas, monospace',
+          'source-code-pro': 'Source Code Pro, "JetBrains Mono", Consolas, monospace',
+          'monaco': 'Monaco, "JetBrains Mono", Consolas, monospace'
+        }
+        
+        const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']
+        document.documentElement.style.setProperty('--app-font-family', fontStackValue)
+        document.documentElement.style.setProperty('--app-font-size', `${fontSize}px`)
+        console.log('👀 Font settings initialized:', fontFamily, fontSize + 'px')
+      } catch (error) {
+        console.error('Failed to initialize font settings:', error)
+        // Default font settings
+        document.documentElement.style.setProperty('--app-font-family', 'JetBrains Mono, Consolas, "Courier New", monospace')
+        document.documentElement.style.setProperty('--app-font-size', '14px')
+      }
+    }
+    
+    initializeTheme()
+    initializeFontSettings()
+  }, [])
+
+  // Listen for theme changes from settings
+  useEffect(() => {
+    const handleStorageChange = async () => {
+      try {
+        const newTheme = await window.electronAPI.settingsGet('theme') || 'dark'
+        if (newTheme !== currentTheme) {
+          setCurrentTheme(newTheme)
+          document.documentElement.setAttribute('data-theme', newTheme)
+          console.log('🎨 Theme updated:', newTheme)
+        }
+      } catch (error) {
+        console.error('Failed to update theme:', error)
+      }
+    }
+    
+    // Check for theme changes periodically (simple approach)
+    const interval = setInterval(handleStorageChange, 1000)
+    return () => clearInterval(interval)
+  }, [currentTheme])
 
   // Get current active tab
   const activeTab = tabs.find(tab => tab.id === activeTabId)
@@ -213,6 +281,7 @@ const App: React.FC = () => {
         // Load saved directory from settings
         try {
           const savedDirectory = await window.electronAPI.settingsGet('selectedDirectory')
+          console.log('🔍 [App] Raw saved directory result:', savedDirectory)
           if (savedDirectory) {
             console.log('📁 [App] Restoring saved directory:', savedDirectory)
             setRootDirectory(savedDirectory)
@@ -430,13 +499,6 @@ const App: React.FC = () => {
     }
   }
 
-  const handleChatKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
-    }
-  }
-
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
@@ -647,7 +709,7 @@ const App: React.FC = () => {
           {/* Title Bar */}
           <div className="title-bar">
             <div className="title-bar-left">
-              <span className="app-title">Isla Journal</span>
+              {/* Removed app title */}
             </div>
             <div className="title-bar-center">
               <span className="file-path">
@@ -673,32 +735,6 @@ const App: React.FC = () => {
           className={`panel file-tree-panel ${leftPanelCollapsed ? 'collapsed' : ''}`} 
           style={{ width: leftPanelWidth }}
         >
-          <div className="panel-header">
-            <h3>Explorer</h3>
-            <div className="panel-header-actions">
-              <button 
-                className="open-directory-btn"
-                onClick={handleOpenDirectory}
-                title="Open Journal Directory"
-              >
-                [DIR]
-              </button>
-              <button 
-                className="collapse-btn"
-                onClick={() => {
-                  if (leftPanelCollapsed) {
-                    setLeftPanelWidth(280)
-                    setLeftPanelCollapsed(false)
-                  } else {
-                    setLeftPanelCollapsed(true)
-                  }
-                }}
-                title={leftPanelCollapsed ? "Expand Explorer" : "Collapse Explorer"}
-              >
-                {leftPanelCollapsed ? '▶' : '◀'}
-              </button>
-            </div>
-          </div>
           {!leftPanelCollapsed && (
             <div className="panel-content">
               <FileTree
@@ -709,6 +745,7 @@ const App: React.FC = () => {
               />
             </div>
           )}
+
           {/* Left Resize Handle */}
           <div 
             className="resize-handle resize-handle-right"
@@ -725,6 +762,22 @@ const App: React.FC = () => {
         <div className="panel editor-panel">
           <div className="panel-header">
             <div className="tab-bar">
+              {/* File tree toggle button */}
+              <button 
+                className="panel-toggle-btn file-tree-toggle"
+                onClick={() => {
+                  if (leftPanelCollapsed) {
+                    setLeftPanelWidth(280)
+                    setLeftPanelCollapsed(false)
+                  } else {
+                    setLeftPanelCollapsed(true)
+                  }
+                }}
+                title={leftPanelCollapsed ? "Show Explorer" : "Hide Explorer"}
+              >
+                me
+              </button>
+              
               {tabs.map((tab) => (
                 <div
                   key={tab.id}
@@ -750,6 +803,22 @@ const App: React.FC = () => {
               >
                 +
               </button>
+              
+              {/* AI chat toggle button on the right */}
+              <button 
+                className="panel-toggle-btn ai-chat-toggle right-aligned"
+                onClick={() => {
+                  if (rightPanelCollapsed) {
+                    setRightPanelWidth(320)
+                    setRightPanelCollapsed(false)
+                  } else {
+                    setRightPanelCollapsed(true)
+                  }
+                }}
+                title={rightPanelCollapsed ? "Show AI Chat" : "Hide AI Chat"}
+              >
+                insights
+              </button>
             </div>
           </div>
           <div className="panel-content">
@@ -758,6 +827,7 @@ const App: React.FC = () => {
                 value={activeTab.content}
                 onChange={handleEditorChange}
                 language="markdown"
+                theme={currentTheme}
               />
             )}
           </div>
@@ -782,20 +852,6 @@ const App: React.FC = () => {
             <div className="chat-title">
               <span>AI Journal Assistant</span>
             </div>
-            <button 
-              className="collapse-btn"
-              onClick={() => {
-                if (rightPanelCollapsed) {
-                  setRightPanelWidth(320)
-                  setRightPanelCollapsed(false)
-                } else {
-                  setRightPanelCollapsed(true)
-                }
-              }}
-              title={rightPanelCollapsed ? "Expand AI Chat" : "Collapse AI Chat"}
-            >
-              {rightPanelCollapsed ? '◀' : '▶'}
-            </button>
           </div>
           
           {!rightPanelCollapsed && (
@@ -916,14 +972,31 @@ const App: React.FC = () => {
                   
                   <div className="chat-input-area">
                     <div className="chat-input-wrapper">
-                      <input 
-                        type="text" 
+                      <textarea 
+                        ref={(el) => {
+                          if (el) {
+                            // Auto-resize functionality
+                            el.style.height = 'auto'
+                            el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+                          }
+                        }}
                         value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        onKeyPress={handleChatKeyPress}
+                        onChange={(e) => {
+                          setChatInput(e.target.value)
+                          // Auto-resize on change
+                          e.target.style.height = 'auto'
+                          e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault()
+                            handleSendMessage()
+                          }
+                        }}
                         placeholder="Ask about your journal entries, request insights, or start a reflection..."
                         className="chat-input"
                         disabled={isAiThinking || !activeChat}
+                        rows={1}
                       />
                       <button 
                         onClick={handleSendMessage}
@@ -931,11 +1004,8 @@ const App: React.FC = () => {
                         className="send-button"
                         title="Send message (Enter)"
                       >
-                        {isAiThinking ? '⏳' : '📤'}
+                        {isAiThinking ? '•••' : '▶'}
                       </button>
-                    </div>
-                    <div className="chat-input-hint">
-                      Press Enter to send, Shift+Enter for new line
                     </div>
                   </div>
                 </div>
@@ -945,13 +1015,35 @@ const App: React.FC = () => {
         </div>
       </div>
       
-          {/* Rename Modal */}
-          <RenameModal
-            isOpen={showRenameModal}
-            currentName={renamingChat?.title || ''}
-            onSubmit={handleRenameSubmit}
-            onCancel={handleRenameCancel}
-          />
+          {/* Chat Rename Modal */}
+          {showRenameModal && renamingChat && (
+            <div className="modal-overlay" onClick={handleRenameCancel}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <h3>Rename Chat</h3>
+                <form onSubmit={(e) => {
+                  e.preventDefault()
+                  const formData = new FormData(e.target as HTMLFormElement)
+                  const newTitle = formData.get('chatTitle') as string
+                  if (newTitle && newTitle.trim()) {
+                    handleRenameSubmit(newTitle.trim())
+                  }
+                }}>
+                  <input
+                    type="text"
+                    name="chatTitle"
+                    defaultValue={renamingChat.title}
+                    placeholder="Enter chat title"
+                    autoFocus
+                    required
+                  />
+                  <div className="modal-actions">
+                    <button type="button" onClick={handleRenameCancel}>Cancel</button>
+                    <button type="submit">Rename</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
           
           {/* Settings Modal */}
           <Settings

@@ -78,5 +78,6 @@ declare global {
   interface Window {
     electronAPI: typeof electronAPI
     autoSaveTimeout?: NodeJS.Timeout
+    searchTimeout?: NodeJS.Timeout
   }
 } 

@@ -7,13 +7,15 @@ interface MonacoEditorProps {
   onChange: (value: string | undefined) => void
   language?: string
   readOnly?: boolean
+  theme?: string // Add theme prop
 }
 
 const MonacoEditor: React.FC<MonacoEditorProps> = ({
   value,
   onChange,
   language = 'markdown',
-  readOnly = false
+  readOnly = false,
+  theme = 'dark' // Default to dark theme
 }) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 
@@ -39,6 +41,32 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       automaticLayout: true,
     })
   }
+
+  // Watch for font setting changes and update editor
+  useEffect(() => {
+    if (editorRef.current) {
+      const { fontFamily, fontSize } = getFontSettings()
+      editorRef.current.updateOptions({
+        fontFamily,
+        fontSize
+      })
+    }
+  }, []) // We'll trigger this manually when settings change
+
+  // Add a listener for font changes (check periodically)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (editorRef.current) {
+        const { fontFamily, fontSize } = getFontSettings()
+        editorRef.current.updateOptions({
+          fontFamily,
+          fontSize
+        })
+      }
+    }, 1000) // Check every second
+
+    return () => clearInterval(interval)
+  }, [])
 
   const handleEditorWillMount: BeforeMount = (monaco) => {
     // Define VS Code Dark+ theme colors
@@ -69,30 +97,100 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       colors: {
         'editor.background': '#1e1e1e',
         'editor.foreground': '#d4d4d4',
-        'editor.lineHighlightBackground': '#2d2d30',
-        'editor.selectionBackground': '#264f78',
-        'editor.selectionHighlightBackground': '#264f7880',
+        'editorLineNumber.foreground': '#858585',
         'editorCursor.foreground': '#d4d4d4',
+        'editor.selectionBackground': '#264f78',
+        'editor.inactiveSelectionBackground': '#3a3d41',
         'editorWhitespace.foreground': '#404040',
         'editorIndentGuide.background': '#404040',
         'editorIndentGuide.activeBackground': '#707070',
-        'editor.findMatchBackground': '#515c6a',
-        'editor.findMatchHighlightBackground': '#ea5c0055',
-        'editor.findRangeHighlightBackground': '#3a3d4166',
-        'editorHoverWidget.background': '#252526',
-        'editorHoverWidget.border': '#454545',
-        'editorSuggestWidget.background': '#252526',
-        'editorSuggestWidget.border': '#454545',
-        'editorSuggestWidget.selectedBackground': '#094771',
+        'editor.selectionHighlightBackground': '#add6ff26'
       }
     })
 
-    // Set JetBrains Mono font
-    monaco.editor.getModel(monaco.Uri.parse('file:///main.md'))?.updateOptions({
-      tabSize: 2,
-      insertSpaces: true,
+    // Define Cream & Brown Light theme
+    monaco.editor.defineTheme('isla-light', {
+      base: 'vs',
+      inherit: true,
+      rules: [
+        { token: '', foreground: '1A1A1A', background: 'F5F2E8' },
+        { token: 'comment', foreground: '8B5A3C' },
+        { token: 'keyword', foreground: '8B5A3C' },
+        { token: 'string', foreground: 'A0664B' },
+        { token: 'number', foreground: '8B5A3C' },
+        { token: 'regexp', foreground: 'CC4125' },
+        { token: 'type', foreground: '8B5A3C' },
+        { token: 'variable', foreground: '4A4A4A' },
+        { token: 'variable.predefined', foreground: '8B5A3C' },
+        { token: 'constant', foreground: '8B5A3C' },
+        { token: 'operator', foreground: '1A1A1A' },
+        { token: 'delimiter', foreground: '1A1A1A' },
+        { token: 'attribute.name', foreground: '8B5A3C' },
+        { token: 'attribute.value', foreground: 'A0664B' },
+        { token: 'tag', foreground: '8B5A3C' },
+        // Markdown specific
+        { token: 'keyword.md', foreground: '8B5A3C' },
+        { token: 'string.md', foreground: 'A0664B' },
+        { token: 'variable.md', foreground: '8B5A3C' },
+      ],
+      colors: {
+        'editor.background': '#F5F2E8',        // Light cream background
+        'editor.foreground': '#1A1A1A',        // Dark text
+        'editorLineNumber.foreground': '#8A8A8A',
+        'editorCursor.foreground': '#8B5A3C',   // Brown cursor
+        'editor.selectionBackground': '#DDD7C8', // Hover cream for selection
+        'editor.inactiveSelectionBackground': '#E5E0D3',
+        'editorWhitespace.foreground': '#C0C0C0',
+        'editorIndentGuide.background': '#E0E0E0',
+        'editorIndentGuide.activeBackground': '#8B5A3C',
+        'editor.selectionHighlightBackground': '#DDD7C840'
+      }
+    })
+
+    // Set up language configurations
+    monaco.languages.setLanguageConfiguration('markdown', {
+      wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+    })
+
+    monaco.languages.setMonarchTokensProvider('markdown', {
+      tokenizer: {
+        root: [
+          [/^(\s{0,3})(#+)((?:[^\\#]|\\.)*)$/, ['white', 'keyword', 'string']],
+          [/^\s*(>+)/, 'comment'],
+          [/^(\t|[ ]{4})[^ ].*$/, 'string'],
+          [/^(\s*)(\*)((?:[^\\*]|\\.)*)$/, ['white', 'keyword', 'string']],
+          [/^(\s*)([*+-])([ \t].*)$/, ['white', 'keyword', 'string']],
+          [/^(\s*)(\d+\.)([ \t].*)$/, ['white', 'number', 'string']],
+          [/(\*\*|__)([^\\*_]|\\.)+(\*\*|__)/, 'strong'],
+          [/(\*|_)([^\\*_]|\\.)+(\*|_)/, 'emphasis'],
+          [/(`+)([^`]|\\.)*(`+)/, 'string'],
+          [/\[([^\]]+)\]\(([^)]+)\)/, 'variable'],
+        ]
+      },
     })
   }
+
+  // Determine Monaco theme based on app theme
+  const getMonacoTheme = () => {
+    if (theme === 'light') return 'isla-light'
+    if (theme === 'auto') {
+      // Check system preference
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      return prefersDark ? 'isla-dark' : 'isla-light'
+    }
+    return 'isla-dark' // default to dark
+  }
+
+  // Get font settings from CSS variables
+  const getFontSettings = () => {
+    const computedStyle = getComputedStyle(document.documentElement)
+    const fontFamily = computedStyle.getPropertyValue('--app-font-family').trim() || 'JetBrains Mono, Consolas, "Courier New", monospace'
+    const fontSize = parseInt(computedStyle.getPropertyValue('--app-font-size').replace('px', '')) || 14
+    
+    return { fontFamily, fontSize }
+  }
+
+  const { fontFamily, fontSize } = getFontSettings()
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
@@ -103,10 +201,10 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
         onChange={onChange}
         onMount={handleEditorDidMount}
         beforeMount={handleEditorWillMount}
-        theme="isla-dark"
+        theme={getMonacoTheme()}
         options={{
-          fontFamily: 'JetBrains Mono, Consolas, "Courier New", monospace',
-          fontSize: 14,
+          fontFamily: fontFamily,
+          fontSize: fontSize,
           lineHeight: 1.6,
           wordWrap: 'on',
           lineNumbers: 'off',

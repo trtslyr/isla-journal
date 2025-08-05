@@ -61,6 +61,14 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   })
   const [selectedModel, setSelectedModel] = useState<string>('')
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
+  const [licenseValidationMessage, setLicenseValidationMessage] = useState('')
+  const [isValidatingLicense, setIsValidatingLicense] = useState(false)
+  const [isLicenseLoading, setIsLicenseLoading] = useState(false)
+  const [currentTheme, setCurrentTheme] = useState('dark')
+  
+  // Font settings state
+  const [currentFontFamily, setCurrentFontFamily] = useState('jetbrains-mono')
+  const [currentFontSize, setCurrentFontSize] = useState(14)
 
   // Clear validation message and load database stats when modal opens
   useEffect(() => {
@@ -88,6 +96,14 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
     return unsubscribe
   }, [])
+
+  // Load current theme on component mount
+  useEffect(() => {
+    if (isOpen) {
+      loadCurrentTheme()
+      loadCurrentFontSettings()
+    }
+  }, [isOpen])
 
   const loadDatabaseStats = async () => {
     try {
@@ -286,6 +302,79 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
       onClose()
+    }
+  }
+
+  const loadCurrentTheme = async () => {
+    try {
+      const theme = await window.electronAPI.settingsGet('theme') || 'dark'
+      setCurrentTheme(theme)
+      applyTheme(theme)
+    } catch (error) {
+      console.error('Failed to load theme:', error)
+    }
+  }
+
+  const handleThemeChange = async (newTheme: string) => {
+    try {
+      setCurrentTheme(newTheme)
+      await window.electronAPI.settingsSet('theme', newTheme)
+      applyTheme(newTheme)
+      console.log('🎨 Theme changed to:', newTheme)
+    } catch (error) {
+      console.error('Failed to save theme:', error)
+    }
+  }
+
+  const applyTheme = (theme: string) => {
+    document.documentElement.setAttribute('data-theme', theme)
+  }
+
+  const loadCurrentFontSettings = async () => {
+    try {
+      const fontFamily = await window.electronAPI.settingsGet('fontFamily') || 'jetbrains-mono'
+      const fontSize = await window.electronAPI.settingsGet('fontSize') || 14
+      setCurrentFontFamily(fontFamily)
+      setCurrentFontSize(fontSize)
+      applyFontSettings(fontFamily, fontSize)
+    } catch (error) {
+      console.error('Failed to load font settings:', error)
+    }
+  }
+
+  const applyFontSettings = (fontFamily: string, fontSize: number) => {
+    // Map font family keys to actual font names
+    const fontFamilyMap = {
+      'jetbrains-mono': 'JetBrains Mono, Consolas, "Courier New", monospace',
+      'fira-code': 'Fira Code, "JetBrains Mono", Consolas, monospace',
+      'source-code-pro': 'Source Code Pro, "JetBrains Mono", Consolas, monospace',
+      'monaco': 'Monaco, "JetBrains Mono", Consolas, monospace'
+    }
+    
+    const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']
+    document.documentElement.style.setProperty('--app-font-family', fontStackValue)
+    document.documentElement.style.setProperty('--app-font-size', `${fontSize}px`)
+  }
+
+  const handleFontFamilyChange = async (newFontFamily: string) => {
+    try {
+      setCurrentFontFamily(newFontFamily)
+      await window.electronAPI.settingsSet('fontFamily', newFontFamily)
+      applyFontSettings(newFontFamily, currentFontSize)
+      console.log('👀 Font family changed to:', newFontFamily)
+    } catch (error) {
+      console.error('Failed to save font family:', error)
+    }
+  }
+
+  const handleFontSizeChange = async (newFontSize: number) => {
+    try {
+      setCurrentFontSize(newFontSize)
+      await window.electronAPI.settingsSet('fontSize', newFontSize)
+      applyFontSettings(currentFontFamily, newFontSize)
+      console.log('👀 Font size changed to:', newFontSize)
+    } catch (error) {
+      console.error('Failed to save font size:', error)
     }
   }
 
@@ -629,7 +718,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
             <h3>Theme & Font</h3>
             <div className="settings-item">
               <label>Theme:</label>
-              <select className="settings-select">
+              <select className="settings-select" value={currentTheme} onChange={(e) => handleThemeChange(e.target.value)}>
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
                 <option value="auto">Auto</option>
@@ -637,7 +726,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
             </div>
             <div className="settings-item">
               <label>Font Family:</label>
-              <select className="settings-select">
+              <select className="settings-select" value={currentFontFamily} onChange={(e) => handleFontFamilyChange(e.target.value)}>
                 <option value="jetbrains-mono">JetBrains Mono</option>
                 <option value="fira-code">Fira Code</option>
                 <option value="source-code-pro">Source Code Pro</option>
@@ -650,10 +739,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 type="range" 
                 min="12" 
                 max="20" 
-                defaultValue="14" 
+                defaultValue={currentFontSize} 
                 className="settings-slider"
+                onChange={(e) => handleFontSizeChange(parseInt(e.target.value))}
               />
-              <span className="slider-value">14px</span>
+              <span className="slider-value">{currentFontSize}px</span>
             </div>
           </div>
 

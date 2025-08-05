@@ -18,6 +18,15 @@ interface PinnedItem {
   type: 'file' | 'directory'
 }
 
+interface SearchResult {
+  id: number
+  file_id: number
+  file_path: string
+  file_name: string
+  content_snippet: string
+  rank: number
+}
+
 interface FileTreeProps {
   rootPath: string | null
   onFileSelect: (filePath: string, fileName: string) => void
@@ -33,6 +42,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   const [pinnedItems, setPinnedItems] = useState<PinnedItem[]>([])
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [lastClickedItem, setLastClickedItem] = useState<string | null>(null)
+  
+  // Search states
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [showSearchResults, setShowSearchResults] = useState(false)
   
   // Modal states
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -77,6 +92,15 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       savePinnedItems()
     }
   }, [pinnedItems])
+
+  // Cleanup search timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (window.searchTimeout) {
+        clearTimeout(window.searchTimeout)
+      }
+    }
+  }, [])
 
   const cleanFileName = (fileName: string): string => {
     return fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md')
@@ -408,6 +432,67 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     return date.toLocaleDateString()
   }
 
+  // Function to manually load saved directory
+  const loadSavedDirectory = async () => {
+    try {
+      console.log('🔄 [FileTree] Manually loading saved directory...')
+      const savedDirectory = await window.electronAPI.settingsGet('selectedDirectory')
+      console.log('🔍 [FileTree] Found saved directory:', savedDirectory)
+      if (savedDirectory) {
+        // Trigger the parent to update rootPath by calling onDirectorySelect
+        // This is a workaround since we can't directly set the parent's state
+        console.log('✅ [FileTree] Saved directory found, calling directory selector...')
+        onDirectorySelect()
+      } else {
+        console.log('❌ [FileTree] No saved directory found')
+        onDirectorySelect()
+      }
+    } catch (error) {
+      console.error('❌ [FileTree] Error loading saved directory:', error)
+      onDirectorySelect()
+    }
+  }
+
+  // Search functionality
+  const handleSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([])
+      setShowSearchResults(false)
+      return
+    }
+
+    setIsSearching(true)
+    try {
+      const results = await window.electronAPI.searchContent(query, 20)
+      setSearchResults(results)
+      setShowSearchResults(true)
+      console.log(`🔍 [FileTree] Found ${results.length} search results for: ${query}`)
+    } catch (error) {
+      console.error('❌ [FileTree] Search error:', error)
+      setSearchResults([])
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value
+    setSearchQuery(query)
+    
+    // Debounce search - wait 300ms after user stops typing
+    clearTimeout(window.searchTimeout)
+    window.searchTimeout = setTimeout(() => {
+      handleSearch(query)
+    }, 300)
+  }
+
+  const clearSearch = () => {
+    setSearchQuery('')
+    setSearchResults([])
+    setShowSearchResults(false)
+    clearTimeout(window.searchTimeout)
+  }
+
   const renderTreeItems = (items: FileItem[], depth: number = 0): React.ReactNode => {
     return items.map((item) => {
       const isSelected = selectedItems.has(item.path)
@@ -509,6 +594,58 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             </div>
           ))}
         </div>
+      </div>
+    )
+  }
+
+  const renderSearchResults = (): React.ReactNode => {
+    if (isSearching) {
+      return (
+        <div className="search-loading">
+          <p>🔍 Searching...</p>
+        </div>
+      )
+    }
+
+    if (searchResults.length === 0) {
+      return (
+        <div className="search-empty">
+          <p>No results found for "{searchQuery}"</p>
+          <small>Try different keywords or check spelling</small>
+        </div>
+      )
+    }
+
+    return (
+      <div className="search-results">
+        <div className="search-results-header">
+          <span>Found {searchResults.length} results for "{searchQuery}"</span>
+          <button 
+            className="clear-search-btn"
+            onClick={clearSearch}
+            title="Clear search"
+          >
+            ✕
+          </button>
+        </div>
+        {searchResults.map((result) => (
+          <div
+            key={`${result.file_id}-${result.id}`}
+            className="search-result-item"
+            onClick={() => {
+              const fileName = result.file_name.replace(/\s+[a-f0-9]{32}\.md$/, '.md')
+              onFileSelect(result.file_path, fileName)
+            }}
+            title={`Click to open ${result.file_name}`}
+          >
+            <div className="search-result-header">
+              <span className="search-result-file">○ {result.file_name.replace(/\s+[a-f0-9]{32}\.md$/, '.md')}</span>
+            </div>
+            <div className="search-result-snippet">
+              {result.content_snippet}
+            </div>
+          </div>
+        ))}
       </div>
     )
   }
@@ -634,86 +771,84 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     }
   }
 
-  if (!rootPath) {
-    return (
-      <div className="file-tree-panel">
-        <div className="panel-header">
-          <h3>File Explorer</h3>
-          <div className="panel-header-actions">
-            <button className="collapse-btn" onClick={() => {}}>
-              ◀
-            </button>
-          </div>
-        </div>
-        <div className="file-tree-empty">
-          <p>No directory selected</p>
-          <small>Choose a directory to explore your markdown files</small>
-                      <button className="open-directory-btn" onClick={onDirectorySelect}>
-              [DIR] Open Directory
-            </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="file-tree-panel">
+    <div className="file-tree">
       <div className="panel-header">
         <div className="file-tree-header">
-          <div className="directory-path">
-            {rootPath.split('/').pop() || rootPath}
-          </div>
           <div className="header-actions">
             <button 
               className="refresh-btn"
-              onClick={() => loadDirectory(rootPath)}
-              title="Refresh directory"
+              onClick={() => rootPath ? loadDirectory(rootPath) : loadSavedDirectory()}
+              title={rootPath ? "Refresh directory" : "Load saved directory"}
             >
               [↻]
             </button>
             <button 
+              className="search-btn"
+              onClick={() => setShowSearchResults(!showSearchResults)}
+              title="Search files"
+            >
+              [search]
+            </button>
+            <button 
               className="open-directory-btn"
               onClick={onDirectorySelect}
-              title="Open different directory"
+              title="Choose directory"
             >
               [DIR]
             </button>
           </div>
         </div>
-        <div className="panel-header-actions">
-          <button className="collapse-btn" onClick={() => {}}>
-            ◀
-          </button>
-        </div>
+        
+        {/* Search input - only show when search is active */}
+        {showSearchResults && (
+          <div className="search-container">
+            <input
+              type="text"
+              placeholder="Search in files..."
+              value={searchQuery}
+              onChange={handleSearchInputChange}
+              className="search-input"
+              autoFocus
+            />
+            <button 
+              className="clear-search-btn"
+              onClick={clearSearch}
+              title="Clear search"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Pinned section */}
-      {renderPinnedItems()}
-
-      {/* Main file tree */}
-      <div className="file-tree-content">
-        {loading && (
-          <div className="file-tree-loading">
-            <p>Loading files...</p>
+      <div className="panel-content">
+        {showSearchResults ? (
+          renderSearchResults()
+        ) : !rootPath ? (
+          <div className="file-tree-empty">
+            <p>No directory selected</p>
+            <small>Use [DIR] button above to choose a directory</small>
           </div>
-        )}
-
-        {error && (
-          <div className="file-tree-error">
-            <p>[ERROR] {error}</p>
-            <button onClick={() => loadDirectory(rootPath)}>Retry</button>
-          </div>
-        )}
-
-        {!loading && !error && (
+        ) : (
           <>
-            {files.length === 0 ? (
+            {/* Pinned section - only show when not searching */}
+            {renderPinnedItems()}
+            
+            {/* Files list */}
+            {loading ? (
+              <div className="file-tree-loading">
+                <p>Loading directory...</p>
+              </div>
+            ) : files.length === 0 ? (
               <div className="file-tree-empty">
                 <p>No markdown files found</p>
-                <small>This directory doesn't contain any .md files</small>
+                <small>Add some .md files to this directory</small>
               </div>
             ) : (
-              renderTreeItems(files)
+              <div className="file-tree-content">
+                {renderTreeItems(files)}
+              </div>
             )}
           </>
         )}
