@@ -29,6 +29,18 @@ const electronAPI = {
     contentSearchAndAnswer: (query, chatId) => electron_1.ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
     // LLM operations
     llmSendMessage: (messages) => electron_1.ipcRenderer.invoke('llm:sendMessage', messages),
+    llmGetStatus: () => electron_1.ipcRenderer.invoke('llm:getStatus'),
+    llmGetCurrentModel: () => electron_1.ipcRenderer.invoke('llm:getCurrentModel'),
+    llmGetDeviceSpecs: () => electron_1.ipcRenderer.invoke('llm:getDeviceSpecs'),
+    llmGetRecommendedModel: () => electron_1.ipcRenderer.invoke('llm:getRecommendedModel'),
+    llmGetAvailableModels: () => electron_1.ipcRenderer.invoke('llm:getAvailableModels'),
+    llmSwitchModel: (modelName) => electron_1.ipcRenderer.invoke('llm:switchModel', modelName),
+    // LLM events
+    onLLMDownloadProgress: (callback) => {
+        const unsubscribe = () => electron_1.ipcRenderer.removeAllListeners('llm:downloadProgress');
+        electron_1.ipcRenderer.on('llm:downloadProgress', (_, data) => callback(data));
+        return unsubscribe;
+    },
     // Chat operations
     chatCreate: (title) => electron_1.ipcRenderer.invoke('chat:create', title),
     chatGetAll: () => electron_1.ipcRenderer.invoke('chat:getAll'),

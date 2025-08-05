@@ -66,31 +66,92 @@ export class LlamaService {
     try {
       this.safeLog('🚀 [LlamaService] Initializing...')
       
-      // Check if Ollama is running
-      await this.checkOllamaStatus()
-      
-      // Get recommended model for this device
-      const recommendation = await this.deviceService.getRecommendedModel()
-      this.safeLog(`🎯 [LlamaService] Recommended model: ${recommendation.displayName}`)
-      
-      // Check if model is installed, download if needed
-      await this.ensureModelAvailable(recommendation.modelName, (progress, status) => {
-        if (this.mainWindow) {
-          this.mainWindow.webContents.send('llm:downloadProgress', {
-            modelName: recommendation.modelName,
-            progress,
-            status
-          })
+      // Check if Ollama is running with retry logic
+      let ollamaAvailable = false
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await this.checkOllamaStatus() 
+          ollamaAvailable = true
+          break
+        } catch (error) {
+          this.safeLog(`❌ [LlamaService] Ollama check attempt ${attempt}/3 failed: ${error}`)
+          if (attempt < 3) {
+            await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds before retry
+          }
         }
-      })
+      }
+
+      if (!ollamaAvailable) {
+        this.safeLog('❌ [LlamaService] Ollama not available after 3 attempts. Service will be partially initialized.', 'error')
+        // Don't throw - allow app to continue with limited functionality
+        return
+      }
       
-      this.currentModel = recommendation.modelName
+      // Get recommended model for this device with fallback
+      let recommendation
+      try {
+        recommendation = await this.deviceService.getRecommendedModel()
+        this.safeLog(`🎯 [LlamaService] Recommended model: ${recommendation.displayName}`)
+      } catch (error) {
+        this.safeLog(`❌ [LlamaService] Failed to get device recommendation, using fallback`, 'error')
+        // Use universal fallback model
+        recommendation = {
+          modelName: 'gemma2:2b',
+          displayName: 'Gemma 2 2B (Fallback)',
+          minMemory: 2,
+          description: 'Universal compatibility, minimal resource usage',
+          downloadSize: '1.6GB',
+          compatiblePlatforms: ['windows', 'macos', 'linux'],
+          compatibleArchitectures: ['x64', 'arm64'],
+          isOptimized: false
+        }
+      }
+      
+      // Try to ensure model is available with multiple fallbacks
+      const modelsToTry = [
+        recommendation.modelName,
+        recommendation.fallbackModel,
+        'gemma2:2b',
+        'llama3.2:latest'
+      ].filter(Boolean) // Remove undefined values
+      
+      let modelLoaded = false
+      for (const modelName of modelsToTry) {
+        try {
+          this.safeLog(`🔄 [LlamaService] Trying to load model: ${modelName}`)
+          await this.ensureModelAvailable(modelName!, (progress, status) => {
+            if (this.mainWindow) {
+              this.mainWindow.webContents.send('llm:downloadProgress', {
+                modelName: modelName!,
+                progress,
+                status
+              })
+            }
+          })
+          
+          this.currentModel = modelName!
+          modelLoaded = true
+          this.safeLog(`✅ [LlamaService] Successfully loaded model: ${modelName}`)
+          break
+        } catch (error) {
+          this.safeLog(`❌ [LlamaService] Failed to load model ${modelName}: ${error}`)
+          continue
+        }
+      }
+      
+      if (!modelLoaded) {
+        this.safeLog('❌ [LlamaService] No models could be loaded. Service will run without local model.', 'error')
+        // Still mark as initialized to prevent retry loops
+      }
+      
       this.isInitialized = true
+      this.safeLog('✅ [LlamaService] Initialization completed')
       
-      this.safeLog('✅ [LlamaService] Initialized successfully')
     } catch (error) {
       this.safeLog(`❌ [LlamaService] Initialization failed: ${error}`, 'error')
-      throw error
+      // Mark as initialized to prevent retry loops, but with no model
+      this.isInitialized = true
+      this.currentModel = null
     }
   }
 

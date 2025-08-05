@@ -582,6 +582,36 @@ electron_1.ipcMain.handle('llm:switchModel', async (_, modelName) => {
         throw error;
     }
 });
+electron_1.ipcMain.handle('llm:getCurrentModel', async () => {
+    try {
+        const llamaService = llamaService_1.LlamaService.getInstance();
+        return llamaService.getCurrentModel();
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error getting current model:', error);
+        return null;
+    }
+});
+electron_1.ipcMain.handle('llm:getRecommendedModel', async () => {
+    try {
+        const deviceService = deviceDetection_1.DeviceDetectionService.getInstance();
+        return await deviceService.getRecommendedModel();
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error getting recommended model:', error);
+        return null;
+    }
+});
+electron_1.ipcMain.handle('llm:getAvailableModels', async () => {
+    try {
+        const llamaService = llamaService_1.LlamaService.getInstance();
+        return await llamaService.getAvailableModels();
+    }
+    catch (error) {
+        console.error('❌ [IPC] Error getting available models:', error);
+        return [];
+    }
+});
 // Chat IPC handlers
 electron_1.ipcMain.handle('chat:create', async (_, title) => {
     try {

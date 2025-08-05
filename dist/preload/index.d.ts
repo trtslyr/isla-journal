@@ -25,6 +25,13 @@ declare const electronAPI: {
         role: string;
         content: string;
     }>) => Promise<any>;
+    llmGetStatus: () => Promise<any>;
+    llmGetCurrentModel: () => Promise<any>;
+    llmGetDeviceSpecs: () => Promise<any>;
+    llmGetRecommendedModel: () => Promise<any>;
+    llmGetAvailableModels: () => Promise<any>;
+    llmSwitchModel: (modelName: string) => Promise<any>;
+    onLLMDownloadProgress: (callback: (data: any) => void) => () => Electron.IpcRenderer;
     chatCreate: (title: string) => Promise<any>;
     chatGetAll: () => Promise<any>;
     chatGetActive: () => Promise<any>;

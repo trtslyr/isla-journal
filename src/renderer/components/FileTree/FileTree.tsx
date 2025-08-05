@@ -82,6 +82,20 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     return fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md')
   }
 
+  const sortItems = (items: FileItem[]): FileItem[] => {
+    return items.sort((a, b) => {
+      // First sort by type - directories first, then files
+      if (a.type !== b.type) {
+        return a.type === 'directory' ? -1 : 1
+      }
+      
+      // Within the same type, sort by modification time (newest first)
+      const dateA = new Date(a.modified).getTime()
+      const dateB = new Date(b.modified).getTime()
+      return dateB - dateA
+    })
+  }
+
   const loadDirectory = async (dirPath: string) => {
     if (!dirPath) return
     
@@ -99,8 +113,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         expanded: false
       }))
       
-      setFiles(processedFiles)
-      console.log('✅ [FileTree] Loaded', processedFiles.length, 'items')
+      // Sort items with newest first
+      const sortedFiles = sortItems(processedFiles)
+      
+      setFiles(sortedFiles)
+      console.log('✅ [FileTree] Loaded', sortedFiles.length, 'items')
     } catch (error) {
       console.error('❌ [FileTree] Error loading directory:', error)
       setError('Failed to load directory')
@@ -112,12 +129,15 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   const loadSubdirectory = async (dirPath: string): Promise<FileItem[]> => {
     try {
       const result = await window.electronAPI.readDirectory(dirPath)
-      return result.map((item: any) => ({
+      const processedFiles = result.map((item: any) => ({
         ...item,
         name: item.type === 'file' ? cleanFileName(item.name) : item.name,
         children: item.type === 'directory' ? [] : undefined,
         expanded: false
       }))
+      
+      // Sort items with newest first
+      return sortItems(processedFiles)
     } catch (error) {
       console.error('❌ [FileTree] Error loading subdirectory:', error)
       return []

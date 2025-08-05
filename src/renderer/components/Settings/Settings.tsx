@@ -4,6 +4,40 @@ import { ValidationResult } from '../../services/licenseValidation'
 import { getLicenseDisplayType } from '../../utils/licenseUtils'
 import { useLicenseCheck } from '../../hooks/useLicenseCheck'
 
+interface DeviceSpecs {
+  totalMemory: number
+  availableMemory: number
+  cpuCores: number
+  cpuSpeed: number
+  platform: string
+  arch: string
+  osVersion: string
+  isAppleSilicon: boolean
+  supportsAVX: boolean
+}
+
+interface ModelRecommendation {
+  modelName: string
+  displayName: string
+  minMemory: number
+  description: string
+  downloadSize: string
+  compatiblePlatforms: string[]
+  compatibleArchitectures: string[]
+  isOptimized: boolean
+  fallbackModel?: string
+}
+
+interface ModelStatus {
+  currentModel: string | null
+  isConnected: boolean
+  availableModels: string[]
+  recommendedModel: ModelRecommendation | null
+  deviceSpecs: DeviceSpecs | null
+  isDownloading: boolean
+  downloadProgress: number
+}
+
 interface SettingsProps {
   isOpen: boolean
   onClose: () => void
@@ -16,6 +50,16 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const [databaseStats, setDatabaseStats] = useState({ fileCount: 0, chunkCount: 0, indexSize: 0 })
   const [isClearing, setIsClearing] = useState(false)
   const [isReindexing, setIsReindexing] = useState(false)
+  const [modelStatus, setModelStatus] = useState<ModelStatus>({
+    currentModel: null,
+    isConnected: false,
+    availableModels: [],
+    recommendedModel: null,
+    deviceSpecs: null,
+    isDownloading: false,
+    downloadProgress: 0
+  })
+  const [selectedModel, setSelectedModel] = useState<string>('')
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
   // Clear validation message and load database stats when modal opens
@@ -25,9 +69,25 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       // Small delay to ensure electronAPI is loaded
       setTimeout(() => {
         loadDatabaseStats()
+        loadModelStatus()
       }, 100)
     }
   }, [isOpen])
+
+  // Listen for model download progress
+  useEffect(() => {
+    if (!window.electronAPI?.onLLMDownloadProgress) return
+
+    const unsubscribe = window.electronAPI.onLLMDownloadProgress((progress: any) => {
+      setModelStatus(prev => ({
+        ...prev,
+        isDownloading: progress.progress < 100,
+        downloadProgress: progress.progress
+      }))
+    })
+
+    return unsubscribe
+  }, [])
 
   const loadDatabaseStats = async () => {
     try {
@@ -42,6 +102,84 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
     } catch (error) {
       console.error('Failed to load database stats:', error)
       setDatabaseStats({ fileCount: 0, chunkCount: 0, indexSize: 0 })
+    }
+  }
+
+  const loadModelStatus = async () => {
+    try {
+      if (!window.electronAPI?.llmGetStatus) {
+        console.log('⚠️ [Settings] LLM API not available yet')
+        return
+      }
+
+      // Get current model and device specs
+      const [currentModel, deviceSpecs, recommendedModel, availableModels] = await Promise.all([
+        window.electronAPI.llmGetCurrentModel?.() || null,
+        window.electronAPI.llmGetDeviceSpecs?.() || null,
+        window.electronAPI.llmGetRecommendedModel?.() || null,
+        window.electronAPI.llmGetAvailableModels?.() || []
+      ])
+
+      const isConnected = currentModel !== null
+      
+      setModelStatus({
+        currentModel,
+        isConnected,
+        availableModels,
+        recommendedModel,
+        deviceSpecs,
+        isDownloading: false,
+        downloadProgress: 0
+      })
+
+      // Set selected model to current model
+      if (currentModel) {
+        setSelectedModel(currentModel)
+      } else if (recommendedModel) {
+        setSelectedModel(recommendedModel.modelName)
+      }
+
+    } catch (error) {
+      console.error('Failed to load model status:', error)
+      setModelStatus(prev => ({
+        ...prev,
+        isConnected: false,
+        currentModel: null
+      }))
+    }
+  }
+
+  const handleModelChange = async (newModel: string) => {
+    if (!window.electronAPI?.llmSwitchModel) return
+
+    try {
+      console.log(`🔄 [Settings] Switching model to: ${newModel}`)
+      setSelectedModel(newModel)
+      setModelStatus(prev => ({ 
+        ...prev, 
+        isDownloading: true, 
+        downloadProgress: 0,
+        currentModel: null // Clear current model during switch
+      }))
+      setValidationMessage(`[INFO] Switching to ${newModel}...`)
+      
+      await window.electronAPI.llmSwitchModel(newModel)
+      
+      console.log(`✅ [Settings] Model switch completed: ${newModel}`)
+      setValidationMessage(`[OK] Successfully switched to ${newModel}`)
+      
+      // Reload model status after switch
+      setTimeout(() => {
+        loadModelStatus()
+        // Clear the message after status loads
+        setTimeout(() => setValidationMessage(''), 3000)
+      }, 1000)
+      
+    } catch (error) {
+      console.error('❌ [Settings] Failed to switch model:', error)
+      setValidationMessage(`[ERROR] Failed to switch model: ${error.message}`)
+      // Reload status to restore previous state
+      loadModelStatus()
     }
   }
 
@@ -297,18 +435,131 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
           {/* AI Model Section */}
           <div className="settings-section">
             <h3>AI Model</h3>
+            
+            {/* Auto-Selected Model Display */}
+            {modelStatus.recommendedModel && (
+              <div className="settings-item">
+                <div className="auto-selected-model">
+                  <h4>🤖 Auto-Selected for Your Device</h4>
+                  <div className="current-model-display">
+                    <div className="model-info">
+                      <strong>{modelStatus.recommendedModel.displayName}</strong>
+                      <span className="model-size">({modelStatus.recommendedModel.downloadSize})</span>
+                      {modelStatus.recommendedModel.isOptimized && <span className="optimization-badge">⚡ Optimized</span>}
+                    </div>
+                    <p className="model-description">{modelStatus.recommendedModel.description}</p>
+                    <div className="auto-selection-reason">
+                      <small>
+                        ✅ Selected based on your {modelStatus.deviceSpecs?.totalMemory}GB RAM, {modelStatus.deviceSpecs?.platform} {modelStatus.deviceSpecs?.arch}
+                        {modelStatus.deviceSpecs?.isAppleSilicon && ', Apple Silicon optimized'}
+                      </small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Model Status */}
             <div className="settings-item">
-              <label>Select AI Model:</label>
-              <select className="settings-select">
-                <option value="llama3.1:latest">Llama 3.1 (Latest)</option>
-                <option value="llama3:8b">Llama 3 8B</option>
-                <option value="llama3:70b">Llama 3 70B</option>
-                <option value="mistral:latest">Mistral (Latest)</option>
-              </select>
+              <label>Status:</label>
+              {modelStatus.isDownloading ? (
+                <div className="model-status downloading">
+                  <span>📥 Downloading optimal model... {modelStatus.downloadProgress}%</span>
+                  <div className="progress-bar">
+                    <div 
+                      className="progress-fill" 
+                      style={{ width: `${modelStatus.downloadProgress}%` }}
+                    ></div>
+                  </div>
+                </div>
+              ) : modelStatus.isConnected ? (
+                <span className="model-status online">● Ready - Using {modelStatus.currentModel}</span>
+              ) : (
+                <span className="model-status offline">○ Setting up AI model...</span>
+              )}
             </div>
+
+            {/* Advanced Settings - Collapsible */}
             <div className="settings-item">
-              <label>Model Status:</label>
-              <span className="model-status online">● Connected</span>
+              <details className="advanced-settings">
+                <summary className="advanced-toggle">🔧 Advanced Model Settings</summary>
+                <div className="advanced-content">
+                  <p className="advanced-note">
+                    <small>⚠️ The system automatically selects the best model for your device. Only change this if you have specific requirements.</small>
+                  </p>
+
+                  {/* Device Information */}
+                  {modelStatus.deviceSpecs && (
+                    <div className="device-info-advanced">
+                      <h5>Device Specifications</h5>
+                      <div className="device-stats">
+                        <div className="device-stat">
+                          <span className="device-label">Platform:</span>
+                          <span className="device-value">
+                            {modelStatus.deviceSpecs.platform} ({modelStatus.deviceSpecs.arch})
+                            {modelStatus.deviceSpecs.isAppleSilicon && ' - Apple Silicon'}
+                          </span>
+                        </div>
+                        <div className="device-stat">
+                          <span className="device-label">Memory:</span>
+                          <span className="device-value">
+                            {modelStatus.deviceSpecs.availableMemory}GB available / {modelStatus.deviceSpecs.totalMemory}GB total
+                          </span>
+                        </div>
+                        <div className="device-stat">
+                          <span className="device-label">CPU:</span>
+                          <span className="device-value">
+                            {modelStatus.deviceSpecs.cpuCores} cores @ {modelStatus.deviceSpecs.cpuSpeed}GHz
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manual Model Selection */}
+                  <div className="manual-selection">
+                    <label>Override Model Selection:</label>
+                    <select 
+                      className="settings-select"
+                      value={selectedModel}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      disabled={modelStatus.isDownloading}
+                    >
+                      <option value="llama3.2:latest">
+                        Llama 3.2 3B - Fast & Efficient {selectedModel === 'llama3.2:latest' ? '(Active)' : ''}
+                      </option>
+                      <option value="llama3.1:latest">
+                        Llama 3.1 8B - High Quality {selectedModel === 'llama3.1:latest' ? '(Active)' : ''}
+                      </option>
+                      <option value="gemma2:2b">
+                        Gemma 2 2B - Ultra Fast {selectedModel === 'gemma2:2b' ? '(Active)' : ''}
+                      </option>
+                      <option value="phi3:mini">
+                        Phi-3 Mini - Code & Reasoning {selectedModel === 'phi3:mini' ? '(Active)' : ''}
+                      </option>
+                    </select>
+                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
+                      Current: {modelStatus.currentModel || 'Loading...'}
+                      {modelStatus.recommendedModel && modelStatus.currentModel === modelStatus.recommendedModel.modelName && ' (Auto-Selected)'}
+                    </small>
+                  </div>
+
+                  {/* Available Models List */}
+                  {modelStatus.availableModels.length > 0 && (
+                    <div className="installed-models-section">
+                      <label>Installed Models:</label>
+                      <div className="installed-models">
+                        {modelStatus.availableModels.map(model => (
+                          <span key={model} className="installed-model">
+                            {model}
+                            {model === modelStatus.currentModel && <span className="current-indicator"> (active)</span>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </details>
             </div>
           </div>
 

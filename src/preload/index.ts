@@ -38,6 +38,19 @@ const electronAPI = {
   // LLM operations
   llmSendMessage: (messages: Array<{role: string, content: string}>) => 
     ipcRenderer.invoke('llm:sendMessage', messages),
+  llmGetStatus: () => ipcRenderer.invoke('llm:getStatus'),
+  llmGetCurrentModel: () => ipcRenderer.invoke('llm:getCurrentModel'),
+  llmGetDeviceSpecs: () => ipcRenderer.invoke('llm:getDeviceSpecs'),
+  llmGetRecommendedModel: () => ipcRenderer.invoke('llm:getRecommendedModel'),
+  llmGetAvailableModels: () => ipcRenderer.invoke('llm:getAvailableModels'),
+  llmSwitchModel: (modelName: string) => ipcRenderer.invoke('llm:switchModel', modelName),
+  
+  // LLM events
+  onLLMDownloadProgress: (callback: (data: any) => void) => {
+    const unsubscribe = () => ipcRenderer.removeAllListeners('llm:downloadProgress')
+    ipcRenderer.on('llm:downloadProgress', (_, data) => callback(data))
+    return unsubscribe
+  },
   
   // Chat operations
   chatCreate: (title: string) => ipcRenderer.invoke('chat:create', title),
