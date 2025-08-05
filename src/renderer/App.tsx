@@ -26,7 +26,10 @@ const App: React.FC = () => {
   const [platform, setPlatform] = useState<string>('')
   
   // License management
-  const { licenseStatus, isLoading: licenseLoading, isLicensed } = useLicenseCheck()
+  const { licenseStatus, isLoading: licenseLoading, isLicensed, validateNewLicense } = useLicenseCheck()
+  const [licenseKey, setLicenseKey] = useState('')
+  const [licenseValidationMessage, setLicenseValidationMessage] = useState('')
+  const [isValidatingLicense, setIsValidatingLicense] = useState(false)
   
   // Tab management
   const [tabs, setTabs] = useState<EditorTab[]>([
@@ -670,6 +673,49 @@ Click **"📁 Open Directory"** in the file tree to:
     }
   }
 
+  // License key validation function
+  const handleLicenseValidation = async () => {
+    const trimmedKey = licenseKey.trim()
+    if (!trimmedKey) {
+      setLicenseValidationMessage('Please enter a license key')
+      return
+    }
+
+    setIsValidatingLicense(true)
+    setLicenseValidationMessage('')
+
+    try {
+      const result = await validateNewLicense(trimmedKey)
+      
+      if (result.valid) {
+        setLicenseValidationMessage('✅ License validated successfully! Welcome to Isla Journal!')
+        setLicenseKey('') // Clear input
+        // The license check hook will automatically update the UI
+      } else {
+        setLicenseValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
+      }
+    } catch (error) {
+      console.error('License validation error:', error)
+      setLicenseValidationMessage('❌ Network error - please check your connection and try again')
+    } finally {
+      setIsValidatingLicense(false)
+    }
+  }
+
+  // Function to open external URLs
+  const openUrl = (url: string) => {
+    try {
+      if (window.electronAPI?.openExternal) {
+        window.electronAPI.openExternal(url)
+      } else {
+        window.open(url, '_blank')
+      }
+    } catch (error) {
+      console.error('Failed to open URL:', error)
+      window.open(url, '_blank')
+    }
+  }
+
   return (
     <div className="app">
       {/* Title Bar */}
@@ -997,14 +1043,88 @@ Click **"📁 Open Directory"** in the file tree to:
             </div>
             <div className="license-prompt-content">
               <p>Isla Journal requires a valid license to access all features.</p>
-              <p>Open Settings to enter your license key or purchase a license.</p>
-              <div className="license-prompt-actions">
-                <button 
-                  className="license-prompt-btn primary"
-                  onClick={() => setShowSettings(true)}
-                >
-                  Open Settings
-                </button>
+              
+              {/* License Key Input */}
+              <div className="license-input-section">
+                <label htmlFor="license-key-input" className="license-input-label">
+                  Enter your license key:
+                </label>
+                <div className="license-input-group">
+                  <input
+                    id="license-key-input"
+                    type="text"
+                    className="license-input"
+                    placeholder="ij_life_... or ij_sub_... (paste your license key here)"
+                    value={licenseKey}
+                    onChange={(e) => {
+                      setLicenseKey(e.target.value)
+                      // Clear previous validation message on input change
+                      if (licenseValidationMessage) {
+                        setLicenseValidationMessage('')
+                      }
+                    }}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleLicenseValidation()
+                      }
+                    }}
+                    disabled={isValidatingLicense}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    className="license-validate-btn"
+                    onClick={handleLicenseValidation}
+                    disabled={isValidatingLicense || !licenseKey.trim()}
+                  >
+                    {isValidatingLicense ? '⏳' : '✓'}
+                  </button>
+                </div>
+                
+                {licenseValidationMessage && (
+                  <div className={`license-validation-message ${licenseValidationMessage.startsWith('✅') ? 'success' : 'error'}`}>
+                    {licenseValidationMessage}
+                  </div>
+                )}
+              </div>
+
+              {/* Links Section */}
+              <div className="license-links-section">
+                <div className="license-links-row">
+                  <button 
+                    className="license-link-btn"
+                    onClick={() => openUrl('https://pay.islajournal.app/p/login/cNieVc50A7yGfkv4BQ73G00')}
+                  >
+                    🏠 Customer Portal
+                  </button>
+                </div>
+                
+                <div className="license-payment-section">
+                  <p className="license-payment-text">Need a license?</p>
+                  <div className="license-payment-buttons">
+                    <button 
+                      className="license-payment-btn lifetime"
+                      onClick={() => openUrl('https://pay.islajournal.app/b/cNieVc50A7yGfkv4BQ73G00')}
+                    >
+                      🌟 Lifetime License
+                      <span className="license-price">$99</span>
+                    </button>
+                    <button 
+                      className="license-payment-btn annual"
+                      onClick={() => openUrl('https://pay.islajournal.app/b/7sY28qakUg5cfkv2tI73G02')}
+                    >
+                      📅 Annual License
+                      <span className="license-price">$49</span>
+                    </button>
+                    <button 
+                      className="license-payment-btn monthly"
+                      onClick={() => openUrl('https://pay.islajournal.app/b/dRmaEWct2cT03BN6JY73G01')}
+                    >
+                      🔄 Monthly License
+                      <span className="license-price">$7</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -22,7 +22,7 @@ const createWindow = (): void => {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, '../preload/index.js'),
-      webSecurity: !isDev
+      webSecurity: false  // TEMPORARILY DISABLED TO TEST CLIPBOARD
     }
   })
 
@@ -98,12 +98,91 @@ app.whenReady().then(() => {
           { role: 'quit' }
         ]
       },
-      // File menu, Edit menu, etc. will be added here
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'pasteAndMatchStyle' },
+          { role: 'delete' },
+          { role: 'selectAll' },
+          { type: 'separator' },
+          {
+            label: 'Speech',
+            submenu: [
+              { role: 'startSpeaking' },
+              { role: 'stopSpeaking' }
+            ]
+          }
+        ]
+      },
+      {
+        label: 'View',
+        submenu: [
+          { role: 'reload' },
+          { role: 'forceReload' },
+          { role: 'toggleDevTools' },
+          { type: 'separator' },
+          { role: 'resetZoom' },
+          { role: 'zoomIn' },
+          { role: 'zoomOut' },
+          { type: 'separator' },
+          { role: 'togglefullscreen' }
+        ]
+      },
+      {
+        label: 'Window',
+        submenu: [
+          { role: 'minimize' },
+          { role: 'close' },
+          { type: 'separator' },
+          { role: 'front' }
+        ]
+      }
     ]
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   } else {
-    // Windows/Linux - hide menu bar for VS Code-like experience
-    Menu.setApplicationMenu(null)
+    // Windows/Linux - include Edit menu for clipboard operations
+    const template: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: 'File',
+        submenu: [
+          { role: 'quit' }
+        ]
+      },
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'delete' },
+          { role: 'selectAll' }
+        ]
+      },
+      {
+        label: 'View',
+        submenu: [
+          { role: 'reload' },
+          { role: 'forceReload' },
+          { role: 'toggleDevTools' },
+          { type: 'separator' },
+          { role: 'resetZoom' },
+          { role: 'zoomIn' },
+          { role: 'zoomOut' },
+          { type: 'separator' },
+          { role: 'togglefullscreen' }
+        ]
+      }
+    ]
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   }
 
   app.on('activate', () => {
@@ -174,9 +253,10 @@ ipcMain.handle('file:openDirectory', async () => {
   }
 })
 
-ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
-  try {
-    console.log('📁 Reading directory:', dirPath)
+  // IPC handler to read directory contents
+  ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
+    try {
+      console.log('📁 Reading directory:', dirPath)
     
     // Check if this is a directory switch by getting current saved directory
     let shouldClearDatabase = false
@@ -200,9 +280,18 @@ ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
     
     const entries = await readdir(dirPath, { withFileTypes: true })
     console.log('📋 Found entries:', entries.length)
+    
+    // LIMIT FILE PROCESSING TO PREVENT UI BLOCKING
+    const MAX_FILES = 50
+    let processedCount = 0
     const files = []
     
     for (const entry of entries) {
+      if (processedCount >= MAX_FILES) {
+        console.log(`⏸️ File limit reached (${MAX_FILES}), skipping remaining files to prevent UI blocking`)
+        break
+      }
+      
       console.log('🔍 Processing:', entry.name, 'Type:', entry.isDirectory() ? 'directory' : 'file')
       
       // Skip hidden files and non-markdown files (except directories)
@@ -226,33 +315,33 @@ ipcMain.handle('file:readDirectory', async (_, dirPath: string) => {
         size: stats.size
       }
       
-      // Process markdown files for RAG (read content and chunk it)
+      // ✅ SMART INCREMENTAL RAG PROCESSING - Only process new/changed files
       if (entry.isFile() && entry.name.endsWith('.md')) {
         try {
-          console.log('📖 Reading content for RAG processing:', entry.name)
-          const content = await readFile(fullPath, 'utf-8')
+          const needsProcessing = database.needsProcessing(fullPath, stats.mtime)
           
-          // Save to database with RAG chunking and FTS indexing
-          database.saveFile(fullPath, entry.name, content)
-          console.log('🧠 RAG processed:', entry.name)
+          if (needsProcessing) {
+            console.log('📖 [Incremental] Processing new/modified file:', entry.name)
+            const content = await readFile(fullPath, 'utf-8')
+            
+            // Save to database with RAG chunking and FTS indexing
+            database.saveFile(fullPath, entry.name, content)
+            console.log('🧠 [Incremental] RAG processed:', entry.name)
+          } else {
+            console.log('⏭️ [Incremental] Skipping unchanged file:', entry.name)
+          }
         } catch (contentError) {
           console.error('⚠️ Failed to process content for', entry.name, ':', contentError)
           // Continue with metadata-only entry
         }
       }
       
-      // Recursively process directories to find markdown files
-      if (entry.isDirectory()) {
-        try {
-          console.log('📂 Recursively processing directory:', entry.name)
-          await processDirectoryRecursively(fullPath)
-        } catch (dirError) {
-          console.error('⚠️ Failed to process directory', entry.name, ':', dirError)
-        }
-      }
+      // 🚫 RECURSIVE PROCESSING COMPLETELY DISABLED 
+      // (This was causing the massive file processing on startup)
       
-      console.log('✅ Added:', fileItem.name, fileItem.type)
       files.push(fileItem)
+      console.log('✅ Added:', entry.name, entry.isDirectory() ? 'directory' : 'file')
+      processedCount++
     }
     
     // Sort: directories first, then files, both alphabetically

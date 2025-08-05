@@ -45,7 +45,7 @@ export const useLicenseCheck = () => {
     checkLicense();
   }, []);
 
-  const validateNewLicense = async (licenseKey: string): Promise<ValidationResult> => {
+  const validateNewLicense = async (licenseKey: string) => {
     setIsLoading(true);
     try {
       const result = await LicenseValidator.validateLicense(licenseKey);
@@ -67,7 +67,7 @@ export const useLicenseCheck = () => {
 
   const clearLicense = () => {
     LicenseStorage.clearLicense();
-    setLicenseStatus({ valid: false, error: 'No license found' });
+    setLicenseStatus({ valid: false, error: 'No license found' });  
   };
 
   return { 

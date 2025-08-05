@@ -13,12 +13,26 @@ interface SettingsProps {
 const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
+  const [storedLicenseKey, setStoredLicenseKey] = useState<string | null>(null)
   const { licenseStatus, isLoading, validateNewLicense, clearLicense } = useLicenseCheck()
 
-  // Clear validation message when modal opens
+  // Load stored license key when modal opens
   useEffect(() => {
     if (isOpen) {
       setValidationMessage('')
+      
+      // Load current stored license key
+      try {
+        const stored = LicenseStorage.getStoredLicense()
+        if (stored && stored.key) {
+          setStoredLicenseKey(stored.key)
+        } else {
+          setStoredLicenseKey(null)
+        }
+      } catch (error) {
+        console.error('Failed to load stored license:', error)
+        setStoredLicenseKey(null)
+      }
     }
   }, [isOpen])
 
@@ -37,6 +51,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
       
       if (result.valid) {
         setValidationMessage('✅ License validated successfully!')
+        setStoredLicenseKey(licenseKey.trim()) // Update the displayed license key
         setLicenseKey('') // Clear input
       } else {
         setValidationMessage(`❌ ${result.error || 'Invalid license key'}`)
@@ -51,7 +66,13 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     if (confirm('Are you sure you want to clear your license? The app will have limited functionality.')) {
       try {
         clearLicense()
-        setValidationMessage('License cleared')
+        setStoredLicenseKey(null) // Clear the displayed license key
+        setValidationMessage('License cleared - returning to license screen...')
+        
+        // Close settings modal after a brief delay so user sees the license screen
+        setTimeout(() => {
+          onClose()
+        }, 1500)
       } catch (error) {
         console.error('Failed to clear license:', error)
         setValidationMessage('❌ Failed to clear license')
@@ -142,6 +163,17 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
                     </div>
                   )}
                 </div>
+                
+                {/* Display current license key */}
+                {storedLicenseKey && (
+                  <div className="license-key-display">
+                    <div className="license-status-item">
+                      <span className="license-label">License Key:</span>
+                      <span className="license-value license-key-text">{storedLicenseKey}</span>
+                    </div>
+                  </div>
+                )}
+                
                 <button className="settings-btn danger" onClick={handleClearLicense}>
                   Clear License
                 </button>
@@ -175,20 +207,35 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
                 
                 {/* Purchase Links */}
                 <div className="purchase-links">
-                  <h4>Don't have a license? Purchase one:</h4>
+                  <h4>Need a license?</h4>
                   <div className="purchase-buttons">
-                    <button className="purchase-btn monthly" onClick={() => openUrl('https://your-payment-link-monthly.com')}>
-                      📆 Monthly - $9.99/mo
+                    <button 
+                      className="purchase-btn lifetime" 
+                      onClick={() => openUrl('https://pay.islajournal.app/b/cNieVc50A7yGfkv4BQ73G00')}
+                    >
+                      🌟 Lifetime License
+                      <span className="license-price">$99</span>
                     </button>
-                    <button className="purchase-btn annual" onClick={() => openUrl('https://your-payment-link-annual.com')}>
-                      📅 Annual - $99.99/yr
+                    <button 
+                      className="purchase-btn annual" 
+                      onClick={() => openUrl('https://pay.islajournal.app/b/7sY28qakUg5cfkv2tI73G02')}
+                    >
+                      📅 Annual License
+                      <span className="license-price">$49</span>
                     </button>
-                    <button className="purchase-btn lifetime" onClick={() => openUrl('https://your-payment-link-lifetime.com')}>
-                      💎 Lifetime - $299
+                    <button 
+                      className="purchase-btn monthly" 
+                      onClick={() => openUrl('https://pay.islajournal.app/b/dRmaEWct2cT03BN6JY73G01')}
+                    >
+                      🔄 Monthly License
+                      <span className="license-price">$7</span>
                     </button>
                   </div>
-                  <button className="customer-portal-btn" onClick={() => openUrl('https://your-customer-portal.com')}>
-                    🏪 Customer Portal
+                  <button 
+                    className="customer-portal-btn" 
+                    onClick={() => openUrl('https://pay.islajournal.app/p/login/cNieVc50A7yGfkv4BQ73G00')}
+                  >
+                    🏠 Customer Portal
                   </button>
                 </div>
               </div>

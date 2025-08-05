@@ -9,7 +9,6 @@
   "include": ["src/main/**/*"],
   "exclude": [
     "src/main/**/*.test.ts", 
-    "src/main/**/*.spec.ts",
-    "src/main/backend/**/*"
+    "src/main/**/*.spec.ts"
   ]
 } 

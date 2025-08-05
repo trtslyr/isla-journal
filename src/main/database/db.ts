@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { join } from 'path'
 import { app } from 'electron'
 import { existsSync, mkdirSync } from 'fs'
+import path from 'path'
 
 export interface FileRecord {
   id: number
@@ -92,18 +93,29 @@ class IslaDatabase {
    */
   public initialize(): void {
     try {
-      console.log('🗄️ [Database] Initializing SQLite at:', this.dbPath)
-      
+      // Ensure database directory exists
+      const dbDir = path.dirname(this.dbPath)
+      if (!existsSync(dbDir)) {
+        mkdirSync(dbDir, { recursive: true })
+      }
+
       this.db = new Database(this.dbPath)
-      
+      console.log('🗄️ [Database] Connected to SQLite database')
+
       // Enable WAL mode for better concurrency and safety
       this.db.pragma('journal_mode = WAL')
       this.db.pragma('synchronous = NORMAL')
       this.db.pragma('cache_size = 10000')
       this.db.pragma('foreign_keys = ON')
-      
+
+      // Create tables if they don't exist
       this.createTables()
+      console.log('📋 [Database] Tables and indexes created')
       
+      // Fix any database schema issues
+      this.fixDatabaseSchema()
+      console.log('🔧 [Database] Schema validation completed')
+
       console.log('✅ [Database] SQLite initialized successfully')
     } catch (error) {
       console.error('❌ [Database] Failed to initialize:', error)
@@ -674,6 +686,89 @@ class IslaDatabase {
       settings[row.key] = row.value
     })
     return settings
+  }
+
+  /**
+   * Check if a file needs to be processed (new or modified)
+   */
+  public needsProcessing(filePath: string, currentMtime: Date): boolean {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(filePath) as { modified_at: string } | undefined
+      
+      if (!existing) {
+        // File doesn't exist in database, needs processing
+        return true
+      }
+      
+      const dbMtime = new Date(existing.modified_at)
+      // File needs processing if it's been modified since last time
+      return currentMtime > dbMtime
+    } catch (error) {
+      console.error('❌ [Database] Error checking if file needs processing:', error)
+      // On error, assume it needs processing to be safe
+      return true
+    }
+  }
+
+  /**
+   * Get file by path with error handling
+   */
+  public getFileByPath(filePath: string): FileRecord | null {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      return this.db.prepare('SELECT * FROM files WHERE path = ?').get(filePath) as FileRecord || null
+    } catch (error) {
+      console.error('❌ [Database] Error getting file by path:', error)
+      return null
+    }
+  }
+
+  /**
+   * Fix database schema issues and rebuild FTS if corrupted
+   */
+  public fixDatabaseSchema(): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      // Check if FTS table is corrupted by running a simple query
+      try {
+        this.db.prepare('SELECT COUNT(*) FROM fts_content').get()
+      } catch (ftsError) {
+        console.log('🔧 [Database] FTS table corrupted, rebuilding...')
+        
+        // Drop and recreate FTS table
+        this.db.exec('DROP TABLE IF EXISTS fts_content')
+        
+        // Recreate FTS table with correct schema
+        this.db.exec(`
+          CREATE VIRTUAL TABLE fts_content USING fts5(
+            content,
+            file_path,
+            file_name,
+            content='content_chunks',
+            content_rowid='id'
+          )
+        `)
+        
+        // Rebuild FTS index from existing chunks
+        this.db.exec(`
+          INSERT INTO fts_content(content, file_path, file_name)
+          SELECT 
+            cc.chunk_text,
+            f.path,
+            f.name
+          FROM content_chunks cc
+          JOIN files f ON cc.file_id = f.id
+        `)
+        
+        console.log('✅ [Database] FTS table rebuilt successfully')
+      }
+    } catch (error) {
+      console.error('❌ [Database] Error fixing schema:', error)
+    }
   }
 
   /**
