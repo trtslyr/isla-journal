@@ -126,13 +126,14 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                       <span className="license-value">{licenseStatus.planType}</span>
                     </div>
                   )}
-                  {licenseStatus.expiresAt && !licenseStatus.neverExpires && (
+                  {/* Only show expires date for lifetime plans */}
+                  {licenseStatus.licenseType === 'lifetime' && licenseStatus.expiresAt && !licenseStatus.neverExpires && (
                     <div className="license-status-item">
                       <span className="license-label">Expires:</span>
                       <span className="license-value">{new Date(licenseStatus.expiresAt).toLocaleDateString()}</span>
                     </div>
                   )}
-                  {licenseStatus.neverExpires && (
+                  {licenseStatus.licenseType === 'lifetime' && licenseStatus.neverExpires && (
                     <div className="license-status-item">
                       <span className="license-label">Expires:</span>
                       <span className="license-value-valid">Never</span>
