@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { resolve } from 'path'
-import { fileURLToPath } from 'url'
+import { resolve, join } from 'path'
+
+// Cross-platform path resolution
+const resolveAbsolute = (...paths: string[]) => resolve(__dirname, ...paths)
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -12,28 +14,34 @@ export default defineConfig({
     outDir: '../../dist/renderer',
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(process.cwd(), 'src/renderer/index.html')
+      input: resolveAbsolute('src', 'renderer', 'index.html')
     },
-    // Ensure build works on Windows
+    // Cross-platform build settings
     target: 'esnext',
     minify: 'esbuild',
-    sourcemap: false
+    sourcemap: false,
+    // Ensure consistent builds across platforms
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      input: resolveAbsolute('src', 'renderer', 'index.html'),
+      external: ['electron']
+    }
   },
   resolve: {
     alias: {
-      '@': resolve(process.cwd(), 'src'),
-      '@main': resolve(process.cwd(), 'src/main'),
-      '@renderer': resolve(process.cwd(), 'src/renderer'),
-      '@shared': resolve(process.cwd(), 'src/shared')
+      '@': resolveAbsolute('src'),
+      '@main': resolveAbsolute('src', 'main'),
+      '@renderer': resolveAbsolute('src', 'renderer'),
+      '@shared': resolveAbsolute('src', 'shared')
     }
   },
   server: {
     host: 'localhost',
     port: 5173
   },
-  publicDir: resolve(process.cwd(), 'build'),
-  copyPublicDir: true,
-  // Windows-specific optimizations
+  // Remove publicDir reference to non-existent build directory
+  publicDir: false,
+  // Cross-platform optimizations
   optimizeDeps: {
     include: ['react', 'react-dom']
   },

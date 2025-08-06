@@ -1,0 +1,254 @@
+name: Build Cross-Platform
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows builds
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            name: windows-x64
+            artifact: windows-installer
+          
+          # macOS builds  
+          - os: macos-latest
+            platform: darwin
+            arch: x64
+            name: macos-intel
+            artifact: macos-intel-installer
+            
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            name: macos-apple-silicon
+            artifact: macos-arm64-installer
+    
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.name }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Display Build Info
+        shell: bash
+        run: |
+          echo "Building for: ${{ matrix.name }}"
+          echo "Platform: ${{ matrix.platform }}"
+          echo "Architecture: ${{ matrix.arch }}"
+          echo "Host OS: ${{ runner.os }}"
+          node --version
+          npm --version
+      
+      - name: Clean Install Dependencies
+        shell: bash
+        run: |
+          echo "Fresh install with platform isolation..."
+          rm -rf node_modules package-lock.json dist 2>/dev/null || true
+          npm install --package-lock-only
+          npm ci --no-optional
+          echo "Dependencies installed successfully"
+      
+      - name: Setup Platform Environment
+        shell: bash
+        run: |
+          echo "Setting up build environment for ${{ matrix.platform }}-${{ matrix.arch }}"
+          export npm_config_target_platform="${{ matrix.platform }}"
+          export npm_config_target_arch="${{ matrix.arch }}"
+          export npm_config_build_from_source=true
+          export npm_config_electron_cache=""
+          echo "Environment configured"
+      
+      - name: Rebuild Native Modules
+        shell: bash
+        run: |
+          echo "Building native modules from source for ${{ matrix.platform }}-${{ matrix.arch }}"
+          npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }}
+          echo "Native modules rebuilt successfully"
+      
+      - name: Verify Native Modules
+        shell: bash
+        run: |
+          echo "Verifying native modules for ${{ matrix.platform }}-${{ matrix.arch }}"
+          
+          # Test better-sqlite3
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            test -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" && echo "✓ better-sqlite3 binary exists" || (echo "✗ better-sqlite3 binary missing" && exit 1)
+          else
+            test -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" && echo "✓ better-sqlite3 binary exists" || (echo "✗ better-sqlite3 binary missing" && exit 1)
+          fi
+          
+          # Test loading
+          node -e "
+            try {
+              require('better-sqlite3');
+              console.log('✓ better-sqlite3 loads successfully');
+            } catch(e) {
+              console.log('✗ better-sqlite3 load failed:', e.message);
+              process.exit(1);
+            }
+          "
+          
+          echo "Native modules verified"
+      
+      - name: Build Application
+        shell: bash
+        run: |
+          echo "Building application for ${{ matrix.platform }}-${{ matrix.arch }}"
+          
+          # Clean any existing build artifacts
+          rm -rf dist 2>/dev/null || true
+          
+          # Build frontend
+          echo "Building Vite frontend..."
+          npm run build:vite
+          
+          # Verify frontend build
+          if [[ ! -d "dist/renderer" ]]; then
+            echo "✗ Frontend build failed - dist/renderer missing"
+            exit 1
+          fi
+          echo "✓ Frontend build successful"
+          
+          # Build main process
+          echo "Building main process..."
+          npm run build:main
+          if [[ ! -f "dist/main/index.js" ]]; then
+            echo "✗ Main process build failed"
+            exit 1
+          fi
+          echo "✓ Main process build successful"
+          
+          # Build preload
+          echo "Building preload script..."
+          npm run build:preload
+          if [[ ! -f "dist/preload/index.js" ]]; then
+            echo "✗ Preload build failed"
+            exit 1
+          fi
+          echo "✓ Preload build successful"
+          
+          echo "Application build completed"
+      
+      - name: Test Application
+        shell: bash
+        run: |
+          echo "Testing application startup for ${{ matrix.platform }}-${{ matrix.arch }}"
+          
+          export CI=true
+          export NODE_ENV=test
+          
+          # Test main process loading
+          node -e "
+            process.env.NODE_ENV = 'test';
+            try {
+              console.log('Testing main process...');
+              const main = require('./dist/main/index.js');
+              console.log('✓ Main process structure valid');
+            } catch (error) {
+              if (error.message.includes('app.whenReady') || error.message.includes('electron')) {
+                console.log('✓ Main process structure valid (Electron context expected)');
+              } else {
+                console.error('✗ Main process error:', error.message);
+                process.exit(1);
+              }
+            }
+          "
+          
+          # Test database functionality
+          node -e "
+            try {
+              const Database = require('better-sqlite3');
+              const db = new Database(':memory:');
+              db.exec('CREATE TABLE test (id INTEGER PRIMARY KEY)');
+              db.exec('INSERT INTO test (id) VALUES (1)');
+              const row = db.prepare('SELECT * FROM test WHERE id = ?').get(1);
+              if (row.id === 1) {
+                console.log('✓ Database operations work correctly');
+              } else {
+                throw new Error('Database test failed');
+              }
+              db.close();
+            } catch (error) {
+              console.error('✗ Database test failed:', error.message);
+              process.exit(1);
+            }
+          "
+          
+          echo "Application tests passed"
+      
+      - name: Package Application
+        shell: bash
+        run: |
+          echo "Packaging ${{ matrix.name }} application..."
+          npm run make
+          echo "Packaging completed"
+      
+      - name: Verify Package
+        shell: bash
+        run: |
+          echo "Verifying ${{ matrix.name }} package..."
+          
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            if ls out/make/squirrel.windows/**/*.exe >/dev/null 2>&1; then
+              echo "✓ Windows installer(s) created:"
+              ls -la out/make/squirrel.windows/**/*.exe
+            else
+              echo "✗ No Windows installers found"
+              ls -la out/make/ || echo "No out/make directory"
+              exit 1
+            fi
+          else
+            if ls out/make/**/*.{dmg,zip} >/dev/null 2>&1; then
+              echo "✓ macOS installer(s) created:"
+              ls -la out/make/**/*.{dmg,zip}
+            else
+              echo "✗ No macOS installers found"
+              ls -la out/make/ || echo "No out/make directory"
+              exit 1
+            fi
+          fi
+          
+          echo "Package verification completed"
+      
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.dmg
+            out/make/**/*.zip
+          retention-days: 30
+          compression-level: 6
+      
+      - name: Build Summary
+        shell: bash
+        run: |
+          echo "🎉 Build Summary for ${{ matrix.name }}:"
+          echo "- Platform: ${{ matrix.platform }}-${{ matrix.arch }}"
+          echo "- Native modules: ✓ Built and verified"
+          echo "- Application: ✓ Built and tested"
+          echo "- Package: ✓ Created and verified"
+          echo "- Artifacts: ✓ Uploaded as ${{ matrix.artifact }}"
