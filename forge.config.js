@@ -15,7 +15,12 @@ module.exports = {
     // Force icon usage
     overwrite: true
   },
-  rebuildConfig: {},
+  rebuildConfig: {
+    // Force rebuild of native modules for target platform
+    force: true,
+    // Debug rebuild process
+    debug: true
+  },
   makers: [
     // Windows - Squirrel Installer (.exe)
     {
@@ -58,7 +63,12 @@ module.exports = {
   plugins: [
     {
       name: '@electron-forge/plugin-auto-unpack-natives',
-      config: {},
+      config: {
+        // Ensure better-sqlite3 is rebuilt for target platform
+        unpackDir: 'node_modules',
+        // Force rebuild
+        rebuild: true
+      },
     },
     // Fuses are used to enable/disable various Electron functionality
     // at package time, before code signing the application
