@@ -119,20 +119,27 @@ jobs:
           ELECTRON_VERSION=$(npm list electron --depth=0 | grep electron@ | sed 's/.*electron@//' | sed 's/ .*//')
           echo "Electron version: $ELECTRON_VERSION"
           
-          # Clean any existing native builds to prevent version conflicts
-          echo "Cleaning existing native module builds..."
+          # Clean only native binaries, not entire build directories
+          echo "Cleaning existing native module binaries..."
           find node_modules -name "*.node" -delete 2>/dev/null || true
-          find node_modules -path "*/build" -type d -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -path "*/build/Release" -name "*.node" -delete 2>/dev/null || true
           
-          # Rebuild with explicit Electron version
-          if [[ "${{ matrix.arch }}" == "arm64" && "${{ runner.os }}" == "macOS" ]]; then
-            # Apple Silicon specific rebuild
-            echo "Building for Apple Silicon..."
-            npx @electron/rebuild --verbose --force --arch=arm64 --version=$ELECTRON_VERSION
+          # Try npm run rebuild first, fallback to npx
+          echo "Attempting rebuild via npm script..."
+          if npm run rebuild:native 2>/dev/null; then
+            echo "Rebuild via npm script successful"
           else
-            # Standard rebuild
-            echo "Building for ${{ matrix.arch }}..."
-            npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }} --version=$ELECTRON_VERSION
+            echo "npm script failed, trying npx @electron/rebuild..."
+            # Rebuild with explicit Electron version
+            if [[ "${{ matrix.arch }}" == "arm64" && "${{ runner.os }}" == "macOS" ]]; then
+              # Apple Silicon specific rebuild
+              echo "Building for Apple Silicon..."
+              npx --yes @electron/rebuild --verbose --force --arch=arm64 --version=$ELECTRON_VERSION
+            else
+              # Standard rebuild
+              echo "Building for ${{ matrix.arch }}..."
+              npx --yes @electron/rebuild --verbose --force --arch=${{ matrix.arch }} --version=$ELECTRON_VERSION
+            fi
           fi
           
           echo "Native modules rebuilt successfully"
