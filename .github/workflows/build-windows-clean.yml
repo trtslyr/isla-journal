@@ -51,36 +51,56 @@ jobs:
           Write-Host "Installing dependencies without postinstall hooks..."
           Write-Host "Generating fresh package-lock.json..."
           npm install --package-lock-only
-          Write-Host "Installing with fresh lockfile..."
-          npm ci --ignore-scripts
-          Write-Host "Dependencies installed without scripts"
+          Write-Host "Installing with fresh lockfile (no prebuilt binaries)..."
+          # Force npm to not download any precompiled binaries
+          $env:npm_config_build_from_source = "true"
+          $env:npm_config_cache = ""
+          npm ci --ignore-scripts --no-optional
+          Write-Host "Dependencies installed without scripts or prebuilt binaries"
         shell: powershell
       
       - name: Rebuild Native Modules for Windows
         run: |
           Write-Host "Building native modules from source for Windows..."
           
-          Write-Host "Building better-sqlite3..."
+          # Ensure we're building for the correct platform and architecture
+          $env:npm_config_target_platform = "win32"
+          $env:npm_config_target_arch = "x64"  
+          $env:npm_config_build_from_source = "true"
+          $env:npm_config_sqlite3_binary_host_mirror = ""
+          $env:npm_config_electron_cache = ""
+          
+          Write-Host "Platform: win32, Architecture: x64"
+          Write-Host "Force building better-sqlite3 from source..."
           npm rebuild better-sqlite3 --build-from-source --verbose
           
-          Write-Host "Building systeminformation..."
+          Write-Host "Building systeminformation from source..."
           npm rebuild systeminformation --verbose
           
           Write-Host "Running @electron/rebuild for all modules..."
-          npx @electron/rebuild --verbose --force
+          npx @electron/rebuild --verbose --force --arch=x64
           
           Write-Host "Native modules built successfully"
         shell: powershell
       
       - name: Verify Native Modules
         run: |
-          Write-Host "Verifying native module binaries..."
+          Write-Host "Verifying native module binaries for Windows x64..."
           
           # Check better-sqlite3
           if (Test-Path "node_modules\better-sqlite3\build\Release\better_sqlite3.node") {
             Write-Host "SUCCESS: better-sqlite3 binary exists"
             $size = (Get-Item "node_modules\better-sqlite3\build\Release\better_sqlite3.node").Length
             Write-Host "   Size: $size bytes"
+            
+            # Verify it's a Windows binary (PE format)
+            $fileBytes = [System.IO.File]::ReadAllBytes("node_modules\better-sqlite3\build\Release\better_sqlite3.node")
+            if ($fileBytes[0] -eq 0x4D -and $fileBytes[1] -eq 0x5A) {
+              Write-Host "   VERIFIED: Windows PE executable format"
+            } else {
+              Write-Host "   ERROR: Not a Windows binary! May contain Mac artifacts"
+              exit 1
+            }
           } else {
             Write-Host "ERROR: better-sqlite3 binary missing"
             # List what's actually in the build directory
@@ -99,16 +119,16 @@ jobs:
             exit 1
           }
           
-          # Test loading the modules
-          Write-Host "Testing module loading..."
+          # Test loading the modules on Windows
+          Write-Host "Testing module loading on Windows..."
           node -e "
             try {
               const Database = require('better-sqlite3');
-              console.log('SUCCESS: better-sqlite3 loads successfully');
+              console.log('SUCCESS: better-sqlite3 loads successfully on Windows');
               const si = require('systeminformation');
-              console.log('SUCCESS: systeminformation loads successfully');
+              console.log('SUCCESS: systeminformation loads successfully on Windows');
             } catch (error) {
-              console.error('ERROR: Module loading failed:', error.message);
+              console.error('ERROR: Module loading failed on Windows:', error.message);
               process.exit(1);
             }
           "
@@ -117,16 +137,31 @@ jobs:
       - name: Build Application from Source
         run: |
           Write-Host "Building application completely from source..."
-          Write-Host "Building Vite frontend..."
+          
+          # Clean any existing build artifacts first
+          if (Test-Path "dist") { Remove-Item -Path "dist" -Recurse -Force }
+          
+          Write-Host "Building Vite frontend for Windows..."
           npm run build:vite
           
-          Write-Host "Building main process..."
+          Write-Host "Building main process for Windows..."
           npm run build:main
           
-          Write-Host "Building preload script..."  
+          Write-Host "Building preload script for Windows..."  
           npm run build:preload
           
-          Write-Host "Application build completed"
+          # Verify no Mac artifacts in build
+          Write-Host "Checking for any Mac artifacts in build..."
+          $macArtifacts = Get-ChildItem "dist" -Recurse -Include "*.dylib", "*.framework", "*darwin*", "*macos*" -ErrorAction SilentlyContinue
+          if ($macArtifacts.Count -gt 0) {
+            Write-Host "ERROR: Mac artifacts found in build:"
+            $macArtifacts | ForEach-Object { Write-Host "   $_" }
+            exit 1
+          } else {
+            Write-Host "VERIFIED: No Mac artifacts found in build"
+          }
+          
+          Write-Host "Application build completed (Windows-only)"
         shell: powershell
       
       - name: Verify Build Output
