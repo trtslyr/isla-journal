@@ -241,9 +241,46 @@ jobs:
             }
           "
           
-          # Test database functionality - skip in CI due to Node version mismatch
-          echo "Skipping database test in CI environment (Node.js version mismatch known issue)"
-          echo "✓ Database test skipped - will work in packaged app"
+          # Test database functionality with proper error handling
+          node -e "
+            try {
+              console.log('Testing database with Node.js version:', process.version);
+              const Database = require('better-sqlite3');
+              const db = new Database(':memory:');
+              db.exec('CREATE TABLE test (id INTEGER PRIMARY KEY)');
+              db.exec('INSERT INTO test (id) VALUES (1)');
+              const row = db.prepare('SELECT * FROM test WHERE id = ?').get(1);
+              if (row && row.id === 1) {
+                console.log('✓ Database operations work correctly');
+              } else {
+                throw new Error('Database query returned unexpected result');
+              }
+              db.close();
+            } catch (error) {
+              console.error('✗ Database test failed:', error.message);
+              if (error.message.includes('NODE_MODULE_VERSION')) {
+                console.log('This is a Node.js ABI version mismatch - rebuilding...');
+                process.exit(2); // Different exit code for version mismatch
+              }
+              process.exit(1);
+            }
+          " || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 2 ]; then
+              echo "Attempting to fix Node.js version mismatch..."
+              npm rebuild better-sqlite3 --build-from-source
+              # Retry the test
+              node -e "
+                const Database = require('better-sqlite3');
+                const db = new Database(':memory:');
+                console.log('✓ Database test passed after rebuild');
+                db.close();
+              "
+            else
+              echo "Database test failed with non-version error"
+              exit 1
+            fi
+          }
           
           echo "Application tests passed"
       
