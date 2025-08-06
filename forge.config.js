@@ -23,8 +23,8 @@ module.exports = {
   rebuildConfig: {
     // Force rebuild of native modules for target platform
     force: true,
-    // Debug rebuild process
-    debug: true
+    // Use release builds for better performance and compatibility
+    debug: false
   },
   makers: [
     // Windows - Squirrel Installer (.exe)
@@ -72,7 +72,9 @@ module.exports = {
         // Ensure better-sqlite3 is rebuilt for target platform
         unpackDir: 'node_modules',
         // Force rebuild
-        rebuild: true
+        rebuild: true,
+        // Specify modules that need platform-specific rebuilding
+        nativeModules: ['better-sqlite3', 'systeminformation']
       },
     },
     // Fuses are used to enable/disable various Electron functionality
