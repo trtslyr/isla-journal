@@ -28,75 +28,72 @@ jobs:
       
       - name: Setup Windows Build Tools
         run: |
-          echo "Setting up Windows build environment for native modules..."
-          npm install --global windows-build-tools --vs2017 || echo "Build tools already installed"
+          Write-Host "Setting up Windows build environment for native modules..."
+          npm install --global windows-build-tools --vs2017 || Write-Host "Build tools already installed"
         continue-on-error: true
       
       - name: Clean Environment (Remove any artifacts)
         run: |
-          echo "🧹 Ensuring completely clean build environment..."
+          Write-Host "🧹 Ensuring completely clean build environment..."
           if (Test-Path "dist") { Remove-Item -Path "dist" -Recurse -Force }
           if (Test-Path "out") { Remove-Item -Path "out" -Recurse -Force }
           if (Test-Path "node_modules") { Remove-Item -Path "node_modules" -Recurse -Force }
           if (Test-Path "package-lock.json") { Remove-Item -Path "package-lock.json" -Force }
           if (Test-Path ".npm") { Remove-Item -Path ".npm" -Recurse -Force }
-          echo "✅ Environment completely cleaned"
+          Write-Host "✅ Environment completely cleaned"
         shell: powershell
       
       - name: Fresh Install Dependencies (No Postinstall)
         run: |
-          echo "📦 Installing dependencies without postinstall hooks..."
+          Write-Host "📦 Installing dependencies without postinstall hooks..."
           npm install --ignore-scripts
-          echo "✅ Dependencies installed without scripts"
+          Write-Host "✅ Dependencies installed without scripts"
         shell: powershell
       
       - name: Rebuild Native Modules for Windows
         run: |
-          echo "🔨 Building native modules from source for Windows..."
-          echo "Node version: $(node --version)"
-          echo "NPM version: $(npm --version)"
-          echo "Platform: $env:OS"
-          echo "Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "🔨 Building native modules from source for Windows..."
+          Write-Host "Node version: $(node --version)"
+          Write-Host "NPM version: $(npm --version)"
+          Write-Host "Platform: $env:OS"
+          Write-Host "Architecture: $env:PROCESSOR_ARCHITECTURE"
           
-          # Build better-sqlite3 from source for Windows
-          echo "Building better-sqlite3..."
+          Write-Host "Building better-sqlite3..."
           npm rebuild better-sqlite3 --build-from-source --verbose
           
-          # Build systeminformation
-          echo "Building systeminformation..."
+          Write-Host "Building systeminformation..."
           npm rebuild systeminformation --verbose
           
-          # Use @electron/rebuild for all native modules
-          echo "Running @electron/rebuild..."
+          Write-Host "Running @electron/rebuild..."
           npx @electron/rebuild --verbose --force
           
-          echo "✅ Native modules built successfully"
+          Write-Host "✅ Native modules built successfully"
         shell: powershell
       
       - name: Verify Native Modules
         run: |
-          echo "🔍 Verifying native module binaries..."
+          Write-Host "🔍 Verifying native module binaries..."
           
           # Check better-sqlite3
           if (Test-Path "node_modules\better-sqlite3\build\Release\better_sqlite3.node") {
-            echo "✅ better-sqlite3 binary exists"
+            Write-Host "✅ better-sqlite3 binary exists"
             $size = (Get-Item "node_modules\better-sqlite3\build\Release\better_sqlite3.node").Length
-            echo "   Size: $size bytes"
+            Write-Host "   Size: $size bytes"
           } else {
-            echo "❌ better-sqlite3 binary missing"
+            Write-Host "❌ better-sqlite3 binary missing"
             exit 1
           }
           
           # Check systeminformation
           if (Test-Path "node_modules\systeminformation\lib") {
-            echo "✅ systeminformation module exists"
+            Write-Host "✅ systeminformation module exists"
           } else {
-            echo "❌ systeminformation module missing"
+            Write-Host "❌ systeminformation module missing"
             exit 1
           }
           
           # Test loading the modules
-          echo "Testing module loading..."
+          Write-Host "Testing module loading..."
           node -e "
             try {
               const Database = require('better-sqlite3');
@@ -112,80 +109,80 @@ jobs:
       
       - name: Build Application from Source
         run: |
-          echo "🔨 Building application completely from source..."
-          echo "Building Vite frontend..."
+          Write-Host "🔨 Building application completely from source..."
+          Write-Host "Building Vite frontend..."
           npm run build:vite
           
-          echo "Building main process..."
+          Write-Host "Building main process..."
           npm run build:main
           
-          echo "Building preload script..."  
+          Write-Host "Building preload script..."  
           npm run build:preload
           
-          echo "✅ Application build completed"
+          Write-Host "✅ Application build completed"
         shell: powershell
       
       - name: Verify Build Output
         run: |
-          echo "🔍 Verifying build output..."
+          Write-Host "🔍 Verifying build output..."
           
           if (Test-Path "dist\main\index.js") {
-            echo "✅ Main process built: dist\main\index.js"
+            Write-Host "✅ Main process built: dist\main\index.js"
             $size = (Get-Item "dist\main\index.js").Length
-            echo "   Size: $size bytes"
+            Write-Host "   Size: $size bytes"
           } else {
-            echo "❌ Main process missing: dist\main\index.js"
+            Write-Host "❌ Main process missing: dist\main\index.js"
             exit 1
           }
           
           if (Test-Path "dist\preload\index.js") {
-            echo "✅ Preload script built: dist\preload\index.js"
+            Write-Host "✅ Preload script built: dist\preload\index.js"
           } else {
-            echo "❌ Preload script missing: dist\preload\index.js"
+            Write-Host "❌ Preload script missing: dist\preload\index.js"
             exit 1
           }
           
           if (Test-Path "dist\renderer") {
-            echo "✅ Renderer built: dist\renderer"
+            Write-Host "✅ Renderer built: dist\renderer"
           } else {
-            echo "❌ Renderer missing: dist\renderer"
+            Write-Host "❌ Renderer missing: dist\renderer"
             exit 1
           }
         shell: powershell
       
       - name: Generate Icons (Optional)
         run: |
-          echo "🎨 Generating application icons..."
+          Write-Host "🎨 Generating application icons..."
           npm run icons
         continue-on-error: true
         shell: powershell
       
       - name: Package Windows Application
         run: |
-          echo "📦 Packaging Windows application..."
+          Write-Host "📦 Packaging Windows application..."
           npm run make
-          echo "✅ Windows packaging completed"
+          Write-Host "✅ Windows packaging completed"
         shell: powershell
       
       - name: Verify Windows Installer
         run: |
-          echo "🔍 Verifying Windows installer..."
+          Write-Host "🔍 Verifying Windows installer..."
           
           if (Test-Path "out\make\squirrel.windows") {
-            echo "✅ Squirrel installer directory exists"
+            Write-Host "✅ Squirrel installer directory exists"
             $installers = Get-ChildItem "out\make\squirrel.windows" -Recurse -Include "*.exe"
             if ($installers.Count -gt 0) {
-              echo "✅ Windows installer(s) created:"
+              Write-Host "✅ Windows installer(s) created:"
               foreach ($installer in $installers) {
                 $size = $installer.Length
-                echo "   $($installer.FullName) ($size bytes)"
+                Write-Host "   $($installer.FullName) ($size bytes)"
               }
             } else {
-              echo "❌ No .exe installers found"
+              Write-Host "❌ No .exe installers found"
               exit 1
             }
           } else {
-            echo "❌ Squirrel installer directory missing"
+            Write-Host "❌ Squirrel installer directory missing"
             exit 1
           }
         shell: powershell
