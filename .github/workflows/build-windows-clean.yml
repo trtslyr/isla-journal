@@ -142,7 +142,46 @@ jobs:
           if (Test-Path "dist") { Remove-Item -Path "dist" -Recurse -Force }
           
           Write-Host "Building Vite frontend for Windows..."
-          npm run build:vite
+          Write-Host "Current directory: $(pwd)"
+          Write-Host "Checking if src/renderer exists..."
+          if (Test-Path "src\renderer") {
+            Write-Host "SUCCESS: src\renderer directory exists"
+            Get-ChildItem "src\renderer" -Name
+          } else {
+            Write-Host "ERROR: src\renderer directory missing"
+            exit 1
+          }
+          
+          Write-Host "Running Vite build with error handling..."
+          try {
+            npm run build:vite
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "ERROR: Vite build failed with exit code $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "SUCCESS: Vite build completed"
+          } catch {
+            Write-Host "ERROR: Vite build failed with exception: $_"
+            exit 1
+          }
+          
+          # Verify Vite build output before continuing
+          Write-Host "Checking Vite build output..."
+          if (Test-Path "dist\renderer") {
+            Write-Host "SUCCESS: dist\renderer directory exists"
+            $rendererFiles = Get-ChildItem "dist\renderer" -Recurse -File
+            Write-Host "   Files created: $($rendererFiles.Count)"
+            $rendererFiles | ForEach-Object { Write-Host "   - $($_.Name)" }
+          } else {
+            Write-Host "ERROR: Vite build did not create dist\renderer directory"
+            Write-Host "Checking what was actually created in dist..."
+            if (Test-Path "dist") {
+              Get-ChildItem "dist" -Recurse
+            } else {
+              Write-Host "No dist directory exists at all"
+            }
+            exit 1
+          }
           
           Write-Host "Building main process for Windows..."
           npm run build:main
