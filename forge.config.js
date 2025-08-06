@@ -51,15 +51,7 @@ module.exports = {
         name: 'Isla Journal',
         title: 'Isla Journal Installer',
         icon: process.cwd() + '/build/icon.icns',
-        // Add background and additional DMG options
-        background: null, // Disable background to avoid potential issues
-        format: 'UDZO', // Use compressed format
-        // Fallback options to avoid native module issues
-        additionalDMGOptions: {
-          window: {
-            size: { width: 540, height: 380 }
-          }
-        }
+        format: 'UDZO'
       }
     },
     // macOS - ZIP backup
