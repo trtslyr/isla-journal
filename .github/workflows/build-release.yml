@@ -27,6 +27,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Clean any local build artifacts
+        run: |
+          echo "🧹 Removing any local build artifacts that might interfere..."
+          if (Test-Path "dist") { Remove-Item -Path "dist" -Recurse -Force }
+          if (Test-Path "out") { Remove-Item -Path "out" -Recurse -Force }
+          if (Test-Path "node_modules\.cache") { Remove-Item -Path "node_modules\.cache" -Recurse -Force }
+          echo "✅ Clean build environment prepared"
+        shell: powershell
+      
       - name: Setup Windows Build Environment
         run: |
           echo "Setting up Windows build environment for native modules..."
@@ -64,8 +73,14 @@ jobs:
         run: npm run icons
         continue-on-error: true
       
-      - name: Build application
-        run: npm run build
+      - name: Build application from source
+        run: |
+          echo "🔨 Building application completely from source..."
+          echo "Ensuring TypeScript compilation happens on Windows..."
+          npm run build:vite
+          npm run build:main  
+          npm run build:preload
+          echo "✅ Fresh Windows build completed"
       
       - name: Debug build output
         run: |
