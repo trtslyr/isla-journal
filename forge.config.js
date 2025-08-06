@@ -24,7 +24,56 @@ module.exports = {
     // Force rebuild of native modules for target platform
     force: true,
     // Use release builds for better performance and compatibility
-    debug: false
+    debug: false,
+    // Ensure proper cross-platform rebuilding
+    onlyModules: ['better-sqlite3', 'systeminformation']
+  },
+  hooks: {
+    packageAfterCopy: async (forgeConfig, buildPath, electronVersion, platform, arch) => {
+      console.log(`🔧 PackageAfterCopy hook: Rebuilding for ${platform}-${arch}`);
+      console.log(`🔧 Build path: ${buildPath}`);
+      
+      const { execSync } = require('child_process');
+      const path = require('path');
+      const fs = require('fs');
+      
+      // Clean better-sqlite3 build directory in the copied app
+      const betterSqliteBuildPath = path.join(buildPath, 'node_modules', 'better-sqlite3', 'build');
+      if (fs.existsSync(betterSqliteBuildPath)) {
+        fs.rmSync(betterSqliteBuildPath, { recursive: true, force: true });
+        console.log('🧹 Cleaned better-sqlite3 build directory in copied app');
+      }
+      
+      // Also clean the bin directory with wrong platform binaries
+      const betterSqliteBinPath = path.join(buildPath, 'node_modules', 'better-sqlite3', 'bin');
+      if (fs.existsSync(betterSqliteBinPath)) {
+        fs.rmSync(betterSqliteBinPath, { recursive: true, force: true });
+        console.log('🧹 Cleaned better-sqlite3 bin directory');
+      }
+      
+      // Rebuild for target platform in the copied app directory
+      try {
+        const env = {
+          ...process.env,
+          npm_config_target_platform: platform,
+          npm_config_target_arch: arch,
+          npm_config_runtime: 'electron',
+          npm_config_build_from_source: 'true',
+          npm_config_electron_version: electronVersion
+        };
+        
+        console.log(`🔨 Rebuilding native modules for ${platform}-${arch} in copied app...`);
+        execSync(`npx @electron/rebuild --version=${electronVersion} --platform=${platform} --arch=${arch}`, { 
+          stdio: 'inherit',
+          cwd: buildPath,
+          env
+        });
+        console.log(`✅ Successfully rebuilt for ${platform}-${arch}`);
+      } catch (error) {
+        console.error(`❌ Failed to rebuild for ${platform}-${arch}:`, error.message);
+        throw error;
+      }
+    }
   },
   makers: [
     // Windows - Squirrel Installer (.exe)
