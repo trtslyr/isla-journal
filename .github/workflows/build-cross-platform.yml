@@ -451,16 +451,19 @@ jobs:
           retention-days: 30
           compression-level: 6
       
+      - name: List files before upload
+        shell: bash
+        run: |
+          echo "Contents of out directory:"
+          find out -type f -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.zip" -o -name "*.app" | head -20
+          
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: |
-            out/*.exe
-            out/*.msi
-            out/*.dmg
-            out/*.zip
-            out/*.app
+          files: out/*
           tag_name: ${{ github.ref_name }}
           name: "Isla Journal ${{ github.ref_name }} - NUCLEAR Option"
           body: |
@@ -481,7 +484,8 @@ jobs:
             **Click the installer file below for your platform and you're ready to go!** 🎉
           draft: false
           prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: false
+          generate_release_notes: false
       
       - name: Build Summary
         shell: bash
