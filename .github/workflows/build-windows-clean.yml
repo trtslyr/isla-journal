@@ -24,7 +24,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # Don't use npm cache to avoid lockfile conflicts
       
       - name: Setup Windows Build Tools
         run: |
@@ -46,7 +46,10 @@ jobs:
       - name: Fresh Install Dependencies (No Postinstall)
         run: |
           Write-Host "Installing dependencies without postinstall hooks..."
-          npm install --ignore-scripts
+          Write-Host "Generating fresh package-lock.json..."
+          npm install --package-lock-only
+          Write-Host "Installing with fresh lockfile..."
+          npm ci --ignore-scripts
           Write-Host "Dependencies installed without scripts"
         shell: powershell
       

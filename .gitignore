@@ -3,3 +3,4 @@ release/
 dist/
 
 out/windows-installer.zip
+out/

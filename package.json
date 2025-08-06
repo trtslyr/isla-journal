@@ -18,7 +18,7 @@
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "npx @electron/rebuild",
     "rebuild:clean": "npm run clean:modules && npm install --ignore-scripts && npm run rebuild",
-    "clean:modules": "rimraf node_modules package-lock.json",
+    "clean:modules": "rm -rf node_modules package-lock.json || rmdir /s node_modules & del package-lock.json",
     "binaries": "node scripts/download-precompiled-binaries.js",
     "binaries:all": "node scripts/download-precompiled-binaries.js --all",
     "icons": "node scripts/generate-icons.js",
@@ -60,7 +60,6 @@
     "electron": "^27.0.0",
     "electron-builder": "^26.0.12",
     "electron-icon-builder": "^2.0.1",
-    "rimraf": "^5.0.5",
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },
