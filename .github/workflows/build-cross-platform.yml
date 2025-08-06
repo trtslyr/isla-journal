@@ -84,19 +84,15 @@ jobs:
             echo "Setting up macOS build tools..."
             # Ensure Xcode command line tools are available
             xcode-select --install 2>/dev/null || echo "Xcode tools already installed"
-            # Configure Python for node-gyp
-            npm config set python python3
-            # Ensure we use the system Python, not Homebrew's
+            # Set Python path for node-gyp via environment
             export PYTHON=$(which python3)
             echo "Python path: $PYTHON"
             python3 --version
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
             echo "Setting up Windows build tools..."
-            # Use the pre-installed Visual Studio on GitHub runners
-            npm config set msvs_version 2022
-            npm config set python python3.exe
-            # Ensure Python is in PATH
+            # Set Python path for node-gyp via environment  
             export PYTHON=$(which python3 || which python)
+            echo "Python path: $PYTHON"
           fi
           echo "Build tools configured"
       
