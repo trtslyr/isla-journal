@@ -57,36 +57,8 @@ const createWindow = (): void => {
     mainWindow.loadURL('http://localhost:5173')
     // mainWindow.webContents.openDevTools() // Commented out for cleaner dev experience
   } else {
-    // In packaged apps, files are in the asar archive at dist/renderer/
-    console.log('🌐 [Main] __dirname:', __dirname)
-    console.log('🌐 [Main] process.platform:', process.platform)
-    console.log('🌐 [Main] process.resourcesPath:', process.resourcesPath || 'undefined')
-    
     const rendererPath = join(__dirname, '../dist/renderer/index.html')
-    console.log('🌐 [Main] Trying renderer path:', rendererPath)
-    console.log('🌐 [Main] Path exists:', require('fs').existsSync(rendererPath))
-    
-    // Try alternative paths for Windows
-    if (!require('fs').existsSync(rendererPath)) {
-      const altPath1 = join(__dirname, '../../dist/renderer/index.html')
-      const altPath2 = join(__dirname, '../renderer/index.html')
-      console.log('🌐 [Main] Trying alt path 1:', altPath1, 'exists:', require('fs').existsSync(altPath1))
-      console.log('🌐 [Main] Trying alt path 2:', altPath2, 'exists:', require('fs').existsSync(altPath2))
-      
-      if (require('fs').existsSync(altPath1)) {
-        console.log('🌐 [Main] Using altPath1')
-        mainWindow.loadFile(altPath1)
-      } else if (require('fs').existsSync(altPath2)) {
-        console.log('🌐 [Main] Using altPath2')
-        mainWindow.loadFile(altPath2)
-      } else {
-        console.error('❌ [Main] No valid renderer path found!')
-        mainWindow.loadURL('data:text/html,<h1>Error: Renderer not found</h1><p>Check console for paths</p>')
-      }
-    } else {
-      console.log('🌐 [Main] Using primary path')
-      mainWindow.loadFile(rendererPath)
-    }
+    mainWindow.loadFile(rendererPath)
   }
 
   // Show window when ready to prevent visual flash

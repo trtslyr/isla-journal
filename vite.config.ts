@@ -26,5 +26,6 @@ export default defineConfig({
     host: 'localhost',
     port: 5173
   },
-  publicDir: resolve(__dirname, 'build')
+  publicDir: resolve(__dirname, 'build'),
+  copyPublicDir: true
 }) 
