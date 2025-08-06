@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
       
       - name: Install dependencies
@@ -40,7 +40,11 @@ jobs:
           echo "Verifying better-sqlite3 binary..."
           if (Test-Path "node_modules\better-sqlite3\build\Release\better_sqlite3.node") {
             echo "✅ better-sqlite3 binary exists"
-            file node_modules\better-sqlite3\build\Release\better_sqlite3.node 2>$null || echo "File command not available"
+            if (Get-Command file -ErrorAction SilentlyContinue) {
+              file node_modules\better-sqlite3\build\Release\better_sqlite3.node
+            } else {
+              echo "File command not available - binary exists but cannot check type"
+            }
           } else {
             echo "❌ better-sqlite3 binary missing"
             exit 1
