@@ -7,13 +7,65 @@ import os from 'os'
 const isDev = process.env.NODE_ENV === 'development' && !app.isPackaged
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
-import { DeviceDetectionService } from './services/deviceDetection'
 import { contentService } from './services/contentService'
+
+// Conditionally import DeviceDetectionService to prevent Wine crashes
+let DeviceDetectionService: any
+try {
+  const deviceModule = require('./services/deviceDetection')
+  DeviceDetectionService = deviceModule.DeviceDetectionService
+} catch (error) {
+  console.log('🍷 [Main] DeviceDetectionService unavailable in Wine environment - using fallback')
+  // Create a mock DeviceDetectionService for Wine compatibility
+  DeviceDetectionService = class {
+    static getInstance() {
+      return {
+        getRecommendedModel: async () => ({
+          modelName: 'llama3.2:1b',
+          displayName: 'Llama 3.2 1B (Fallback)',
+          minMemory: 2,
+          description: 'Lightweight model for Wine/Windows compatibility',
+          downloadSize: '1.3GB',
+          compatiblePlatforms: ['windows', 'macos', 'linux'],
+          compatibleArchitectures: ['x64', 'arm64'],
+          isOptimized: false
+        })
+      }
+    }
+  }
+}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
   app.quit()
 }
+
+// Global error handlers to prevent crashes in Wine/Windows environment
+process.on('uncaughtException', (error) => {
+  console.error('🚨 [Main] Uncaught Exception:', error)
+  const errorMsg = error.message || String(error)
+  
+  // Don't crash for known Wine/Windows compatibility issues
+  if (errorMsg.includes('EBADF') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('ENOTFOUND')) {
+    console.log('🍷 [Main] Wine/Network error caught - continuing without crashing')
+    return // Don't crash the app
+  }
+  
+  // For other critical errors, still crash
+  console.error('💥 [Main] Critical error - app will exit')
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 [Main] Unhandled Rejection at:', promise, 'reason:', reason)
+  const reasonMsg = reason instanceof Error ? reason.message : String(reason)
+  
+  // Don't crash for known Wine/Windows compatibility issues
+  if (reasonMsg.includes('EBADF') || reasonMsg.includes('ECONNREFUSED') || reasonMsg.includes('ENOTFOUND')) {
+    console.log('🍷 [Main] Wine/Network rejection caught - continuing without crashing')
+    return // Don't crash the app
+  }
+})
 
 let mainWindow: BrowserWindow | null = null
 
