@@ -89,8 +89,11 @@ jobs:
           npm_config_target_arch: ${{ matrix.arch }}
           npm_config_build_from_source: true
           npm_config_electron_cache: ""
+          npm_config_cache: ""
         run: |
           echo "Building native modules from source for ${{ matrix.platform }}-${{ matrix.arch }}"
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
           
           # Ensure Electron is installed before rebuilding
           if ! npm list electron >/dev/null 2>&1; then
@@ -98,15 +101,24 @@ jobs:
             npm install electron
           fi
           
-          # Use different rebuild approaches per platform
+          # Get Electron version for proper rebuild
+          ELECTRON_VERSION=$(npm list electron --depth=0 | grep electron@ | sed 's/.*electron@//' | sed 's/ .*//')
+          echo "Electron version: $ELECTRON_VERSION"
+          
+          # Clean any existing native builds to prevent version conflicts
+          echo "Cleaning existing native module builds..."
+          find node_modules -name "*.node" -delete 2>/dev/null || true
+          find node_modules -path "*/build/Release" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # Rebuild with explicit Electron version
           if [[ "${{ matrix.arch }}" == "arm64" && "${{ runner.os }}" == "macOS" ]]; then
             # Apple Silicon specific rebuild
             echo "Building for Apple Silicon..."
-            npx @electron/rebuild --verbose --force --arch=arm64
+            npx @electron/rebuild --verbose --force --arch=arm64 --version=$ELECTRON_VERSION
           else
             # Standard rebuild
             echo "Building for ${{ matrix.arch }}..."
-            npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }}
+            npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }} --version=$ELECTRON_VERSION
           fi
           
           echo "Native modules rebuilt successfully"
