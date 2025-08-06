@@ -71,6 +71,20 @@ const createWindow = (): void => {
     
     console.log('🌐 [Main] Platform:', process.platform)
     console.log('🌐 [Main] Loading renderer from:', rendererPath)
+    
+    // Add error handling for renderer loading
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('❌ [Main] Failed to load:', validatedURL, 'Error:', errorDescription)
+    })
+    
+    mainWindow.webContents.on('did-finish-load', () => {
+      console.log('✅ [Main] Renderer loaded successfully')
+    })
+    
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      console.log(`🔍 [Renderer] Console ${level}:`, message, `(${sourceId}:${line})`)
+    })
+    
     mainWindow.loadFile(rendererPath)
   }
 
