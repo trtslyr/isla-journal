@@ -13,6 +13,7 @@
     "package": "npm run build && electron-forge package",
     "make": "npm run build && electron-forge make",
     "make:windows": "npm run build && electron-forge make --platform=win32",
+    "make:mac-zip": "npm run build && electron-forge make --targets=@electron-forge/maker-zip --platform=darwin",
     "make:all": "npm run build && electron-forge make --platform=win32 --platform=darwin --platform=linux",
     "publish": "npm run build && electron-forge publish",
     "postinstall": "npm run setup:platform",
