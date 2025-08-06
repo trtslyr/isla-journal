@@ -2,4 +2,4 @@ node_modules
 release/
 dist/
 
-out/
+out/windows-installer.zip
