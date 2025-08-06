@@ -57,7 +57,20 @@ const createWindow = (): void => {
     mainWindow.loadURL('http://localhost:5173')
     // mainWindow.webContents.openDevTools() // Commented out for cleaner dev experience
   } else {
-    const rendererPath = join(__dirname, '../dist/renderer/index.html')
+    // Platform-specific path handling for packaged apps
+    let rendererPath: string
+    
+    if (process.platform === 'win32') {
+      // Windows needs different path resolution in asar
+      const { app } = require('electron')
+      rendererPath = join(app.getAppPath(), 'dist', 'renderer', 'index.html')
+    } else {
+      // Mac/Linux use relative path
+      rendererPath = join(__dirname, '../dist/renderer/index.html')
+    }
+    
+    console.log('🌐 [Main] Platform:', process.platform)
+    console.log('🌐 [Main] Loading renderer from:', rendererPath)
     mainWindow.loadFile(rendererPath)
   }
 
