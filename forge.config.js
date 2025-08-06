@@ -30,17 +30,26 @@ module.exports = {
   },
   // Removed cross-compilation hooks - building natively on each platform instead
   makers: [
-    // Windows - Squirrel Installer (.exe)
+    // Windows - NSIS Installer (.exe) - cleaner for distribution
     {
-      name: '@electron-forge/maker-squirrel',
+      name: '@electron-forge/maker-wix',
       platforms: ['win32'],
       config: {
-        name: 'isla_journal',
-        authors: 'Taylor Wall',
+        name: 'Isla Journal',
+        manufacturer: 'Taylor Wall',
         description: 'AI-powered offline journal and writing companion',
-        setupExe: 'IslaJournalSetup.exe',
-        setupIcon: process.cwd() + '/build/icon.ico'
-      },
+        exe: 'isla-journal',
+        programFilesFolderName: 'Isla Journal',
+        shortName: 'IslaJournal',
+        version: '0.1.0',
+        ui: {
+          chooseDirectory: true,
+          images: {
+            background: null,
+            banner: null
+          }
+        }
+      }
     },
     // macOS - DMG installer
     {
