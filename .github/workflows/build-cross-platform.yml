@@ -451,6 +451,36 @@ jobs:
           retention-days: 30
           compression-level: 6
       
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            out/**/*.exe
+            out/**/*.msi
+            out/**/*.dmg
+            out/**/*.zip
+            out/**/*.app
+          tag_name: ${{ github.ref_name }}
+          name: "Isla Journal ${{ github.ref_name }}"
+          body: |
+            🚀 **Isla Journal ${{ github.ref_name }}** - Cross-Platform Release
+            
+            📦 **Downloads for Your Platform:**
+            - **Windows**: Download the `.exe` installer
+            - **Mac Intel**: Download the `.dmg` installer  
+            - **Mac Apple Silicon**: Download the `.dmg` installer
+            
+            🔥 **Features:**
+            - AI-powered offline journal and writing companion
+            - Local Ollama integration for privacy
+            - Cross-platform Electron application
+            - Professional installers for all platforms
+            
+            **Ready for immediate use!** 🎉
+          draft: false
+          prerelease: false
+      
       - name: Build Summary
         shell: bash
         run: |
