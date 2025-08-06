@@ -44,10 +44,14 @@ const createWindow = (): void => {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, '../preload/index.js'),
-      // Suppress development security warnings (these are false positives from Electron Forge)
+      // Platform and environment-specific settings
       ...(isDev && {
-        webSecurity: true, // Explicitly enable web security
-        allowRunningInsecureContent: false // Explicitly disable insecure content
+        webSecurity: true, // Explicitly enable web security in dev
+        allowRunningInsecureContent: false // Explicitly disable insecure content in dev
+      }),
+      ...(!isDev && process.platform === 'win32' && {
+        webSecurity: false, // Disable web security for Windows production builds
+        allowRunningInsecureContent: true // Allow local content loading on Windows
       })
     }
   })
