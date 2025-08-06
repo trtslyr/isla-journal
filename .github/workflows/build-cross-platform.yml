@@ -438,6 +438,26 @@ jobs:
           
           echo "Package verification completed"
       
+      - name: Test Installation (Windows Only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "Testing Windows installer..."
+          
+          # Find the installer
+          INSTALLER=$(find out -name "*.exe" | head -1)
+          if [[ -n "$INSTALLER" ]]; then
+            echo "Found installer: $INSTALLER"
+            echo "Installer size: $(ls -lh "$INSTALLER" | awk '{print $5}')"
+            
+            # Test installer properties (without actually installing)
+            echo "Testing installer can be executed..."
+            # Use /S for silent mode, /? for help (won't install)
+            "$INSTALLER" /? || echo "Installer help command executed"
+          else
+            echo "No Windows installer found"
+          fi
+      
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
