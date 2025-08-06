@@ -108,7 +108,12 @@ jobs:
           # Clean any existing native builds to prevent version conflicts
           echo "Cleaning existing native module builds..."
           find node_modules -name "*.node" -delete 2>/dev/null || true
-          find node_modules -path "*/build/Release" -type d -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -path "*/build" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # Force reinstall of native modules to ensure clean state
+          echo "Reinstalling native modules..."
+          npm uninstall better-sqlite3 systeminformation
+          npm install better-sqlite3 systeminformation --build-from-source
           
           # Rebuild with explicit Electron version
           if [[ "${{ matrix.arch }}" == "arm64" && "${{ runner.os }}" == "macOS" ]]; then
