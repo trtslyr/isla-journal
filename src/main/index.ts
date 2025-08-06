@@ -3,8 +3,8 @@ import { readFile, writeFile, readdir, stat, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import path, { join, normalize, resolve } from 'path'
 import os from 'os'
-// Inline isDev utility to avoid Windows path resolution issues
-const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV
+// Fixed isDev detection for packaged apps
+const isDev = process.env.NODE_ENV === 'development' && !app.isPackaged
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { DeviceDetectionService } from './services/deviceDetection'
@@ -44,14 +44,16 @@ const createWindow = (): void => {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, '../preload/index.js'),
-      // Platform and environment-specific settings
+      // Fixed platform and environment-specific settings
       ...(isDev && {
-        webSecurity: true, // Explicitly enable web security in dev
-        allowRunningInsecureContent: false // Explicitly disable insecure content in dev
+        webSecurity: true, // Enable web security in dev
+        allowRunningInsecureContent: false
       }),
-      ...(!isDev && process.platform === 'win32' && {
-        webSecurity: false, // Disable web security for Windows production builds
-        allowRunningInsecureContent: true // Allow local content loading on Windows
+      ...(!isDev && {
+        webSecurity: false, // Disable web security for packaged apps (all platforms)
+        allowRunningInsecureContent: true, // Allow local file loading
+        enableRemoteModule: false, // Security: disable remote module
+        nodeIntegrationInWorker: false // Security: disable node in workers
       })
     }
   })
@@ -61,24 +63,33 @@ const createWindow = (): void => {
     mainWindow.loadURL('http://localhost:5173')
     // mainWindow.webContents.openDevTools() // Commented out for cleaner dev experience
   } else {
-    // Platform-specific path handling for packaged apps
+    // Fixed cross-platform path handling for packaged apps
     let rendererPath: string
     
-    if (process.platform === 'win32') {
-      // Windows needs different path resolution in asar
-      const { app } = require('electron')
-      rendererPath = join(app.getAppPath(), 'dist', 'renderer', 'index.html')
-    } else {
-      // Mac/Linux use relative path
-      rendererPath = join(__dirname, '../dist/renderer/index.html')
-    }
+    // Use consistent relative path for all platforms
+    // __dirname points to dist/main, so we need ../renderer/index.html
+    rendererPath = join(__dirname, '../renderer/index.html')
     
     console.log('🌐 [Main] Platform:', process.platform)
+    console.log('🌐 [Main] __dirname:', __dirname)
     console.log('🌐 [Main] Loading renderer from:', rendererPath)
+    console.log('🌐 [Main] Renderer exists:', require('fs').existsSync(rendererPath))
+    console.log('🌐 [Main] App path:', app.getAppPath())
     
     // Add error handling for renderer loading
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
       console.error('❌ [Main] Failed to load:', validatedURL, 'Error:', errorDescription)
+      console.error('❌ [Main] Error code:', errorCode)
+      
+      // Try alternative path on Windows if first attempt fails
+      if (process.platform === 'win32' && errorCode === -6) { // ERR_FILE_NOT_FOUND
+        const fallbackPath = join(app.getAppPath(), 'dist', 'renderer', 'index.html')
+        console.log('🔄 [Main] Trying fallback path:', fallbackPath)
+        console.log('🔄 [Main] Fallback exists:', require('fs').existsSync(fallbackPath))
+        if (require('fs').existsSync(fallbackPath)) {
+          mainWindow.loadFile(fallbackPath)
+        }
+      }
     })
     
     mainWindow.webContents.on('did-finish-load', () => {

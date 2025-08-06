@@ -13,7 +13,12 @@ module.exports = {
     // Icon configuration for all platforms
     icon: './build/icon', // Will use icon.ico, icon.icns, icon.png automatically
     // Force icon usage
-    overwrite: true
+    overwrite: true,
+    // ASAR unpacking for native modules and renderer assets
+    asarUnpack: [
+      '**/node_modules/better-sqlite3/**/*',
+      '**/node_modules/systeminformation/**/*'
+    ]
   },
   rebuildConfig: {
     // Force rebuild of native modules for target platform
