@@ -1,8 +1,21 @@
 {
-  "extends": "./tsconfig.node.json",
   "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
     "outDir": "dist/preload",
-    "rootDir": "src/preload"
+    "rootDir": "src/preload",
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": false
   },
   "include": ["src/preload/**/*"],
   "exclude": ["src/preload/**/*.test.ts", "src/preload/**/*.spec.ts"]
