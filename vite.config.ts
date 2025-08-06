@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -11,21 +12,32 @@ export default defineConfig({
     outDir: '../../dist/renderer',
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(__dirname, 'src/renderer/index.html')
-    }
+      input: resolve(process.cwd(), 'src/renderer/index.html')
+    },
+    // Ensure build works on Windows
+    target: 'esnext',
+    minify: 'esbuild',
+    sourcemap: false
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
-      '@main': resolve(__dirname, 'src/main'),
-      '@renderer': resolve(__dirname, 'src/renderer'),
-      '@shared': resolve(__dirname, 'src/shared')
+      '@': resolve(process.cwd(), 'src'),
+      '@main': resolve(process.cwd(), 'src/main'),
+      '@renderer': resolve(process.cwd(), 'src/renderer'),
+      '@shared': resolve(process.cwd(), 'src/shared')
     }
   },
   server: {
     host: 'localhost',
     port: 5173
   },
-  publicDir: resolve(__dirname, 'build'),
-  copyPublicDir: true
+  publicDir: resolve(process.cwd(), 'build'),
+  copyPublicDir: true,
+  // Windows-specific optimizations
+  optimizeDeps: {
+    include: ['react', 'react-dom']
+  },
+  esbuild: {
+    logOverride: { 'this-is-undefined-in-esm': 'silent' }
+  }
 }) 
