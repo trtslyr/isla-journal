@@ -18,6 +18,19 @@ module.exports = {
     asarUnpack: [
       '**/node_modules/better-sqlite3/build/Release/*.node',
       '**/node_modules/systeminformation/lib/*.node'
+    ],
+    // Exclude bloat from builds - THIS is what controls Electron Forge
+    ignore: [
+      /node_modules\/(?!better-sqlite3|systeminformation|electron-squirrel-startup|chokidar|cors|dotenv|express|ollama|stripe|uuid)/,
+      /\.d\.ts$/,
+      /\/test\//,
+      /\/tests\//,
+      /\/docs\//,
+      /\/example\//,
+      /\/examples\//,
+      /\.md$/,
+      /LICENSE/,
+      /README/
     ]
   },
   rebuildConfig: {
