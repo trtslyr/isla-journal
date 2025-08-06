@@ -193,18 +193,18 @@ jobs:
           fi
           echo "✓ Frontend build successful"
           
-          # Build main process
+          # Build main process with direct TypeScript compilation
           echo "Building main process..."
-          npm run build:main
+          npx tsc src/main/index.ts --outDir dist/main --target ES2020 --module CommonJS --esModuleInterop --skipLibCheck --allowJs
           if [[ ! -f "dist/main/index.js" ]]; then
             echo "✗ Main process build failed"
             exit 1
           fi
           echo "✓ Main process build successful"
           
-          # Build preload
+          # Build preload with direct TypeScript compilation  
           echo "Building preload script..."
-          npm run build:preload
+          npx tsc src/preload/index.ts --outDir dist/preload --target ES2020 --module CommonJS --esModuleInterop --skipLibCheck
           if [[ ! -f "dist/preload/index.js" ]]; then
             echo "✗ Preload build failed"
             exit 1
