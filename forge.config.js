@@ -14,35 +14,24 @@ module.exports = {
     icon: process.cwd() + '/build/icon', // Will use icon.ico, icon.icns, icon.png automatically
     // Force icon usage
     overwrite: true,
-    // ASAR unpacking for ESSENTIAL native modules only
+    // ASAR unpacking for native modules and dependencies
     asarUnpack: [
-      '**/node_modules/better-sqlite3/build/**/*',
-      '**/node_modules/systeminformation/lib/**/*'
+      '**/node_modules/better-sqlite3/**/*',
+      '**/node_modules/systeminformation/**/*'
     ],
-    // Aggressive size optimization
+    // Safe size optimization (keep what's needed for native modules)
     ignore: [
-      // Development files
-      /\.git/,
+      // Only ignore truly unnecessary files
       /node_modules\/.*\/test/,
       /node_modules\/.*\/tests/,
       /node_modules\/.*\/docs/,
       /node_modules\/.*\/examples/,
       /node_modules\/.*\/\.github/,
-      /node_modules\/.*\/\.nyc_output/,
       /node_modules\/.*\/coverage/,
-      // Development dependencies (these shouldn't be in production anyway)
-      /node_modules\/@types/,
-      /node_modules\/typescript/,
-      /node_modules\/vite/,
-      /node_modules\/@vitejs/,
-      /node_modules\/@electron-forge/,
-      /node_modules\/electron$/,
-      // Large unused files
-      /\.map$/,
-      /\.d\.ts$/,
+      // Keep build tools that native modules might need
+      /\.md$/,
       /README/i,
-      /CHANGELOG/i,
-      /\.md$/
+      /CHANGELOG/i
     ]
   },
   rebuildConfig: {

@@ -95,24 +95,16 @@
     },
     "files": [
       "dist/**/*",
+      "node_modules/**/*",
       "package.json",
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/systeminformation/**/*",
-      "node_modules/react/**/*",
-      "node_modules/react-dom/**/*",
-      "node_modules/uuid/**/*",
-      "node_modules/stripe/**/*",
-      "node_modules/ollama/**/*",
-      "node_modules/chokidar/**/*",
-      "node_modules/cors/**/*",
-      "node_modules/dotenv/**/*",
-      "node_modules/express/**/*",
-      "node_modules/electron-squirrel-startup/**/*",
       "!node_modules/**/*.{md,txt,license,LICENSE}",
       "!node_modules/**/test/**/*",
+      "!node_modules/**/tests/**/*",
       "!node_modules/**/*.d.ts",
       "!node_modules/**/docs/**/*",
-      "!node_modules/**/examples/**/*"
+      "!node_modules/**/examples/**/*",
+      "!node_modules/**/.github/**/*",
+      "!node_modules/**/coverage/**/*"
     ],
     "extraMetadata": {
       "main": "dist/main/index.js"
