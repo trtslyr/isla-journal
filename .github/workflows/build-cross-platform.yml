@@ -70,23 +70,45 @@ jobs:
           npm ci
           echo "Dependencies installed successfully"
       
-      - name: Setup Platform Environment
+      - name: Setup Build Tools
         shell: bash
         run: |
-          echo "Setting up build environment for ${{ matrix.platform }}-${{ matrix.arch }}"
-          export npm_config_target_platform="${{ matrix.platform }}"
-          export npm_config_target_arch="${{ matrix.arch }}"
-          export npm_config_build_from_source=true
-          export npm_config_electron_cache=""
-          echo "Environment configured"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "Setting up macOS build tools..."
+            xcode-select --install 2>/dev/null || echo "Xcode tools already installed"
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "Setting up Windows build tools..."
+            # Windows build tools are included in the runner
+          fi
+          echo "Build tools ready"
       
       - name: Rebuild Native Modules
         shell: bash
+        env:
+          npm_config_target_platform: ${{ matrix.platform }}
+          npm_config_target_arch: ${{ matrix.arch }}
+          npm_config_build_from_source: true
+          npm_config_electron_cache: ""
         run: |
           echo "Building native modules from source for ${{ matrix.platform }}-${{ matrix.arch }}"
+          
           # Ensure Electron is installed before rebuilding
-          npm list electron || npm install electron
-          npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }}
+          if ! npm list electron >/dev/null 2>&1; then
+            echo "Installing electron..."
+            npm install electron
+          fi
+          
+          # Use different rebuild approaches per platform
+          if [[ "${{ matrix.arch }}" == "arm64" && "${{ runner.os }}" == "macOS" ]]; then
+            # Apple Silicon specific rebuild
+            echo "Building for Apple Silicon..."
+            npx @electron/rebuild --verbose --force --arch=arm64
+          else
+            # Standard rebuild
+            echo "Building for ${{ matrix.arch }}..."
+            npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }}
+          fi
+          
           echo "Native modules rebuilt successfully"
       
       - name: Verify Native Modules
@@ -94,11 +116,16 @@ jobs:
         run: |
           echo "Verifying native modules for ${{ matrix.platform }}-${{ matrix.arch }}"
           
-          # Test better-sqlite3
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            test -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" && echo "✓ better-sqlite3 binary exists" || (echo "✗ better-sqlite3 binary missing" && exit 1)
+          # Test better-sqlite3 binary exists
+          SQLITE_BINARY="node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+          if [[ -f "$SQLITE_BINARY" ]]; then
+            echo "✓ better-sqlite3 binary exists"
+            ls -la "$SQLITE_BINARY"
           else
-            test -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" && echo "✓ better-sqlite3 binary exists" || (echo "✗ better-sqlite3 binary missing" && exit 1)
+            echo "✗ better-sqlite3 binary missing"
+            echo "Contents of build directory:"
+            ls -la node_modules/better-sqlite3/build/ 2>/dev/null || echo "No build directory"
+            exit 1
           fi
           
           # Test loading
@@ -212,22 +239,41 @@ jobs:
         run: |
           echo "Verifying ${{ matrix.name }} package..."
           
+          # Check if out/make directory exists
+          if [[ ! -d "out/make" ]]; then
+            echo "✗ No out/make directory found"
+            echo "Contents of out directory:"
+            ls -la out/ 2>/dev/null || echo "No out directory"
+            exit 1
+          fi
+          
+          # Platform-specific installer verification
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            if ls out/make/squirrel.windows/**/*.exe >/dev/null 2>&1; then
+            # Look for Windows installers
+            INSTALLERS=$(find out/make -name "*.exe" 2>/dev/null || echo "")
+            if [[ -n "$INSTALLERS" ]]; then
               echo "✓ Windows installer(s) created:"
-              ls -la out/make/squirrel.windows/**/*.exe
+              echo "$INSTALLERS" | while read installer; do
+                ls -la "$installer"
+              done
             else
-              echo "✗ No Windows installers found"
-              ls -la out/make/ || echo "No out/make directory"
+              echo "✗ No Windows .exe installers found"
+              echo "Contents of out/make:"
+              find out/make -type f 2>/dev/null || echo "No files in out/make"
               exit 1
             fi
           else
-            if ls out/make/**/*.{dmg,zip} >/dev/null 2>&1; then
+            # Look for macOS installers
+            INSTALLERS=$(find out/make -name "*.dmg" -o -name "*.zip" 2>/dev/null || echo "")
+            if [[ -n "$INSTALLERS" ]]; then
               echo "✓ macOS installer(s) created:"
-              ls -la out/make/**/*.{dmg,zip}
+              echo "$INSTALLERS" | while read installer; do
+                ls -la "$installer"
+              done
             else
-              echo "✗ No macOS installers found"
-              ls -la out/make/ || echo "No out/make directory"
+              echo "✗ No macOS .dmg or .zip installers found"
+              echo "Contents of out/make:"
+              find out/make -type f 2>/dev/null || echo "No files in out/make"
               exit 1
             fi
           fi
