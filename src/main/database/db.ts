@@ -5,6 +5,31 @@ import { existsSync, mkdirSync, unlinkSync } from 'fs'
 import path from 'path'
 import os from 'os'
 
+// Safe console wrapper for Windows compatibility
+const safeConsole = {
+  log: (message: string) => {
+    try {
+      console.log(message)
+    } catch (e) {
+      // Console failed - continue silently on Windows
+    }
+  },
+  warn: (message: string) => {
+    try {
+      console.warn(message)
+    } catch (e) {
+      // Console failed - continue silently on Windows
+    }
+  },
+  error: (message: string, error?: any) => {
+    try {
+      console.error(message, error)
+    } catch (e) {
+      // Console failed - continue silently on Windows
+    }
+  }
+}
+
 export interface FileRecord {
   id: number
   path: string
@@ -136,12 +161,12 @@ class IslaDatabase {
       }
       
       const dbPath = normalize(join(dbDir, 'isla.db'))
-      console.log(`🗄️ [Database] Platform: ${os.platform()}, DB Path: ${dbPath}`)
+      safeConsole.log(`🗄️ [Database] Platform: ${os.platform()}, DB Path: ${dbPath}`)
       
       return dbPath
     } catch (error) {
       // Fallback to home directory if Electron userData fails
-      console.warn(`⚠️ [Database] Electron userData failed, using fallback: ${error}`)
+      safeConsole.warn(`⚠️ [Database] Electron userData failed, using fallback: ${error}`)
       
       const homeDir = os.homedir()
       const fallbackDir = normalize(join(homeDir, '.isla-journal', 'database'))
