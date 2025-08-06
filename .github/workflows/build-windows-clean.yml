@@ -78,11 +78,11 @@ jobs:
           
           # Check better-sqlite3
           if (Test-Path "node_modules\better-sqlite3\build\Release\better_sqlite3.node") {
-            Write-Host "✅ SUCCESS: better-sqlite3 binary exists"
+            Write-Host "SUCCESS: better-sqlite3 binary exists"
             $size = (Get-Item "node_modules\better-sqlite3\build\Release\better_sqlite3.node").Length
             Write-Host "   Size: $size bytes"
           } else {
-            Write-Host "❌ ERROR: better-sqlite3 binary missing"
+            Write-Host "ERROR: better-sqlite3 binary missing"
             # List what's actually in the build directory
             if (Test-Path "node_modules\better-sqlite3\build") {
               Write-Host "Build directory contents:"
@@ -93,9 +93,9 @@ jobs:
           
           # Check systeminformation
           if (Test-Path "node_modules\systeminformation\lib") {
-            Write-Host "✅ SUCCESS: systeminformation module exists"
+            Write-Host "SUCCESS: systeminformation module exists"
           } else {
-            Write-Host "❌ ERROR: systeminformation module missing"
+            Write-Host "ERROR: systeminformation module missing"
             exit 1
           }
           
@@ -104,11 +104,11 @@ jobs:
           node -e "
             try {
               const Database = require('better-sqlite3');
-              console.log('✅ SUCCESS: better-sqlite3 loads successfully');
+              console.log('SUCCESS: better-sqlite3 loads successfully');
               const si = require('systeminformation');
-              console.log('✅ SUCCESS: systeminformation loads successfully');
+              console.log('SUCCESS: systeminformation loads successfully');
             } catch (error) {
-              console.error('❌ ERROR: Module loading failed:', error.message);
+              console.error('ERROR: Module loading failed:', error.message);
               process.exit(1);
             }
           "
@@ -116,7 +116,7 @@ jobs:
       
       - name: Build Application from Source
         run: |
-          Write-Host "🔨 Building application completely from source..."
+          Write-Host "Building application completely from source..."
           Write-Host "Building Vite frontend..."
           npm run build:vite
           
@@ -126,7 +126,7 @@ jobs:
           Write-Host "Building preload script..."  
           npm run build:preload
           
-          Write-Host "✅ Application build completed"
+          Write-Host "Application build completed"
         shell: powershell
       
       - name: Verify Build Output
@@ -134,11 +134,11 @@ jobs:
           Write-Host "Verifying build output..."
           
           if (Test-Path "dist\main\index.js") {
-            Write-Host "✅ SUCCESS: Main process built: dist\main\index.js"
+            Write-Host "SUCCESS: Main process built: dist\main\index.js"
             $size = (Get-Item "dist\main\index.js").Length
             Write-Host "   Size: $size bytes"
           } else {
-            Write-Host "❌ ERROR: Main process missing: dist\main\index.js"
+            Write-Host "ERROR: Main process missing: dist\main\index.js"
             if (Test-Path "dist") {
               Write-Host "Dist directory contents:"
               Get-ChildItem "dist" -Recurse
@@ -147,18 +147,18 @@ jobs:
           }
           
           if (Test-Path "dist\preload\index.js") {
-            Write-Host "✅ SUCCESS: Preload script built: dist\preload\index.js"
+            Write-Host "SUCCESS: Preload script built: dist\preload\index.js"
           } else {
-            Write-Host "❌ ERROR: Preload script missing: dist\preload\index.js"
+            Write-Host "ERROR: Preload script missing: dist\preload\index.js"
             exit 1
           }
           
           if (Test-Path "dist\renderer") {
-            Write-Host "✅ SUCCESS: Renderer built: dist\renderer"
+            Write-Host "SUCCESS: Renderer built: dist\renderer"
             $rendererFiles = Get-ChildItem "dist\renderer" -Recurse -File
             Write-Host "   Renderer files: $($rendererFiles.Count)"
           } else {
-            Write-Host "❌ ERROR: Renderer missing: dist\renderer"
+            Write-Host "ERROR: Renderer missing: dist\renderer"
             exit 1
           }
         shell: powershell
@@ -172,14 +172,14 @@ jobs:
       
       - name: Package Windows Application
         run: |
-          Write-Host "📦 Packaging Windows application..."
+          Write-Host "Packaging Windows application..."
           npm run make
-          Write-Host "✅ Windows packaging completed"
+          Write-Host "Windows packaging completed"
         shell: powershell
       
       - name: Test Application Startup
         run: |
-          Write-Host "🧪 Testing application startup..."
+          Write-Host "Testing application startup..."
           # Test that the built app can start without runtime errors
           $env:CI = "true"
           $env:NODE_ENV = "test"
@@ -188,12 +188,12 @@ jobs:
             try {
               console.log('Testing main process...');
               require('./dist/main/index.js');
-              console.log('✅ Main process loads successfully');
+              console.log('SUCCESS: Main process loads successfully');
             } catch (error) {
               if (error.message.includes('app.whenReady') || error.message.includes('electron')) {
-                console.log('✅ Main process structure is valid (Electron context expected)');
+                console.log('SUCCESS: Main process structure is valid (Electron context expected)');
               } else {
-                console.error('❌ Main process error:', error.message);
+                console.error('ERROR: Main process error:', error.message);
                 process.exit(1);
               }
             }
@@ -207,13 +207,13 @@ jobs:
               db.exec('INSERT INTO test (id) VALUES (1)');
               const result = db.prepare('SELECT * FROM test').get();
               db.close();
-              console.log('✅ Database operations work correctly');
+              console.log('SUCCESS: Database operations work correctly');
             } catch (error) {
-              console.error('❌ Database test failed:', error.message);
+              console.error('ERROR: Database test failed:', error.message);
               process.exit(1);
             }
           "
-          Write-Host "✅ Application startup tests passed"
+          Write-Host "Application startup tests passed"
         shell: powershell
       
       - name: Verify Windows Installer
@@ -221,22 +221,22 @@ jobs:
           Write-Host "Verifying Windows installer..."
           
           if (Test-Path "out\make\squirrel.windows") {
-            Write-Host "✅ SUCCESS: Squirrel installer directory exists"
+            Write-Host "SUCCESS: Squirrel installer directory exists"
             $installers = Get-ChildItem "out\make\squirrel.windows" -Recurse -Include "*.exe"
             if ($installers.Count -gt 0) {
-              Write-Host "✅ SUCCESS: Windows installer(s) created:"
+              Write-Host "SUCCESS: Windows installer(s) created:"
               foreach ($installer in $installers) {
                 $size = $installer.Length / 1MB
-                Write-Host "   📁 $($installer.Name) ($([math]::Round($size, 2)) MB)"
+                Write-Host "   $($installer.Name) ($([math]::Round($size, 2)) MB)"
               }
             } else {
-              Write-Host "❌ ERROR: No .exe installers found"
+              Write-Host "ERROR: No .exe installers found"
               Write-Host "Directory contents:"
               Get-ChildItem "out\make\squirrel.windows" -Recurse
               exit 1
             }
           } else {
-            Write-Host "❌ ERROR: Squirrel installer directory missing"
+            Write-Host "ERROR: Squirrel installer directory missing"
             if (Test-Path "out") {
               Write-Host "Out directory contents:"
               Get-ChildItem "out" -Recurse
