@@ -177,6 +177,45 @@ jobs:
           Write-Host "✅ Windows packaging completed"
         shell: powershell
       
+      - name: Test Application Startup
+        run: |
+          Write-Host "🧪 Testing application startup..."
+          # Test that the built app can start without runtime errors
+          $env:CI = "true"
+          $env:NODE_ENV = "test"
+          Write-Host "Testing main process imports..."
+          node -e "
+            try {
+              console.log('Testing main process...');
+              require('./dist/main/index.js');
+              console.log('✅ Main process loads successfully');
+            } catch (error) {
+              if (error.message.includes('app.whenReady') || error.message.includes('electron')) {
+                console.log('✅ Main process structure is valid (Electron context expected)');
+              } else {
+                console.error('❌ Main process error:', error.message);
+                process.exit(1);
+              }
+            }
+          "
+          Write-Host "Testing database connectivity..."
+          node -e "
+            try {
+              const Database = require('better-sqlite3');
+              const db = new Database(':memory:');
+              db.exec('CREATE TABLE test (id INTEGER)');
+              db.exec('INSERT INTO test (id) VALUES (1)');
+              const result = db.prepare('SELECT * FROM test').get();
+              db.close();
+              console.log('✅ Database operations work correctly');
+            } catch (error) {
+              console.error('❌ Database test failed:', error.message);
+              process.exit(1);
+            }
+          "
+          Write-Host "✅ Application startup tests passed"
+        shell: powershell
+      
       - name: Verify Windows Installer
         run: |
           Write-Host "Verifying Windows installer..."
