@@ -1,0 +1,110 @@
+name: Build All Platforms
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            artifact_name: windows-installer
+            artifact_path: out/make/squirrel.windows/**/*.exe
+          - os: macos-latest
+            platform: darwin
+            arch: x64
+            artifact_name: macos-intel-installer
+            artifact_path: out/make/*.dmg
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            artifact_name: macos-apple-silicon-installer
+            artifact_path: out/make/*.dmg
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            artifact_name: linux-installer
+            artifact_path: out/make/**/*.{deb,rpm,AppImage}
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3-dev libatk-bridge2.0-dev libdrm2-dev libxcomposite-dev libxdamage-dev libxrandr-dev libgbm-dev libxss1-dev libasound2-dev
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Download precompiled binaries
+        run: |
+          node scripts/download-precompiled-binaries.js
+      
+      - name: Verify binaries
+        run: |
+          echo "Checking better-sqlite3 binary..."
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const binaryPath = path.join('node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+            console.log('Binary exists:', fs.existsSync(binaryPath));
+            if (fs.existsSync(binaryPath)) {
+              const stats = fs.statSync(binaryPath);
+              console.log('Binary size:', stats.size, 'bytes');
+            }
+          "
+      
+      - name: Generate icons
+        run: npm run icons
+        continue-on-error: true
+      
+      - name: Build application
+        run: npm run build
+      
+      - name: Package for specific platform
+        run: |
+          npx electron-forge make --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+      
+      - name: Debug output directory
+        run: |
+          echo "Contents of out directory:"
+          find out -type f -name "*.exe" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" 2>/dev/null || echo "No installer files found"
+        shell: bash
+        continue-on-error: true
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: warn
+      
+      - name: Create Release (if tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_path }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

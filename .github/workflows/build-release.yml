@@ -27,10 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      - name: Rebuild native modules for Windows
+      - name: Download precompiled binaries
         run: |
-          npm rebuild better-sqlite3 --build-from-source
-          npx electron-rebuild
+          node scripts/download-precompiled-binaries.js
       
       - name: Debug environment
         run: |

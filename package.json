@@ -14,7 +14,9 @@
     "make": "npm run build && electron-forge make",
     "make:all": "npm run build && electron-forge make --platform=win32 --platform=darwin --platform=linux",
     "publish": "npm run build && electron-forge publish",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/download-precompiled-binaries.js",
+    "binaries": "node scripts/download-precompiled-binaries.js",
+    "binaries:all": "node scripts/download-precompiled-binaries.js --all",
     "icons": "node scripts/generate-icons.js",
     "dev:icon": "node scripts/dev-with-icon.js"
   },
