@@ -58,8 +58,15 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "Architecture: ${{ matrix.arch }}"
           echo "Host OS: ${{ runner.os }}"
-          node --version
-          npm --version
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          echo "Python version: $(python3 --version 2>/dev/null || echo 'Python3 not found')"
+          echo "Python path: $(which python3 2>/dev/null || echo 'Python3 not in PATH')"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "Xcode version: $(xcodebuild -version 2>/dev/null || echo 'Xcode not found')"
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "Visual Studio: $(where cl.exe 2>/dev/null || echo 'cl.exe not found')"
+          fi
       
       - name: Clean Install Dependencies
         shell: bash
@@ -75,7 +82,14 @@ jobs:
         run: |
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             echo "Setting up macOS build tools..."
+            # Ensure Xcode command line tools are available
             xcode-select --install 2>/dev/null || echo "Xcode tools already installed"
+            # Configure Python for node-gyp
+            npm config set python python3
+            # Ensure we use the system Python, not Homebrew's
+            export PYTHON=$(which python3)
+            echo "Python path: $PYTHON"
+            python3 --version
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
             echo "Setting up Windows build tools..."
             # Use the pre-installed Visual Studio on GitHub runners
