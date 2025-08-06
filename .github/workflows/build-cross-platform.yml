@@ -466,9 +466,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            **/*.dmg
-            **/*.exe
-            **/*.msi
+            out/**/*.dmg
+            out/**/*.exe
+            out/**/*.msi
           tag_name: ${{ github.ref_name }}
           name: "Isla Journal ${{ github.ref_name }} - NUCLEAR Option"
           body: |
