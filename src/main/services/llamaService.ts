@@ -66,7 +66,7 @@ export class LlamaService {
     try {
       this.safeLog('🚀 [LlamaService] Initializing...')
       
-      // Check if Ollama is running with retry logic
+      // Check if Ollama is running with retry logic and better error handling
       let ollamaAvailable = false
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
@@ -74,7 +74,15 @@ export class LlamaService {
           ollamaAvailable = true
           break
         } catch (error) {
-          this.safeLog(`❌ [LlamaService] Ollama check attempt ${attempt}/3 failed: ${error}`)
+          const errorMsg = error instanceof Error ? error.message : String(error)
+          this.safeLog(`❌ [LlamaService] Ollama check attempt ${attempt}/3 failed: ${errorMsg}`)
+          
+          // Handle specific Windows/Wine socket errors gracefully
+          if (errorMsg.includes('EBADF') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('ENOTFOUND')) {
+            this.safeLog(`🪟 [LlamaService] Network error detected (likely Wine/Windows environment without Ollama)`)
+            break // Don't retry network errors
+          }
+          
           if (attempt < 3) {
             await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds before retry
           }

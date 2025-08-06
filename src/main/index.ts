@@ -146,12 +146,21 @@ app.whenReady().then(async () => {
     console.log('🚀 [Main] Database initialization completed')
   } catch (error) {
     console.error('❌ [Main] Failed to initialize database:', error)
-    // Show error dialog to user
-    const { dialog } = require('electron')
-    dialog.showErrorBox(
-      'Database Initialization Error',
-      `Failed to initialize the database: ${error.message}\n\nThe application may not function properly.`
-    )
+    
+    // Check if this is the Windows native module issue
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    if (errorMsg.includes('Bad EXE format') || errorMsg.includes('better_sqlite3.node')) {
+      console.log('🪟 [Main] Windows native module issue detected - continuing without database')
+      // Don't show error dialog for known Windows compatibility issue
+      // App will continue with limited functionality
+    } else {
+      // Show error dialog for other database issues
+      const { dialog } = require('electron')
+      dialog.showErrorBox(
+        'Database Initialization Error',
+        `Failed to initialize the database: ${error.message}\n\nThe application may not function properly.`
+      )
+    }
   }
 
   createWindow()
@@ -160,7 +169,13 @@ app.whenReady().then(async () => {
   const llamaService = LlamaService.getInstance()
   llamaService.setMainWindow(mainWindow!)
   llamaService.initialize().catch(error => {
-    console.error('❌ [Main] Failed to initialize LLM service:', error)
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error('❌ [Main] Failed to initialize LLM service:', errorMsg)
+    
+    // Show user-friendly message for common issues
+    if (errorMsg.includes('EBADF') || errorMsg.includes('ECONNREFUSED')) {
+      console.log('💡 [Main] LLM service unavailable (Ollama not running). App will work without AI features.')
+    }
     // LLM will be unavailable but app continues to work
   })
 
