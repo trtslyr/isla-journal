@@ -55,7 +55,7 @@ module.exports = {
         setupIcon: process.cwd() + '/build/icon.ico'
       },
     },
-    // macOS - DMG installer
+    // macOS - DMG installer (professional Mac installer format)
     {
       name: '@electron-forge/maker-dmg',
       platforms: ['darwin'],
@@ -65,11 +65,6 @@ module.exports = {
         icon: process.cwd() + '/build/icon.icns',
         format: 'UDZO'
       }
-    },
-    // macOS - ZIP backup
-    {
-      name: '@electron-forge/maker-zip',
-      platforms: ['darwin'],
     }
   ],
   publishers: [
