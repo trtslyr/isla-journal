@@ -13,9 +13,6 @@ export default defineConfig({
   build: {
     outDir: '../../dist/renderer',
     emptyOutDir: true,
-    rollupOptions: {
-      input: resolveAbsolute('src', 'renderer', 'index.html')
-    },
     // Cross-platform build settings
     target: 'esnext',
     minify: 'esbuild',

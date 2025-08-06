@@ -140,7 +140,16 @@ class IslaDatabase {
    */
   private getDatabasePath(): string {
     try {
-      const userDataPath = app.getPath('userData')
+      // Handle testing environment where app might not be ready
+      let userDataPath: string
+      try {
+        userDataPath = app.getPath('userData')
+      } catch (error) {
+        // Fallback for testing/CI environments
+        userDataPath = process.env.NODE_ENV === 'test' 
+          ? join(os.tmpdir(), 'isla-journal-test')
+          : join(os.homedir(), '.isla-journal')
+      }
       const dbDir = normalize(join(userDataPath, 'database'))
       
       // Ensure directory exists with cross-platform permissions

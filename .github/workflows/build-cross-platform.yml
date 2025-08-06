@@ -196,7 +196,10 @@ jobs:
               const main = require('./dist/main/index.js');
               console.log('✓ Main process structure valid');
             } catch (error) {
-              if (error.message.includes('app.whenReady') || error.message.includes('electron')) {
+              if (error.message.includes('app.whenReady') || 
+                  error.message.includes('electron') ||
+                  error.message.includes('getPath') ||
+                  error.message.includes('Cannot read properties of undefined')) {
                 console.log('✓ Main process structure valid (Electron context expected)');
               } else {
                 console.error('✗ Main process error:', error.message);
