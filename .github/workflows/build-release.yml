@@ -27,9 +27,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      - name: Download precompiled binaries
+      - name: Setup Windows Build Environment
         run: |
-          node scripts/download-precompiled-binaries.js
+          echo "Setting up Windows build environment for native modules..."
+          
+      - name: Rebuild native modules for Windows
+        run: |
+          echo "Rebuilding better-sqlite3 for Windows..."
+          npm rebuild better-sqlite3 --build-from-source --verbose
+          echo "Running @electron/rebuild for all native modules..."
+          npx @electron/rebuild --verbose
+          echo "Verifying better-sqlite3 binary..."
+          if (Test-Path "node_modules\better-sqlite3\build\Release\better_sqlite3.node") {
+            echo "✅ better-sqlite3 binary exists"
+            file node_modules\better-sqlite3\build\Release\better_sqlite3.node 2>$null || echo "File command not available"
+          } else {
+            echo "❌ better-sqlite3 binary missing"
+            exit 1
+          }
+        shell: powershell
       
       - name: Debug environment
         run: |

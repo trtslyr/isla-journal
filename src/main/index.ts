@@ -160,12 +160,29 @@ const createWindow = (): void => {
       console.error('❌ [Main] No valid renderer path found')
     })
     
+    mainWindow.webContents.on('did-start-loading', () => {
+      console.log('🔄 [Main] Renderer started loading...')
+    })
+    
     mainWindow.webContents.on('did-finish-load', () => {
       console.log('✅ [Main] Renderer loaded successfully')
     })
     
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.error('❌ [Main] Renderer failed to load:', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame
+      })
+    })
+    
     mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
       console.log(`🔍 [Renderer] Console ${level}:`, message, `(${sourceId}:${line})`)
+    })
+    
+    mainWindow.webContents.on('dom-ready', () => {
+      console.log('🎯 [Main] DOM is ready')
     })
     
     mainWindow.loadFile(rendererPath)
@@ -175,9 +192,8 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    // if (isDev) {
-    //   mainWindow?.webContents.openDevTools() // Commented out for cleaner dev experience
-    // }
+    // Force open dev tools for debugging Windows issues
+    mainWindow?.webContents.openDevTools()
   })
 
   // Handle external links
@@ -832,22 +848,38 @@ ipcMain.handle('chat:create', async (_, title: string) => {
 })
 
 ipcMain.handle('chat:getAll', async () => {
+  if (databaseDisabled) {
+    console.log('🔄 [IPC] Database disabled - returning empty chat list')
+    return []
+  }
+  
   try {
     await database.ensureReady()
     return database.getAllChats()
   } catch (error) {
     console.error('❌ [IPC] Error getting all chats:', error)
-    throw error
+    // Disable database for all future calls
+    databaseDisabled = true
+    console.log('🔄 [IPC] Disabling database and returning empty chat list (database unavailable)')
+    return []
   }
 })
 
 ipcMain.handle('chat:getActive', async () => {
+  if (databaseDisabled) {
+    console.log('🔄 [IPC] Database disabled - returning null for active chat')
+    return null
+  }
+  
   try {
     await database.ensureReady()
     return database.getActiveChat()
   } catch (error) {
     console.error('❌ [IPC] Error getting active chat:', error)
-    throw error
+    // Disable database for all future calls
+    databaseDisabled = true
+    console.log('🔄 [IPC] Disabling database and returning null for active chat (database unavailable)')
+    return null
   }
 })
 
@@ -948,28 +980,43 @@ ipcMain.handle('content:getFile', async (_, fileId: number) => {
   }
 })
 
+// Global flag to disable database when we know it will fail
+let databaseDisabled = false
+
 // Settings IPC handlers
 ipcMain.handle('settings:get', async (_, key: string) => {
+  if (databaseDisabled) {
+    console.log('🔄 [IPC] Database disabled - returning null for setting:', key)
+    return null
+  }
+  
   try {
     await database.ensureReady()
     return database.getSetting(key)
   } catch (error) {
     console.error('❌ [IPC] Error getting setting:', error)
-    // Return null instead of throwing error to allow app to continue with defaults
-    console.log('🔄 [IPC] Returning null for setting:', key, '(database unavailable)')
+    // Disable database for all future calls to prevent infinite loop
+    databaseDisabled = true
+    console.log('🔄 [IPC] Disabling database and returning null for setting:', key, '(database unavailable)')
     return null
   }
 })
 
 ipcMain.handle('settings:set', async (_, key: string, value: string) => {
+  if (databaseDisabled) {
+    console.log('🔄 [IPC] Database disabled - cannot set setting:', key)
+    return false
+  }
+  
   try {
     await database.ensureReady()
     database.setSetting(key, value)
     return true
   } catch (error) {
     console.error('❌ [IPC] Error setting value:', error)
-    // Return false instead of throwing error to allow app to continue
-    console.log('🔄 [IPC] Failed to set setting:', key, '(database unavailable)')
+    // Disable database for all future calls
+    databaseDisabled = true
+    console.log('🔄 [IPC] Disabling database and failing to set setting:', key, '(database unavailable)')
     return false
   }
 })
