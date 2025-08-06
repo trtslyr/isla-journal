@@ -11,13 +11,14 @@ module.exports = {
     buildVersion: '1',
     appCopyright: 'Copyright © 2025 Taylor Wall',
     // Icon configuration for all platforms
-    icon: './build/icon', // Will use icon.ico, icon.icns, icon.png automatically
+    icon: process.cwd() + '/build/icon', // Will use icon.ico, icon.icns, icon.png automatically
     // Force icon usage
     overwrite: true,
     // ASAR unpacking for native modules and renderer assets
     asarUnpack: [
       '**/node_modules/better-sqlite3/**/*',
-      '**/node_modules/systeminformation/**/*'
+      '**/node_modules/systeminformation/**/*',
+      '**/node_modules/@electron/**/*'
     ]
   },
   rebuildConfig: {
@@ -33,20 +34,23 @@ module.exports = {
     // Windows - Squirrel Installer (.exe)
     {
       name: '@electron-forge/maker-squirrel',
+      platforms: ['win32'],
       config: {
         name: 'isla_journal',
         authors: 'Taylor Wall',
         description: 'AI-powered offline journal and writing companion',
         setupExe: 'IslaJournalSetup.exe',
-        setupIcon: './build/icon.ico'
+        setupIcon: process.cwd() + '/build/icon.ico'
       },
     },
     // macOS - DMG installer
     {
       name: '@electron-forge/maker-dmg',
+      platforms: ['darwin'],
       config: {
         name: 'Isla Journal',
-        title: 'Isla Journal Installer'
+        title: 'Isla Journal Installer',
+        icon: process.cwd() + '/build/icon.icns'
       }
     },
     // macOS - ZIP backup

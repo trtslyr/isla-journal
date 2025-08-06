@@ -249,31 +249,35 @@ jobs:
           
           # Platform-specific installer verification
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Look for Windows installers
-            INSTALLERS=$(find out/make -name "*.exe" 2>/dev/null || echo "")
+            # Look for Windows installers in multiple possible locations
+            INSTALLERS=$(find out -name "*.exe" -o -name "*.msi" 2>/dev/null || echo "")
             if [[ -n "$INSTALLERS" ]]; then
               echo "✓ Windows installer(s) created:"
               echo "$INSTALLERS" | while read installer; do
-                ls -la "$installer"
+                if [[ -n "$installer" ]]; then
+                  ls -la "$installer"
+                fi
               done
             else
-              echo "✗ No Windows .exe installers found"
-              echo "Contents of out/make:"
-              find out/make -type f 2>/dev/null || echo "No files in out/make"
+              echo "✗ No Windows installers found"
+              echo "Full contents of out directory:"
+              find out -type f 2>/dev/null || echo "No files in out directory"
               exit 1
             fi
           else
-            # Look for macOS installers
-            INSTALLERS=$(find out/make -name "*.dmg" -o -name "*.zip" 2>/dev/null || echo "")
+            # Look for macOS installers in multiple possible locations
+            INSTALLERS=$(find out -name "*.dmg" -o -name "*.zip" -o -name "*.app" 2>/dev/null || echo "")
             if [[ -n "$INSTALLERS" ]]; then
               echo "✓ macOS installer(s) created:"
               echo "$INSTALLERS" | while read installer; do
-                ls -la "$installer"
+                if [[ -n "$installer" ]]; then
+                  ls -la "$installer"
+                fi
               done
             else
-              echo "✗ No macOS .dmg or .zip installers found"
-              echo "Contents of out/make:"
-              find out/make -type f 2>/dev/null || echo "No files in out/make"
+              echo "✗ No macOS installers found"
+              echo "Full contents of out directory:"
+              find out -type f 2>/dev/null || echo "No files in out directory"
               exit 1
             fi
           fi
@@ -285,9 +289,11 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            out/make/**/*.exe
-            out/make/**/*.dmg
-            out/make/**/*.zip
+            out/**/*.exe
+            out/**/*.msi
+            out/**/*.dmg
+            out/**/*.zip
+            out/**/*.app
           retention-days: 30
           compression-level: 6
       
