@@ -204,8 +204,11 @@ jobs:
       
       - name: Build Application
         shell: bash
+        env:
+          NODE_ENV: production
         run: |
           echo "Building application for ${{ matrix.platform }}-${{ matrix.arch }}"
+          echo "NODE_ENV: $NODE_ENV"
           
           # Use the comprehensive npm build script
           echo "Building complete application using npm build script..."
@@ -383,6 +386,22 @@ jobs:
             ls -la out/ 2>/dev/null || echo "No out directory"
             exit 1
           fi
+          
+          # Report package sizes (CRITICAL for business deployment)
+          echo "📊 Package Size Analysis:"
+          find out -name "*.exe" -o -name "*.dmg" -o -name "*.zip" | while read file; do
+            if [[ -f "$file" ]]; then
+              SIZE=$(ls -lh "$file" | awk '{print $5}')
+              echo "📦 $(basename "$file"): $SIZE"
+              # Alert if over 500MB (was 1GB+, should now be much smaller)
+              SIZE_BYTES=$(ls -l "$file" | awk '{print $5}')
+              if [[ $SIZE_BYTES -gt 524288000 ]]; then
+                echo "⚠️  WARNING: Package is still large (>500MB)"
+              else
+                echo "✅ Package size optimized (<500MB)"
+              fi
+            fi
+          done
           
           # Platform-specific installer verification
           if [[ "${{ runner.os }}" == "Windows" ]]; then

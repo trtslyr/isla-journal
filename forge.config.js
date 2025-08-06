@@ -14,11 +14,35 @@ module.exports = {
     icon: process.cwd() + '/build/icon', // Will use icon.ico, icon.icns, icon.png automatically
     // Force icon usage
     overwrite: true,
-    // ASAR unpacking for native modules and renderer assets
+    // ASAR unpacking for ESSENTIAL native modules only
     asarUnpack: [
-      '**/node_modules/better-sqlite3/**/*',
-      '**/node_modules/systeminformation/**/*',
-      '**/node_modules/@electron/**/*'
+      '**/node_modules/better-sqlite3/build/**/*',
+      '**/node_modules/systeminformation/lib/**/*'
+    ],
+    // Aggressive size optimization
+    ignore: [
+      // Development files
+      /\.git/,
+      /node_modules\/.*\/test/,
+      /node_modules\/.*\/tests/,
+      /node_modules\/.*\/docs/,
+      /node_modules\/.*\/examples/,
+      /node_modules\/.*\/\.github/,
+      /node_modules\/.*\/\.nyc_output/,
+      /node_modules\/.*\/coverage/,
+      // Development dependencies (these shouldn't be in production anyway)
+      /node_modules\/@types/,
+      /node_modules\/typescript/,
+      /node_modules\/vite/,
+      /node_modules\/@vitejs/,
+      /node_modules\/@electron-forge/,
+      /node_modules\/electron$/,
+      // Large unused files
+      /\.map$/,
+      /\.d\.ts$/,
+      /README/i,
+      /CHANGELOG/i,
+      /\.md$/
     ]
   },
   rebuildConfig: {
