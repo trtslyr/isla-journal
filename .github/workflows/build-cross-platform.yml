@@ -453,33 +453,35 @@ jobs:
       
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/**/*.exe
-            out/**/*.msi
-            out/**/*.dmg
-            out/**/*.zip
-            out/**/*.app
+            out/*.exe
+            out/*.msi
+            out/*.dmg
+            out/*.zip
+            out/*.app
           tag_name: ${{ github.ref_name }}
-          name: "Isla Journal ${{ github.ref_name }}"
+          name: "Isla Journal ${{ github.ref_name }} - NUCLEAR Option"
           body: |
-            🚀 **Isla Journal ${{ github.ref_name }}** - Cross-Platform Release
+            🚀 **Isla Journal ${{ github.ref_name }}** - NUCLEAR Option Build
             
-            📦 **Downloads for Your Platform:**
-            - **Windows**: Download the `.exe` installer
-            - **Mac Intel**: Download the `.dmg` installer  
-            - **Mac Apple Silicon**: Download the `.dmg` installer
+            📦 **DIRECT DOWNLOADS:**
+            - **🪟 Windows**: Download the `.exe` installer below
+            - **🍎 Mac Intel**: Download the Intel `.dmg` installer below
+            - **🍎 Mac Apple Silicon**: Download the ARM64 `.dmg` installer below
             
-            🔥 **Features:**
-            - AI-powered offline journal and writing companion
-            - Local Ollama integration for privacy
-            - Cross-platform Electron application
-            - Professional installers for all platforms
+            🗜️ **NUCLEAR Option Features:**
+            - ✅ DRASTIC size reduction - only essential dependencies
+            - ✅ AI-powered offline journal with local Ollama
+            - ✅ VS Code-style interface
+            - ✅ All dependency issues FIXED
+            - ✅ Cross-platform Electron application
             
-            **Ready for immediate use!** 🎉
+            **Click the installer file below for your platform and you're ready to go!** 🎉
           draft: false
           prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Build Summary
         shell: bash
