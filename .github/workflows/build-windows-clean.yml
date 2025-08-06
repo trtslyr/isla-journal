@@ -46,17 +46,17 @@ jobs:
           Write-Host "Environment completely cleaned"
         shell: powershell
       
-      - name: Fresh Install Dependencies (No Postinstall)
+      - name: Fresh Install Dependencies
         run: |
-          Write-Host "Installing dependencies without postinstall hooks..."
+          Write-Host "Installing dependencies with clean postinstall..."
           Write-Host "Generating fresh package-lock.json..."
           npm install --package-lock-only
-          Write-Host "Installing with fresh lockfile (no prebuilt binaries)..."
-          # Force npm to not download any precompiled binaries
+          Write-Host "Installing with fresh lockfile (build from source)..."
+          # Force npm to build from source
           $env:npm_config_build_from_source = "true"
           $env:npm_config_cache = ""
-          npm ci --ignore-scripts --no-optional
-          Write-Host "Dependencies installed without scripts or prebuilt binaries"
+          npm ci
+          Write-Host "Dependencies installed successfully"
         shell: powershell
       
       - name: Rebuild Native Modules for Windows

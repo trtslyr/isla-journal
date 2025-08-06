@@ -52,17 +52,17 @@ jobs:
           rm -rf dist out node_modules package-lock.json .npm || true
           echo "Environment completely cleaned"
       
-      - name: Fresh Install Dependencies (No Postinstall)
+      - name: Fresh Install Dependencies
         run: |
-          echo "Installing dependencies without postinstall hooks..."
+          echo "Installing dependencies with clean postinstall..."
           echo "Generating fresh package-lock.json..."
           npm install --package-lock-only
-          echo "Installing with fresh lockfile (no prebuilt binaries)..."
-          # Force npm to not download any precompiled binaries
+          echo "Installing with fresh lockfile (build from source)..."
+          # Force npm to build from source
           export npm_config_build_from_source=true
           export npm_config_cache=""
-          npm ci --ignore-scripts --no-optional
-          echo "Dependencies installed without scripts or prebuilt binaries"
+          npm ci
+          echo "Dependencies installed successfully"
       
       - name: Rebuild Native Modules for macOS
         run: |
