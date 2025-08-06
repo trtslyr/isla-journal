@@ -78,9 +78,10 @@ const App: React.FC = () => {
         console.log('🎨 Theme initialized:', savedTheme)
       } catch (error) {
         console.error('Failed to initialize theme:', error)
-        // Default to dark theme
+        // Default to dark theme if database is unavailable
         setCurrentTheme('dark')
         document.documentElement.setAttribute('data-theme', 'dark')
+        console.log('🎨 Using default dark theme (database unavailable)')
       }
     }
     
@@ -103,9 +104,10 @@ const App: React.FC = () => {
         console.log('👀 Font settings initialized:', fontFamily, fontSize + 'px')
       } catch (error) {
         console.error('Failed to initialize font settings:', error)
-        // Default font settings
+        // Default font settings if database is unavailable
         document.documentElement.style.setProperty('--app-font-family', 'JetBrains Mono, Consolas, "Courier New", monospace')
         document.documentElement.style.setProperty('--app-font-size', '14px')
+        console.log('👀 Using default font settings (database unavailable)')
       }
     }
     

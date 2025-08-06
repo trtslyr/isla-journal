@@ -955,7 +955,9 @@ ipcMain.handle('settings:get', async (_, key: string) => {
     return database.getSetting(key)
   } catch (error) {
     console.error('❌ [IPC] Error getting setting:', error)
-    throw error
+    // Return null instead of throwing error to allow app to continue with defaults
+    console.log('🔄 [IPC] Returning null for setting:', key, '(database unavailable)')
+    return null
   }
 })
 
@@ -966,7 +968,9 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
     return true
   } catch (error) {
     console.error('❌ [IPC] Error setting value:', error)
-    throw error
+    // Return false instead of throwing error to allow app to continue
+    console.log('🔄 [IPC] Failed to set setting:', key, '(database unavailable)')
+    return false
   }
 })
 
