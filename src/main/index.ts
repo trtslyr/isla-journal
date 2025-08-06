@@ -66,12 +66,19 @@ const createWindow = (): void => {
     // Fixed cross-platform path handling for packaged apps
     let rendererPath: string
     
-    // Use consistent relative path for all platforms
-    // __dirname points to dist/main, so we need ../renderer/index.html
-    rendererPath = join(__dirname, '../renderer/index.html')
+    // Handle ASAR packaging correctly
+    if (app.isPackaged) {
+      // In packaged apps, files are in the ASAR archive
+      // Use app.getAppPath() which points to the ASAR file or extracted location
+      rendererPath = join(app.getAppPath(), 'dist', 'renderer', 'index.html')
+    } else {
+      // Development mode - __dirname points to dist/main
+      rendererPath = join(__dirname, '../renderer/index.html')
+    }
     
     console.log('🌐 [Main] Platform:', process.platform)
     console.log('🌐 [Main] __dirname:', __dirname)
+    console.log('🌐 [Main] App packaged:', app.isPackaged)
     console.log('🌐 [Main] Loading renderer from:', rendererPath)
     console.log('🌐 [Main] Renderer exists:', require('fs').existsSync(rendererPath))
     console.log('🌐 [Main] App path:', app.getAppPath())
@@ -81,15 +88,24 @@ const createWindow = (): void => {
       console.error('❌ [Main] Failed to load:', validatedURL, 'Error:', errorDescription)
       console.error('❌ [Main] Error code:', errorCode)
       
-      // Try alternative path on Windows if first attempt fails
-      if (process.platform === 'win32' && errorCode === -6) { // ERR_FILE_NOT_FOUND
-        const fallbackPath = join(app.getAppPath(), 'dist', 'renderer', 'index.html')
-        console.log('🔄 [Main] Trying fallback path:', fallbackPath)
-        console.log('🔄 [Main] Fallback exists:', require('fs').existsSync(fallbackPath))
-        if (require('fs').existsSync(fallbackPath)) {
-          mainWindow.loadFile(fallbackPath)
+      // Try alternative paths if first attempt fails
+      const alternativePaths = [
+        join(__dirname, '../renderer/index.html'),
+        join(app.getAppPath(), 'dist', 'renderer', 'index.html'),
+        join(process.resourcesPath, 'app', 'dist', 'renderer', 'index.html')
+      ]
+      
+      for (const altPath of alternativePaths) {
+        console.log('🔄 [Main] Trying alternative path:', altPath)
+        console.log('🔄 [Main] Alternative exists:', require('fs').existsSync(altPath))
+        if (require('fs').existsSync(altPath)) {
+          console.log('✅ [Main] Found renderer at:', altPath)
+          mainWindow.loadFile(altPath)
+          return
         }
       }
+      
+      console.error('❌ [Main] No valid renderer path found')
     })
     
     mainWindow.webContents.on('did-finish-load', () => {
