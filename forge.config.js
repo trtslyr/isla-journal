@@ -14,11 +14,10 @@ module.exports = {
     icon: process.cwd() + '/build/icon', // Will use icon.ico, icon.icns, icon.png automatically
     // Force icon usage
     overwrite: true,
-    // ASAR unpacking for native modules and renderer assets
+    // ASAR unpacking - only unpack essential native binaries
     asarUnpack: [
-      '**/node_modules/better-sqlite3/**/*',
-      '**/node_modules/systeminformation/**/*',
-      '**/node_modules/@electron/**/*'
+      '**/node_modules/better-sqlite3/build/Release/*.node',
+      '**/node_modules/systeminformation/lib/*.node'
     ]
   },
   rebuildConfig: {
