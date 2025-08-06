@@ -16,7 +16,7 @@
     "make:all": "npm run build && electron-forge make --platform=win32 --platform=darwin --platform=linux",
     "publish": "npm run build && electron-forge publish",
     "postinstall": "npm run setup:platform",
-    "setup:platform": "node -e \"console.log('Setting up for', process.platform, process.arch)\" && npm run rebuild:native",
+    "setup:platform": "node -e \"console.log('Setting up for', process.platform, process.arch)\"",
     "rebuild:native": "npx @electron/rebuild --force",
     "rebuild:clean": "npm run clean:all && npm install && npm run rebuild:native",
     "clean:all": "npm run clean:dist && npm run clean:modules",

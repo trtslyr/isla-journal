@@ -67,7 +67,7 @@ jobs:
           echo "Fresh install with platform isolation..."
           rm -rf node_modules package-lock.json dist 2>/dev/null || true
           npm install --package-lock-only
-          npm ci --no-optional
+          npm ci
           echo "Dependencies installed successfully"
       
       - name: Setup Platform Environment
@@ -84,6 +84,8 @@ jobs:
         shell: bash
         run: |
           echo "Building native modules from source for ${{ matrix.platform }}-${{ matrix.arch }}"
+          # Ensure Electron is installed before rebuilding
+          npm list electron || npm install electron
           npx @electron/rebuild --verbose --force --arch=${{ matrix.arch }}
           echo "Native modules rebuilt successfully"
       
