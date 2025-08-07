@@ -257,7 +257,8 @@ jobs:
             echo "✅ Packaging completed successfully for Windows x64"
           else
             echo "❌ Packaging failed for Windows x64"
-            exit 1
+            echo "Attempting alternate maker targets (zip)..."
+            npx --yes electron-forge make --targets=@electron-forge/maker-zip --platform=win32 || exit 1
           fi
       
       - name: Verify Package
@@ -290,14 +291,35 @@ jobs:
           fi
           
           echo "Package verification completed"
+
+      - name: Collect Installer Assets
+        shell: bash
+        run: |
+          echo "Collecting installer assets for upload..."
+          mkdir -p out/releases
+          # Prefer Squirrel Setup.exe if present
+          SETUP_EXE=$(find out -type f -name "*Setup*.exe" | head -n 1 || echo "")
+          if [[ -n "$SETUP_EXE" ]]; then
+            echo "Found Setup EXE: $SETUP_EXE"
+            cp "$SETUP_EXE" out/releases/IslaJournal-Setup.exe
+          else
+            echo "No Setup EXE found yet. Listing EXE files under out/:"
+            find out -type f -name "*.exe" || true
+          fi
+          # Also collect portable ZIP if created
+          PORTABLE_ZIP=$(find out -type f -name "*.zip" | head -n 1 || echo "")
+          if [[ -n "$PORTABLE_ZIP" ]]; then
+            echo "Found portable ZIP: $PORTABLE_ZIP"
+            cp "$PORTABLE_ZIP" out/releases/IslaJournal-Portable.zip || true
+          fi
       
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: |
-            out/**/*.exe
-            out/**/*.msi
+            out/releases/IslaJournal-Setup.exe
+            out/releases/IslaJournal-Portable.zip
           retention-days: 30
           compression-level: 6
       
