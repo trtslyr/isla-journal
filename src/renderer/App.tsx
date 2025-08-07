@@ -11,6 +11,7 @@ interface ChatMessage {
   content: string
   role: 'user' | 'assistant'
   timestamp: Date
+  sources?: Array<{ file_name: string; file_path: string; snippet: string }>
 }
 
 interface EditorTab {
@@ -68,6 +69,14 @@ const App: React.FC = () => {
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
   const [showPreview, setShowPreview] = useState(false)
+  const editorApiRef = useRef<{
+    wrapSelection: (p: string, s?: string) => void
+    toggleBold: () => void
+    toggleItalic: () => void
+    insertLink: () => void
+    insertList: (t: 'bullet'|'number'|'check') => void
+    insertCodeBlock: () => void
+  } | null>(null)
 
   // Initialize theme on app load
   useEffect(() => {
@@ -127,11 +136,11 @@ const App: React.FC = () => {
     return () => { if (unsubscribe) unsubscribe() }
   }, [])
 
-  // Keyboard shortcut: toggle preview Ctrl/Cmd+K
+  // Keyboard shortcut: toggle preview Ctrl/Cmd+Shift+V
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
-      if (isCmd && e.key.toLowerCase() === 'k') {
+      if (isCmd && e.shiftKey && e.key.toLowerCase() === 'v') {
         e.preventDefault()
         setShowPreview(p => !p)
       }
@@ -441,7 +450,7 @@ const App: React.FC = () => {
       }
       setChatMessages(prev => [...prev, userMessage])
 
-      // Use RAG for intelligent journal-aware responses
+      // Use RAG for intelligent notes-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
       const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id)
       
@@ -454,7 +463,8 @@ const App: React.FC = () => {
           id: (Date.now() + 1).toString(),
           content: ragResponse.answer,
           role: 'assistant' as const,
-          timestamp: new Date()
+          timestamp: new Date(),
+          sources: ragResponse.sources || []
         }
         setChatMessages(prev => [...prev, assistantMessage])
         
@@ -840,12 +850,26 @@ const App: React.FC = () => {
               showPreview ? (
                 <MarkdownPreview markdown={activeTab.content} />
               ) : (
-                <MonacoEditor
-                  value={activeTab.content}
-                  onChange={handleEditorChange}
-                  language="markdown"
-                  theme={currentTheme}
-                />
+                <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
+                  <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid var(--border-color)'}}>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
+                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
+                  </div>
+                  <div style={{flex:1}}>
+                    <MonacoEditor
+                      value={activeTab.content}
+                      onChange={handleEditorChange}
+                      language="markdown"
+                      theme={currentTheme}
+                      onReady={(api)=>{editorApiRef.current=api}}
+                    />
+                  </div>
+                </div>
               )
             )}
           </div>
@@ -969,9 +993,40 @@ const App: React.FC = () => {
                           </span>
                           <span className="message-text">{message.content}</span>
                         </div>
+                        {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+                          <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>
+                            {message.sources.slice(0,8).map((src, idx) => (
+                              <button
+                                key={idx}
+                                className="search-btn"
+                                title={src.snippet}
+                                onClick={async ()=>{
+                                  try {
+                                    const content = await window.electronAPI.readFile(src.file_path)
+                                    const cleanFileName = src.file_name
+                                    if (activeTab) {
+                                      setTabs(prev => prev.map(tab => 
+                                        tab.id === activeTab.id 
+                                          ? { ...tab, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges: false }
+                                          : tab
+                                      ))
+                                    } else {
+                                      const newTab = { id: `file-${Date.now()}`, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges:false }
+                                      setTabs(prev => [...prev, newTab as any])
+                                      setActiveTabId((newTab as any).id)
+                                    }
+                                  } catch (e) {
+                                    console.error('Failed to open source file:', e)
+                                  }
+                                }}
+                              >
+                                {src.file_name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
-                    
                     {isAiThinking && (
                       <div className="message message-assistant">
                         <div className="message-line">
