@@ -522,6 +522,24 @@ class IslaDatabase {
       console.warn('⚠️ [Database] FTS5 unavailable, falling back to LIKE search:', e)
       this.ftsReady = false
     }
+
+    // Embeddings table
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS embeddings (
+          chunk_id INTEGER PRIMARY KEY,
+          vector TEXT NOT NULL,
+          dim INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+        );
+      `)
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings (model)`)
+      console.log('✅ [Database] Embeddings table ready')
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to ensure embeddings table:', e)
+    }
   }
 
   private deriveNoteDate(fileName: string, content?: string): string | null {
@@ -1311,6 +1329,78 @@ class IslaDatabase {
     } catch (error) {
       console.error('⚠️ [Database] FTS search failed, falling back:', error)
       return this.searchContent(query, limit)
+    }
+  }
+
+  // ========================
+  // EMBEDDINGS HELPERS
+  // ========================
+
+  /** Return up to limit chunk rows missing embeddings for the specified model */
+  public getChunksNeedingEmbeddings(model: string, limit: number = 100): Array<{ id: number; file_id: number; chunk_text: string }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT c.id, c.file_id, c.chunk_text
+      FROM content_chunks c
+      LEFT JOIN embeddings e ON e.chunk_id = c.id AND e.model = ?
+      WHERE e.chunk_id IS NULL
+      LIMIT ?
+    `
+    return this.db.prepare(sql).all(model, limit) as any
+  }
+
+  public upsertEmbedding(chunkId: number, vector: number[], model: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+    const dim = vector.length
+    const vectorJson = JSON.stringify(vector)
+    const sql = `
+      INSERT INTO embeddings (chunk_id, vector, dim, model)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET
+        vector = excluded.vector,
+        dim = excluded.dim,
+        model = excluded.model,
+        created_at = CURRENT_TIMESTAMP
+    `
+    this.db.prepare(sql).run(chunkId, vectorJson, dim, model)
+  }
+
+  /** Count of embeddings for model and total chunk count */
+  public getEmbeddingsStats(model: string): { embeddedCount: number; chunkCount: number } {
+    if (!this.db) throw new Error('Database not initialized')
+    const embedded = this.db.prepare('SELECT COUNT(*) as c FROM embeddings WHERE model = ?').get(model) as { c: number }
+    const chunks = this.db.prepare('SELECT COUNT(*) as c FROM content_chunks').get() as { c: number }
+    return { embeddedCount: embedded.c, chunkCount: chunks.c }
+  }
+
+  /** Load embeddings for a model with associated chunk and file metadata */
+  public getEmbeddingsForModel(model: string): Array<{ chunk_id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; vector: number[] }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT e.chunk_id, c.file_id, f.path as file_path, f.name as file_name, c.chunk_text, e.vector
+      FROM embeddings e
+      JOIN content_chunks c ON c.id = e.chunk_id
+      JOIN files f ON f.id = c.file_id
+      WHERE e.model = ?
+    `
+    const rows = this.db.prepare(sql).all(model) as any[]
+    return rows.map(r => ({
+      chunk_id: r.chunk_id,
+      file_id: r.file_id,
+      file_path: r.file_path,
+      file_name: r.file_name,
+      chunk_text: r.chunk_text,
+      vector: (() => { try { return JSON.parse(r.vector) } catch { return [] } })()
+    }))
+  }
+
+  /** Clear all embeddings (for rebuild) */
+  public clearEmbeddings(model?: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+    if (model) {
+      this.db.prepare('DELETE FROM embeddings WHERE model = ?').run(model)
+    } else {
+      this.db.prepare('DELETE FROM embeddings').run()
     }
   }
 }

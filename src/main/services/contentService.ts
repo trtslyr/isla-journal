@@ -3,6 +3,14 @@ import { LlamaService } from './llamaService'
 import { readFile } from 'fs/promises'
 import { normalize, resolve } from 'path'
 
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i] }
+  if (na === 0 || nb === 0) return 0
+  return dot / (Math.sqrt(na) * Math.sqrt(nb))
+}
+
 export interface RAGResponse {
   answer: string
   sources: Array<{
@@ -77,10 +85,62 @@ class ContentService {
         console.log('⚠️ [ContentService] Error loading pinned files:', error)
       }
 
-      // 2. Search for relevant content (prefer FTS5 with date filter, fallback is internal)
-      const searchResults = (database as any).searchContentFTS
-        ? (database as any).searchContentFTS(query, 10, dateFilter)
-        : database.searchContent(query, 10)
+      // 2. Retrieval: FTS + embeddings hybrid if available
+      const hasFTS = typeof (database as any).searchContentFTS === 'function'
+      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+
+      let hybridResults: any[] = ftsResults
+      try {
+        const llama = LlamaService.getInstance()
+        const model = llama.getCurrentModel()
+        if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
+          const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+          // Build query vector
+          const qVec = (await llama.embedTexts([query], model))[0] || []
+          // Score top-N embeddings
+          const scored = allEmb.map(e => ({
+            id: e.chunk_id,
+            file_id: e.file_id,
+            file_path: e.file_path,
+            file_name: e.file_name,
+            content_snippet: e.chunk_text.slice(0, 200),
+            sim: cosineSimilarity(qVec, e.vector)
+          }))
+          scored.sort((a,b) => b.sim - a.sim)
+          const topE = scored.slice(0, 30)
+
+          // Merge with FTS: weighted score: 0.6*sim + 0.4*(normalized BM25 inverse)
+          const ftsMap = new Map<number, any>()
+          ftsResults.forEach((r, idx) => ftsMap.set(r.id, { ...r, ftsRank: 1/(1+idx) }))
+
+          const merged = new Map<number, any>()
+          // Seed with FTS
+          for (const r of ftsResults) {
+            merged.set(r.id, { ...r, sim: 0, score: 0.4 * (typeof r.rank === 'number' ? 1/(1+r.rank) : r.ftsRank || 1) })
+          }
+          // Add embeddings
+          for (const e of topE) {
+            const existing = merged.get(e.id)
+            const sim = Math.max(0, e.sim)
+            const eScore = 0.6 * sim
+            if (existing) {
+              existing.sim = Math.max(existing.sim || 0, sim)
+              existing.score = Math.max(existing.score || 0, existing.score + eScore)
+              merged.set(e.id, existing)
+            } else {
+              merged.set(e.id, { ...e, rank: 0, ftsRank: 0, score: eScore })
+            }
+          }
+
+          hybridResults = Array.from(merged.values())
+          hybridResults.sort((a,b) => (b.score || 0) - (a.score || 0))
+          hybridResults = hybridResults.slice(0, 20)
+        }
+      } catch (e) {
+        console.log('⚠️ [ContentService] Hybrid retrieval fallback:', e)
+      }
+
+      const results = hybridResults
 
       // 3. Build context blocks
       const pinnedBlock = pinnedContent ? `Pinned notes:\n${pinnedContent}` : ''
@@ -93,11 +153,11 @@ class ContentService {
       }
 
       let retrievedBlock = ''
-      if (searchResults.length > 0) {
-        retrievedBlock = searchResults.map((r, i) => `(${i+1}) ${r.file_name}: ${r.content_snippet.replace(/<\/?mark>/g, '')}`).join('\n')
+      if (results.length > 0) {
+        retrievedBlock = results.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
       }
 
-      if (searchResults.length === 0 && !pinnedContent) {
+      if (results.length === 0 && !pinnedContent) {
         return {
           answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).",
           sources: []
@@ -115,8 +175,8 @@ class ContentService {
       const today = new Date().toISOString()
       const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-      const totalSources = searchResults.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} search + pinned files)`)      
+      const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
+      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      
 
       // 6. Get LLM response
       const llamaService = LlamaService.getInstance()
@@ -125,10 +185,10 @@ class ContentService {
       ])
 
       // 7. Sources list
-      const sources = searchResults.map((r: any) => ({
+      const sources = results.map((r: any) => ({
         file_name: r.file_name,
         file_path: r.file_path,
-        snippet: r.content_snippet.replace(/<\/?mark>/g, '')
+        snippet: String(r.content_snippet || '').replace(/<\/?mark>/g, '')
       }))
       // Add pinned labels (without reading again)
       if (pinnedContent) {

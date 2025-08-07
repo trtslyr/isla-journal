@@ -43,6 +43,10 @@ const electronAPI = {
   llmGetAvailableModels: () => ipcRenderer.invoke('llm:getAvailableModels'),
   llmSwitchModel: (modelName: string) => ipcRenderer.invoke('llm:switchModel', modelName),
   
+  // Embeddings operations
+  embeddingsRebuild: (modelName?: string) => ipcRenderer.invoke('embeddings:rebuild', modelName),
+  embeddingsStats: (modelName?: string) => ipcRenderer.invoke('embeddings:stats', modelName),
+  
   // LLM events
   onLLMDownloadProgress: (callback: (data: any) => void) => {
     const unsubscribe = () => ipcRenderer.removeAllListeners('llm:downloadProgress')

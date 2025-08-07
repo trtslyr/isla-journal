@@ -1039,6 +1039,47 @@ ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, conte
   }
 })
 
+// Embeddings IPC handlers (background-ish but simple)
+ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const model = modelName || llama.getCurrentModel()
+    if (!model) throw new Error('No model selected for embeddings')
+
+    // Process in small batches to avoid blocking too much
+    let totalEmbedded = 0
+    for (;;) {
+      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+      if (!batch.length) break
+
+      const texts = batch.map((b: any) => b.chunk_text)
+      const vectors = await llama.embedTexts(texts, model)
+      for (let i = 0; i < batch.length; i++) {
+        ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
+      }
+      totalEmbedded += batch.length
+    }
+    return { success: true, model, totalEmbedded }
+  } catch (error) {
+    console.error('❌ [IPC] Error rebuilding embeddings:', error)
+    throw error
+  }
+})
+
+ipcMain.handle('embeddings:stats', async (_, modelName?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const model = modelName || llama.getCurrentModel() || 'unknown'
+    const stats = (database as any).getEmbeddingsStats?.(model) || { embeddedCount: 0, chunkCount: 0 }
+    return { model, ...stats }
+  } catch (error) {
+    console.error('❌ [IPC] Error getting embeddings stats:', error)
+    return { model: modelName || 'unknown', embeddedCount: 0, chunkCount: 0 }
+  }
+})
+
 ipcMain.handle('llm:getStatus', async () => {
   try {
     const llamaService = LlamaService.getInstance()
