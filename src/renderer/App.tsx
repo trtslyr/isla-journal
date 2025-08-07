@@ -203,10 +203,37 @@ const App: React.FC = () => {
     document.addEventListener('mousemove', handleRightResize)
     document.addEventListener('mouseup', handleMouseUp)
     
+    // Streaming listeners
+    const offChunk = window.electronAPI.onContentStreamChunk?.(({ chunk }) => {
+      setChatMessages(prev => {
+        const last = prev[prev.length-1]
+        if (!last || last.role !== 'assistant') {
+          const m = { id: String(Date.now()), content: chunk, role:'assistant' as const, timestamp: new Date() }
+          return [...prev, m]
+        } else {
+          const updated = { ...last, content: (last.content || '') + chunk }
+          return [...prev.slice(0, -1), updated as any]
+        }
+      })
+    })
+    const offDone = window.electronAPI.onContentStreamDone?.(({ answer, sources }) => {
+      setChatMessages(prev => {
+        const last = prev[prev.length-1]
+        if (last && last.role === 'assistant') {
+          const updated = { ...last, content: answer, sources }
+          return [...prev.slice(0,-1), updated as any]
+        }
+        return prev
+      })
+      setIsAiThinking(false)
+    })
+
     return () => {
       document.removeEventListener('mousemove', handleLeftResize)
       document.removeEventListener('mousemove', handleRightResize)
       document.removeEventListener('mouseup', handleMouseUp)
+      if (offChunk) offChunk()
+      if (offDone) offDone()
     }
   }, [handleLeftResize, handleRightResize, handleMouseUp])
 
@@ -452,24 +479,9 @@ const App: React.FC = () => {
 
       // Use RAG for intelligent notes-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id)
+      const ragResponse = await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
       
-      if (ragResponse && ragResponse.answer) {
-        // Save RAG response to database
-        await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', ragResponse.answer)
-        
-        // Add RAG response to UI
-        const assistantMessage = {
-          id: (Date.now() + 1).toString(),
-          content: ragResponse.answer,
-          role: 'assistant' as const,
-          timestamp: new Date(),
-          sources: ragResponse.sources || []
-        }
-        setChatMessages(prev => [...prev, assistantMessage])
-        
-        console.log(`✅ [App] RAG response generated with ${ragResponse.sources?.length || 0} sources`)
-      } else {
+      if (!ragResponse) {
         console.log(`⚠️ [App] No RAG response, falling back to basic LLM`)
         // Fallback to basic LLM response
         const basicResponse = await window.electronAPI.llmSendMessage([

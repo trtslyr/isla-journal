@@ -36,6 +36,18 @@ const electronAPI = {
   searchContent: (query: string, limit?: number) => ipcRenderer.invoke('content:search', query, limit),
   contentSearchAndAnswer: (query: string, chatId?: number) => 
     ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
+  contentStreamSearchAndAnswer: (query: string, chatId?: number) =>
+    ipcRenderer.invoke('content:streamSearchAndAnswer', query, chatId),
+  onContentStreamChunk: (cb: (payload: { chunk: string }) => void) => {
+    const handler = (_: any, payload: any) => cb(payload)
+    ipcRenderer.on('content:streamChunk', handler)
+    return () => ipcRenderer.removeListener('content:streamChunk', handler)
+  },
+  onContentStreamDone: (cb: (payload: { answer: string; sources: any[] }) => void) => {
+    const handler = (_: any, payload: any) => cb(payload)
+    ipcRenderer.on('content:streamDone', handler)
+    return () => ipcRenderer.removeListener('content:streamDone', handler)
+  },
     
   // LLM operations
   llmSendMessage: (messages: Array<{role: string, content: string}>) => 

@@ -1336,6 +1336,26 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
   }
 })
 
+// Streaming RAG
+ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?: number) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const { prompt, sources } = await contentService.preparePrompt(query, [])
+    let full = ''
+    // Stream via LlamaService
+    await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
+      full += chunk
+      try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
+    })
+    try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
+    return { started: true }
+  } catch (error) {
+    console.error('❌ [IPC] Error in streaming RAG:', error)
+    throw error
+  }
+})
+
 ipcMain.handle('content:getFile', async (_, fileId: number) => {
   try {
     await database.ensureReady()

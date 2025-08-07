@@ -42,6 +42,85 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
 
 class ContentService {
   /**
+   * Prepare prompt and sources for RAG (without sending to LLM)
+   */
+  async preparePrompt(query: string, conversationHistory?: Array<{role: string, content: string}>): Promise<{ prompt: string; sources: Array<{file_name:string; file_path:string; snippet:string}> }> {
+    // Date filter
+    const dateFilter = extractDateFilter(query)
+
+    // Pinned content
+    let pinnedContent = ''
+    try {
+      const pinnedItemsJson = database.getSetting('pinnedItems')
+      if (pinnedItemsJson) {
+        const pinnedItems = JSON.parse(pinnedItemsJson)
+        const pinnedSources: string[] = []
+        for (const item of pinnedItems) {
+          if (item.type === 'file' && item.path.endsWith('.md')) {
+            try {
+              const normalizedPath = normalize(resolve(item.path))
+              const content = await readFile(normalizedPath, 'utf-8')
+              const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
+              pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
+            } catch {}
+          }
+        }
+        if (pinnedSources.length > 0) pinnedContent = `Pinned notes:\n${pinnedSources.join('\n\n')}\n\n`
+      }
+    } catch {}
+
+    // Retrieval (FTS/Hybrid)
+    const hasFTS = typeof (database as any).searchContentFTS === 'function'
+    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+    let results: any[] = ftsResults
+    try {
+      const llama = LlamaService.getInstance()
+      const model = llama.getCurrentModel()
+      if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
+        const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+        const qVec = (await llama.embedTexts([query], model))[0] || []
+        const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
+        scored.sort((a,b)=>b.sim-a.sim)
+        const topE = scored.slice(0, 30)
+        const merged = new Map<number, any>()
+        for (const r of ftsResults) merged.set(r.id, { ...r, sim:0, score: 0.4 * (typeof r.rank==='number'? 1/(1+r.rank): 1) })
+        for (const e of topE) {
+          const existing = merged.get(e.id)
+          const sim = Math.max(0, e.sim)
+          const eScore = 0.6 * sim
+          if (existing) { existing.sim = Math.max(existing.sim||0, sim); existing.score = (existing.score||0)+eScore; merged.set(e.id, existing) }
+          else merged.set(e.id, { ...e, rank:0, score: eScore })
+        }
+        results = Array.from(merged.values()).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,20)
+      }
+    } catch {}
+
+    const dateBlock = (()=>{
+      if (!dateFilter) return ''
+      const start = dateFilter.start.toISOString().slice(0,10)
+      const end = new Date(+dateFilter.end - 1).toISOString().slice(0,10)
+      return `Date range: ${start} → ${end}`
+    })()
+
+    const retrievedBlock = results.length>0
+      ? results.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
+      : ''
+    const today = new Date().toISOString()
+    const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
+
+    const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
+    try {
+      const pinnedItemsJson = database.getSetting('pinnedItems')
+      if (pinnedItemsJson) {
+        const pinnedItems = JSON.parse(pinnedItemsJson)
+        pinnedItems.forEach((item:any)=>{ if(item.type==='file' && item.path.endsWith('.md')) sources.push({ file_name:`📌 ${item.name}`, file_path:item.path, snippet:'(Pinned)' }) })
+      }
+    } catch {}
+
+    return { prompt, sources }
+  }
+
+  /**
    * Perform RAG search and generate response with conversation context
    */
   async searchAndAnswer(query: string, conversationHistory?: Array<{role: string, content: string}>): Promise<RAGResponse> {
