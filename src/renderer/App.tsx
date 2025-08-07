@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { MonacoEditor, MarkdownPreview } from './components/Editor'
+import EditorPane from './components/Layout/EditorPane'
+import Sidebar from './components/Layout/Sidebar'
 import { FileTree } from './components/FileTree'
 
 import Settings from './components/Settings'
@@ -759,133 +761,24 @@ const App: React.FC = () => {
 
           {/* Main Content Area */}
       <div className="main-content">
-        {/* Left Panel - File Tree */}
-        <div 
-          className={`panel file-tree-panel ${leftPanelCollapsed ? 'collapsed' : ''}`} 
-          style={{ width: leftPanelWidth }}
-        >
-          {!leftPanelCollapsed && (
-            <div className="panel-content">
-              <FileTree
-                rootPath={rootDirectory}
-                onFileSelect={handleFileSelect}
-                selectedFile={activeTab?.path || null}
-                onDirectorySelect={handleOpenDirectory}
-              />
-            </div>
-          )}
-
-          {/* Left Resize Handle */}
-          <div 
-            className="resize-handle resize-handle-right"
-            onMouseDown={(e) => {
-              e.preventDefault()
-              isDraggingLeft.current = true
-              document.body.style.cursor = 'col-resize'
-              document.body.style.userSelect = 'none'
-            }}
-          />
-        </div>
-
+        <Sidebar
+          rootDirectory={rootDirectory}
+          width={leftPanelWidth}
+          collapsed={leftPanelCollapsed}
+          onResizeStart={() => { isDraggingLeft.current = true }}
+          onOpenDirectory={handleOpenDirectory}
+          onFileSelect={handleFileSelect}
+          selectedFilePath={activeTab?.path || null}
+        />
+ 
         {/* Center Panel - Editor */}
-        <div className="panel editor-panel">
-          <div className="panel-header">
-            <div className="tab-bar">
-              {/* File tree toggle button */}
-              <button 
-                className="panel-toggle-btn file-tree-toggle"
-                onClick={() => {
-                  if (leftPanelCollapsed) {
-                    setLeftPanelWidth(280)
-                    setLeftPanelCollapsed(false)
-                  } else {
-                    setLeftPanelCollapsed(true)
-                  }
-                }}
-                title={leftPanelCollapsed ? "Show Explorer" : "Hide Explorer"}
-              >
-                me
-              </button>
-              
-              {tabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
-                  onClick={() => setActiveTabId(tab.id)}
-                >
-                  <span>{tab.name}{tab.hasUnsavedChanges ? ' •' : ''}</span>
-                  <span 
-                    className="tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      closeTab(tab.id)
-                    }}
-                  >
-                    ×
-                  </span>
-                </div>
-              ))}
-              <button 
-                className="new-tab-btn"
-                onClick={createNewTab}
-                title="New Tab"
-              >
-                +
-              </button>
-              
-              {/* AI chat toggle button on the right */}
-              <button 
-                className="panel-toggle-btn ai-chat-toggle right-aligned"
-                onClick={() => {
-                  if (rightPanelCollapsed) {
-                    setRightPanelWidth(320)
-                    setRightPanelCollapsed(false)
-                  } else {
-                    setRightPanelCollapsed(true)
-                  }
-                }}
-                title={rightPanelCollapsed ? "Show AI Chat" : "Hide AI Chat"}
-              >
-                insights
-              </button>
-              <button
-                className="new-tab-btn"
-                onClick={() => setShowPreview(p => !p)}
-                title="Toggle preview"
-              >
-                {showPreview ? 'md' : '👁'}
-              </button>
-            </div>
-          </div>
-          <div className="panel-content">
-            {activeTab && (
-              showPreview ? (
-                <MarkdownPreview markdown={activeTab.content} />
-              ) : (
-                <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
-                  <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid var(--border-color)'}}>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
-                    <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
-                  </div>
-                  <div style={{flex:1}}>
-                    <MonacoEditor
-                      value={activeTab.content}
-                      onChange={handleEditorChange}
-                      language="markdown"
-                      theme={currentTheme}
-                      onReady={(api)=>{editorApiRef.current=api}}
-                    />
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        </div>
+        <EditorPane
+          activeTab={activeTab || null}
+          theme={currentTheme}
+          showPreview={showPreview}
+          onTogglePreview={() => setShowPreview(p => !p)}
+          onChange={handleEditorChange}
+        />
 
         {/* Right Panel - AI Chat */}
         <div 
