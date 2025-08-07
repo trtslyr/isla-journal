@@ -23,6 +23,7 @@ const isDev = process.env.NODE_ENV === 'development' && !app.isPackaged
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
+import chokidar from 'chokidar'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -145,6 +146,50 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 let mainWindow: BrowserWindow | null = null
+let vaultWatcher: import('chokidar').FSWatcher | null = null
+
+function startVaultWatcher(rootDir: string) {
+  try {
+    // Close previous watcher
+    if (vaultWatcher) {
+      vaultWatcher.close().catch(() => {})
+      vaultWatcher = null
+    }
+    const ignored = (p: string) => {
+      const lower = p.toLowerCase()
+      if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
+      if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
+      // Skip binaries and images for indexing
+      if (!lower.endsWith('.md')) return true
+      return false
+    }
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    const onAddOrChange = async (filePath: string) => {
+      try {
+        if (!filePath.toLowerCase().endsWith('.md')) return
+        const content = await readFile(filePath, 'utf-8')
+        const name = path.basename(filePath)
+        database.saveFile(filePath, name, content)
+      } catch (e) {
+        console.error('Watcher add/change failed:', e)
+      }
+    }
+    const onUnlink = async (filePath: string) => {
+      try {
+        if (!filePath.toLowerCase().endsWith('.md')) return
+        database.deleteFileByPath(filePath)
+      } catch (e) {
+        console.error('Watcher unlink failed:', e)
+      }
+    }
+    vaultWatcher.on('add', onAddOrChange)
+    vaultWatcher.on('change', onAddOrChange)
+    vaultWatcher.on('unlink', onUnlink)
+    console.log('👀 [Watcher] Started for:', rootDir)
+  } catch (e) {
+    console.error('❌ [Watcher] Failed to start:', e)
+  }
+}
 
 const createWindow = (): void => {
   // Determine icon path
@@ -757,6 +802,10 @@ ipcMain.handle('file:openDirectory', async () => {
     if (isRootDirectoryChange) {
       database.setSetting('selectedDirectory', normalizedDirPath)
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
+      // Start watcher
+      startVaultWatcher(normalizedDirPath)
+      // Notify renderer of settings change
+      try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
     
     const entries = await readdir(normalizedDirPath, { withFileTypes: true })
@@ -1328,6 +1377,12 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
   try {
     await database.ensureReady()
     database.setSetting(key, value)
+    // Emit change event to renderer
+    try { mainWindow?.webContents.send('settings:changed', { key, value }) } catch {}
+    // If root directory changed via settings, (re)start watcher
+    if (key === 'selectedDirectory' && typeof value === 'string' && value) {
+      startVaultWatcher(value)
+    }
     return true
   } catch (error) {
     console.error('❌ [IPC] Error setting value:', error)

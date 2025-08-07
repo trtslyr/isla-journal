@@ -116,25 +116,29 @@ const App: React.FC = () => {
     initializeFontSettings()
   }, [])
 
-  // Listen for theme changes from settings
+  // Event-driven settings updates (theme and others)
   useEffect(() => {
-    const handleStorageChange = async () => {
-      try {
-        const newTheme = await window.electronAPI.settingsGet('theme') || 'dark'
-        if (newTheme !== currentTheme) {
-          setCurrentTheme(newTheme)
-          document.documentElement.setAttribute('data-theme', newTheme)
-          console.log('🎨 Theme updated:', newTheme)
-        }
-      } catch (error) {
-        console.error('Failed to update theme:', error)
+    const unsubscribe = window.electronAPI.onSettingsChanged(({ key, value }) => {
+      if (key === 'theme') {
+        setCurrentTheme(value || 'dark')
+        document.documentElement.setAttribute('data-theme', value || 'dark')
+      }
+    })
+    return () => { if (unsubscribe) unsubscribe() }
+  }, [])
+
+  // Keyboard shortcut: toggle preview Ctrl/Cmd+K
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
+      if (isCmd && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setShowPreview(p => !p)
       }
     }
-    
-    // Check for theme changes periodically (simple approach)
-    const interval = setInterval(handleStorageChange, 1000)
-    return () => clearInterval(interval)
-  }, [currentTheme])
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Get current active tab
   const activeTab = tabs.find(tab => tab.id === activeTabId)
