@@ -40,6 +40,40 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       selectOnLineNumbers: false,
       automaticLayout: true,
     })
+
+    // Paste image handler
+    editor.onPaste(async (e) => {
+      try {
+        const dt = (e.event as ClipboardEvent).clipboardData
+        if (!dt) return
+        const items = Array.from(dt.items)
+        const imgItem = items.find(it => it.type.startsWith('image/'))
+        if (!imgItem) return
+
+        const blob = imgItem.getAsFile()
+        if (!blob) return
+        const arrayBuffer = await blob.arrayBuffer()
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
+
+        // Determine save directory: try current file directory from parent context if exposed
+        // As a fallback, save next to selectedDirectory root
+        const rootDir = await (window as any).electronAPI?.settingsGet?.('selectedDirectory')
+        if (!rootDir) return
+
+        const ext = blob.type.split('/')[1] || 'png'
+        const savedPath = await (window as any).electronAPI?.saveImage?.(rootDir, 'image', base64, ext)
+        if (!savedPath) return
+
+        const fileUri = `file://${savedPath.replace(/\\/g, '/')}`
+        const md = `![](${fileUri})`
+
+        const sel = editor.getSelection()
+        const range = sel || editor.getModel()!.getFullModelRange()
+        editor.executeEdits('paste-image', [{ range, text: md, forceMoveMarkers: true }])
+      } catch (err) {
+        console.error('Paste image failed:', err)
+      }
+    })
   }
 
   // Watch for font setting changes and update editor

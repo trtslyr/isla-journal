@@ -1462,6 +1462,31 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
   }
 })
 
+// Image save helper
+ipcMain.handle('file:saveImage', async (_, dirPath: string, baseName: string, dataBase64: string, ext: string) => {
+  try {
+    const safeExt = (ext || 'png').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+    const fileName = `${baseName.replace(/[^a-zA-Z0-9-_]/g, '_')}_${Date.now()}.${safeExt}`
+    const fullDir = dirPath
+    const fullPath = join(fullDir, fileName)
+
+    // Ensure directory exists
+    try { await mkdir(fullDir, { recursive: true }) } catch {}
+
+    // Strip data URL prefix if provided
+    const commaIdx = dataBase64.indexOf(',')
+    const payload = commaIdx >= 0 ? dataBase64.slice(commaIdx + 1) : dataBase64
+    const buf = Buffer.from(payload, 'base64')
+
+    await writeFile(fullPath, buf)
+    console.log('🖼️ [IPC] Image saved:', fullPath)
+    return fullPath
+  } catch (error) {
+    console.error('❌ [IPC] Error saving image:', error)
+    throw error
+  }
+})
+
 // System operations
 ipcMain.handle('system:openExternal', async (_, url: string) => {
   try {

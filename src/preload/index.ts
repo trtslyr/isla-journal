@@ -19,6 +19,10 @@ const electronAPI = {
   renameFile: (oldPath: string, newName: string) => ipcRenderer.invoke('file:rename', oldPath, newName),
   moveFile: (sourcePath: string, targetDirectoryPath: string) => ipcRenderer.invoke('file:move', sourcePath, targetDirectoryPath),
   
+  // Image operations
+  saveImage: (dirPath: string, baseName: string, dataBase64: string, ext: string) =>
+    ipcRenderer.invoke('file:saveImage', dirPath, baseName, dataBase64, ext),
+  
   // Database operations
   dbClearAll: () => ipcRenderer.invoke('db:clearAll'),
   dbGetStats: () => ipcRenderer.invoke('db:getStats'),
