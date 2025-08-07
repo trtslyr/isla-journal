@@ -1067,6 +1067,50 @@ class IslaDatabase {
   // fixDatabaseSchema method removed - no longer needed without FTS
 
   /**
+   * Delete a file (and its chunks/index) by absolute path
+   */
+  public deleteFileByPath(filePath: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const normalizedPath = this.normalizeFilePath(filePath)
+
+    const transaction = this.db.transaction(() => {
+      // Find file id first (optional but useful for logging)
+      const file = this.db!.prepare('SELECT id FROM files WHERE path = ?').get(normalizedPath) as { id: number } | undefined
+
+      // Delete from files (CASCADE will remove content_chunks)
+      this.db!.prepare('DELETE FROM files WHERE path = ?').run(normalizedPath)
+
+      // Clean up legacy search_index rows if any
+      if (file?.id) {
+        this.db!.prepare('DELETE FROM search_index WHERE file_id = ?').run(file.id)
+      }
+    })
+
+    transaction()
+  }
+
+  /**
+   * Update file path and optionally name without touching content/chunks
+   */
+  public updateFilePath(oldPath: string, newPath: string, newName?: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const normalizedOld = this.normalizeFilePath(oldPath)
+    const normalizedNew = this.normalizeFilePath(newPath)
+
+    const stmt = this.db.prepare(`
+      UPDATE files
+      SET path = ?,
+          name = COALESCE(?, name),
+          modified_at = CURRENT_TIMESTAMP
+      WHERE path = ?
+    `)
+
+    stmt.run(normalizedNew, newName ?? null, normalizedOld)
+  }
+
+  /**
    * Close database connection with Windows-specific cleanup
    */
   public close(): void {

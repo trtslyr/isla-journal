@@ -50,6 +50,59 @@ try {
   }
 }
 
+// Simple file logger setup for production
+async function setupFileLogging(): Promise<void> {
+  if (isDev) return
+
+  const debugEnabled = !!process.env.DEBUG
+  try {
+    const { mkdir, appendFile, stat: fsStat, rename } = await import('fs/promises')
+    const { join } = await import('path')
+
+    const logsDir = join(app.getPath('userData'), 'logs')
+    await mkdir(logsDir, { recursive: true })
+    const logFilePath = join(logsDir, 'isla.log')
+
+    const writeLine = async (level: 'log' | 'warn' | 'error', msg: any[]) => {
+      try {
+        const timestamp = new Date().toISOString()
+        const text = msg.map(m => (typeof m === 'string' ? m : JSON.stringify(m))).join(' ')
+        const line = `${timestamp} [${level.toUpperCase()}] ${text}\n`
+
+        // Rotate if > 5MB
+        try {
+          const st = await fsStat(logFilePath).catch(() => null)
+          if (st && st.size > 5 * 1024 * 1024) {
+            const rotated = join(logsDir, 'isla.log.1')
+            await rename(logFilePath, rotated).catch(() => {})
+          }
+        } catch {}
+
+        await appendFile(logFilePath, line)
+      } catch {}
+    }
+
+    const originalLog = console.log
+    const originalWarn = console.warn
+    const originalError = console.error
+
+    console.log = (...args: any[]) => {
+      if (debugEnabled) writeLine('log', args)
+      try { originalLog.apply(console, args) } catch {}
+    }
+    console.warn = (...args: any[]) => {
+      writeLine('warn', args)
+      try { originalWarn.apply(console, args) } catch {}
+    }
+    console.error = (...args: any[]) => {
+      writeLine('error', args)
+      try { originalError.apply(console, args) } catch {}
+    }
+  } catch {
+    // Best-effort only
+  }
+}
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
   app.quit()
@@ -126,10 +179,10 @@ const createWindow = (): void => {
         allowRunningInsecureContent: false
       }),
       ...(!isDev && {
-        webSecurity: false, // Disable web security for packaged apps (all platforms)
-        allowRunningInsecureContent: true, // Allow local file loading
-        enableRemoteModule: false, // Security: disable remote module
-        nodeIntegrationInWorker: false // Security: disable node in workers
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        enableRemoteModule: false,
+        nodeIntegrationInWorker: false
       })
     }
   })
@@ -307,8 +360,10 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    // Do not auto-open DevTools in production
+    if (isDev) {
+      mainWindow?.webContents.openDevTools()
+    }
   })
 
   // Handle external links
@@ -321,6 +376,8 @@ const createWindow = (): void => {
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   try {
+    // Set up file logging in production and gate verbose logs
+    await setupFileLogging()
     // BULLETPROOF Windows diagnostics and error handling
     console.log('🚀 [Main] ========== ISLA JOURNAL WINDOWS INITIALIZATION ==========')
     console.log(`🪟 [Main] Platform: ${process.platform}`)
@@ -515,7 +572,7 @@ app.whenReady().then(async () => {
         submenu: [
           { role: 'reload' },
           { role: 'forceReload' },
-          { role: 'toggleDevTools' },
+          ...(isDev ? [{ role: 'toggleDevTools' } as const] : []),
           { type: 'separator' },
           { role: 'resetZoom' },
           { role: 'zoomIn' },
@@ -1250,34 +1307,34 @@ ipcMain.handle('settings:getAll', async () => {
   }
 })
 
-// File system operations - Delete
-ipcMain.handle('file:delete', async (_, filePath: string) => {
-  try {
-    const { unlink, rmdir } = await import('fs/promises')
-    const stats = await stat(filePath)
-    
-    if (stats.isDirectory()) {
-      // For directories, use recursive removal
-      await rmdir(filePath, { recursive: true })
-      console.log('🗑️ [IPC] Directory deleted:', filePath)
-    } else {
-      // For files
-      await unlink(filePath)
-      console.log('🗑️ [IPC] File deleted:', filePath)
+  // File system operations - Delete
+  ipcMain.handle('file:delete', async (_, filePath: string) => {
+    try {
+      const { unlink, rmdir } = await import('fs/promises')
+      const stats = await stat(filePath)
       
-      // Remove from database if it was a markdown file
-      if (filePath.endsWith('.md')) {
-        // TODO: Add method to remove file from database
-        console.log('🗑️ [Database] Should remove from index:', filePath)
+      if (stats.isDirectory()) {
+        // For directories, use recursive removal
+        await rmdir(filePath, { recursive: true })
+        console.log('🗑️ [IPC] Directory deleted:', filePath)
+      } else {
+        // For files
+        await unlink(filePath)
+        console.log('🗑️ [IPC] File deleted:', filePath)
+        
+        // Remove from database if it was a markdown file
+        if (filePath.endsWith('.md')) {
+          database.deleteFileByPath(filePath)
+          console.log('🗑️ [Database] Removed from index:', filePath)
+        }
       }
+      
+      return true
+    } catch (error) {
+      console.error('❌ [IPC] Error deleting file/directory:', error)
+      throw error
     }
-    
-    return true
-  } catch (error) {
-    console.error('❌ [IPC] Error deleting file/directory:', error)
-    throw error
-  }
-})
+  })
 
 // File system operations - Rename/Move
 ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
@@ -1304,12 +1361,8 @@ ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
     // Update database if it was a markdown file
     if (oldPath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
+        database.updateFilePath(oldPath, newPath, fileName)
         console.log('📝 [Database] Updated index for renamed file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after rename:', dbError)
@@ -1353,12 +1406,8 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     // Update database if it was a markdown file
     if (sourcePath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
+        database.updateFilePath(sourcePath, newPath, fileName)
         console.log('📝 [Database] Updated index for moved file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after move:', dbError)

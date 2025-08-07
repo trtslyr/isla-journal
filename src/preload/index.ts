@@ -11,8 +11,8 @@ const electronAPI = {
   readDirectory: (path: string) => ipcRenderer.invoke('file:readDirectory', path),
   readFile: (path: string) => ipcRenderer.invoke('file:readFile', path),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('file:writeFile', path, content),
-  createFile: (dirPath: string, fileName: string, content: string) => 
-    ipcRenderer.invoke('file:createFile', dirPath, fileName, content),
+  createFile: (dirPath: string, fileName: string) => 
+    ipcRenderer.invoke('file:createFile', dirPath, fileName),
   createDirectory: (dirPath: string, dirName: string) => 
     ipcRenderer.invoke('file:createDirectory', dirPath, dirName),
   deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
@@ -29,9 +29,7 @@ const electronAPI = {
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   
   // RAG/Content search
-  searchContent: (query: string) => ipcRenderer.invoke('content:search', query),
-  answerQuestion: (query: string, history?: Array<{role: string, content: string}>) => 
-    ipcRenderer.invoke('content:answer', query, history),
+  searchContent: (query: string, limit?: number) => ipcRenderer.invoke('content:search', query, limit),
   contentSearchAndAnswer: (query: string, chatId?: number) => 
     ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
     
@@ -62,7 +60,7 @@ const electronAPI = {
   chatGetMessages: (chatId: number) => ipcRenderer.invoke('chat:getMessages', chatId),
   chatAddMessage: (chatId: number, role: string, content: string) => 
     ipcRenderer.invoke('chat:addMessage', chatId, role, content),
-  chatClearMessages: (chatId: number) => ipcRenderer.invoke('chat:clearMessages', chatId),
+
   
   // License operations removed - now handled in renderer process only
   
