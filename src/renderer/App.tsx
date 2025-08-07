@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { MonacoEditor } from './components/Editor'
+import { MonacoEditor, MarkdownPreview } from './components/Editor'
 import { FileTree } from './components/FileTree'
 
 import Settings from './components/Settings'
@@ -67,6 +67,7 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
+  const [showPreview, setShowPreview] = useState(false)
 
   // Initialize theme on app load
   useEffect(() => {
@@ -821,16 +822,27 @@ const App: React.FC = () => {
               >
                 insights
               </button>
+              <button
+                className="new-tab-btn"
+                onClick={() => setShowPreview(p => !p)}
+                title="Toggle preview"
+              >
+                {showPreview ? 'md' : '👁'}
+              </button>
             </div>
           </div>
           <div className="panel-content">
             {activeTab && (
-              <MonacoEditor
-                value={activeTab.content}
-                onChange={handleEditorChange}
-                language="markdown"
-                theme={currentTheme}
-              />
+              showPreview ? (
+                <MarkdownPreview markdown={activeTab.content} />
+              ) : (
+                <MonacoEditor
+                  value={activeTab.content}
+                  onChange={handleEditorChange}
+                  language="markdown"
+                  theme={currentTheme}
+                />
+              )
             )}
           </div>
         </div>
