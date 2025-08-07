@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { MonacoEditor } from './components/Editor'
+import { MonacoEditor, MarkdownPreview } from './components/Editor'
+import EditorPane from './components/Layout/EditorPane'
+import Sidebar from './components/Layout/Sidebar'
 import { FileTree } from './components/FileTree'
 
 import Settings from './components/Settings'
@@ -11,6 +13,7 @@ interface ChatMessage {
   content: string
   role: 'user' | 'assistant'
   timestamp: Date
+  sources?: Array<{ file_name: string; file_path: string; snippet: string }>
 }
 
 interface EditorTab {
@@ -67,6 +70,15 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
+  const [showPreview, setShowPreview] = useState(false)
+  const editorApiRef = useRef<{
+    wrapSelection: (p: string, s?: string) => void
+    toggleBold: () => void
+    toggleItalic: () => void
+    insertLink: () => void
+    insertList: (t: 'bullet'|'number'|'check') => void
+    insertCodeBlock: () => void
+  } | null>(null)
 
   // Initialize theme on app load
   useEffect(() => {
@@ -115,25 +127,29 @@ const App: React.FC = () => {
     initializeFontSettings()
   }, [])
 
-  // Listen for theme changes from settings
+  // Event-driven settings updates (theme and others)
   useEffect(() => {
-    const handleStorageChange = async () => {
-      try {
-        const newTheme = await window.electronAPI.settingsGet('theme') || 'dark'
-        if (newTheme !== currentTheme) {
-          setCurrentTheme(newTheme)
-          document.documentElement.setAttribute('data-theme', newTheme)
-          console.log('🎨 Theme updated:', newTheme)
-        }
-      } catch (error) {
-        console.error('Failed to update theme:', error)
+    const unsubscribe = window.electronAPI.onSettingsChanged(({ key, value }) => {
+      if (key === 'theme') {
+        setCurrentTheme(value || 'dark')
+        document.documentElement.setAttribute('data-theme', value || 'dark')
+      }
+    })
+    return () => { if (unsubscribe) unsubscribe() }
+  }, [])
+
+  // Keyboard shortcut: toggle preview Ctrl/Cmd+Shift+V
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
+      if (isCmd && e.shiftKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault()
+        setShowPreview(p => !p)
       }
     }
-    
-    // Check for theme changes periodically (simple approach)
-    const interval = setInterval(handleStorageChange, 1000)
-    return () => clearInterval(interval)
-  }, [currentTheme])
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Get current active tab
   const activeTab = tabs.find(tab => tab.id === activeTabId)
@@ -189,10 +205,37 @@ const App: React.FC = () => {
     document.addEventListener('mousemove', handleRightResize)
     document.addEventListener('mouseup', handleMouseUp)
     
+    // Streaming listeners
+    const offChunk = window.electronAPI.onContentStreamChunk?.(({ chunk }) => {
+      setChatMessages(prev => {
+        const last = prev[prev.length-1]
+        if (!last || last.role !== 'assistant') {
+          const m = { id: String(Date.now()), content: chunk, role:'assistant' as const, timestamp: new Date() }
+          return [...prev, m]
+        } else {
+          const updated = { ...last, content: (last.content || '') + chunk }
+          return [...prev.slice(0, -1), updated as any]
+        }
+      })
+    })
+    const offDone = window.electronAPI.onContentStreamDone?.(({ answer, sources }) => {
+      setChatMessages(prev => {
+        const last = prev[prev.length-1]
+        if (last && last.role === 'assistant') {
+          const updated = { ...last, content: answer, sources }
+          return [...prev.slice(0,-1), updated as any]
+        }
+        return prev
+      })
+      setIsAiThinking(false)
+    })
+
     return () => {
       document.removeEventListener('mousemove', handleLeftResize)
       document.removeEventListener('mousemove', handleRightResize)
       document.removeEventListener('mouseup', handleMouseUp)
+      if (offChunk) offChunk()
+      if (offDone) offDone()
     }
   }, [handleLeftResize, handleRightResize, handleMouseUp])
 
@@ -436,25 +479,11 @@ const App: React.FC = () => {
       }
       setChatMessages(prev => [...prev, userMessage])
 
-      // Use RAG for intelligent journal-aware responses
+      // Use RAG for intelligent notes-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id)
+      const ragResponse = await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
       
-      if (ragResponse && ragResponse.answer) {
-        // Save RAG response to database
-        await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', ragResponse.answer)
-        
-        // Add RAG response to UI
-        const assistantMessage = {
-          id: (Date.now() + 1).toString(),
-          content: ragResponse.answer,
-          role: 'assistant' as const,
-          timestamp: new Date()
-        }
-        setChatMessages(prev => [...prev, assistantMessage])
-        
-        console.log(`✅ [App] RAG response generated with ${ragResponse.sources?.length || 0} sources`)
-      } else {
+      if (!ragResponse) {
         console.log(`⚠️ [App] No RAG response, falling back to basic LLM`)
         // Fallback to basic LLM response
         const basicResponse = await window.electronAPI.llmSendMessage([
@@ -732,108 +761,24 @@ const App: React.FC = () => {
 
           {/* Main Content Area */}
       <div className="main-content">
-        {/* Left Panel - File Tree */}
-        <div 
-          className={`panel file-tree-panel ${leftPanelCollapsed ? 'collapsed' : ''}`} 
-          style={{ width: leftPanelWidth }}
-        >
-          {!leftPanelCollapsed && (
-            <div className="panel-content">
-              <FileTree
-                rootPath={rootDirectory}
-                onFileSelect={handleFileSelect}
-                selectedFile={activeTab?.path || null}
-                onDirectorySelect={handleOpenDirectory}
-              />
-            </div>
-          )}
-
-          {/* Left Resize Handle */}
-          <div 
-            className="resize-handle resize-handle-right"
-            onMouseDown={(e) => {
-              e.preventDefault()
-              isDraggingLeft.current = true
-              document.body.style.cursor = 'col-resize'
-              document.body.style.userSelect = 'none'
-            }}
-          />
-        </div>
-
+        <Sidebar
+          rootDirectory={rootDirectory}
+          width={leftPanelWidth}
+          collapsed={leftPanelCollapsed}
+          onResizeStart={() => { isDraggingLeft.current = true }}
+          onOpenDirectory={handleOpenDirectory}
+          onFileSelect={handleFileSelect}
+          selectedFilePath={activeTab?.path || null}
+        />
+ 
         {/* Center Panel - Editor */}
-        <div className="panel editor-panel">
-          <div className="panel-header">
-            <div className="tab-bar">
-              {/* File tree toggle button */}
-              <button 
-                className="panel-toggle-btn file-tree-toggle"
-                onClick={() => {
-                  if (leftPanelCollapsed) {
-                    setLeftPanelWidth(280)
-                    setLeftPanelCollapsed(false)
-                  } else {
-                    setLeftPanelCollapsed(true)
-                  }
-                }}
-                title={leftPanelCollapsed ? "Show Explorer" : "Hide Explorer"}
-              >
-                me
-              </button>
-              
-              {tabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
-                  onClick={() => setActiveTabId(tab.id)}
-                >
-                  <span>{tab.name}{tab.hasUnsavedChanges ? ' •' : ''}</span>
-                  <span 
-                    className="tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      closeTab(tab.id)
-                    }}
-                  >
-                    ×
-                  </span>
-                </div>
-              ))}
-              <button 
-                className="new-tab-btn"
-                onClick={createNewTab}
-                title="New Tab"
-              >
-                +
-              </button>
-              
-              {/* AI chat toggle button on the right */}
-              <button 
-                className="panel-toggle-btn ai-chat-toggle right-aligned"
-                onClick={() => {
-                  if (rightPanelCollapsed) {
-                    setRightPanelWidth(320)
-                    setRightPanelCollapsed(false)
-                  } else {
-                    setRightPanelCollapsed(true)
-                  }
-                }}
-                title={rightPanelCollapsed ? "Show AI Chat" : "Hide AI Chat"}
-              >
-                insights
-              </button>
-            </div>
-          </div>
-          <div className="panel-content">
-            {activeTab && (
-              <MonacoEditor
-                value={activeTab.content}
-                onChange={handleEditorChange}
-                language="markdown"
-                theme={currentTheme}
-              />
-            )}
-          </div>
-        </div>
+        <EditorPane
+          activeTab={activeTab || null}
+          theme={currentTheme}
+          showPreview={showPreview}
+          onTogglePreview={() => setShowPreview(p => !p)}
+          onChange={handleEditorChange}
+        />
 
         {/* Right Panel - AI Chat */}
         <div 
@@ -953,9 +898,40 @@ const App: React.FC = () => {
                           </span>
                           <span className="message-text">{message.content}</span>
                         </div>
+                        {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+                          <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>
+                            {message.sources.slice(0,8).map((src, idx) => (
+                              <button
+                                key={idx}
+                                className="search-btn"
+                                title={src.snippet}
+                                onClick={async ()=>{
+                                  try {
+                                    const content = await window.electronAPI.readFile(src.file_path)
+                                    const cleanFileName = src.file_name
+                                    if (activeTab) {
+                                      setTabs(prev => prev.map(tab => 
+                                        tab.id === activeTab.id 
+                                          ? { ...tab, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges: false }
+                                          : tab
+                                      ))
+                                    } else {
+                                      const newTab = { id: `file-${Date.now()}`, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges:false }
+                                      setTabs(prev => [...prev, newTab as any])
+                                      setActiveTabId((newTab as any).id)
+                                    }
+                                  } catch (e) {
+                                    console.error('Failed to open source file:', e)
+                                  }
+                                }}
+                              >
+                                {src.file_name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
-                    
                     {isAiThinking && (
                       <div className="message message-assistant">
                         <div className="message-line">

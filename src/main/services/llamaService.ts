@@ -328,4 +328,26 @@ export class LlamaService {
   public async getRecommendedModelInfo(): Promise<ModelRecommendation> {
     return await this.deviceService.getRecommendedModel()
   }
+
+  public async embedTexts(texts: string[], modelOverride?: string): Promise<number[][]> {
+    if (!this.isInitialized) {
+      throw new Error('LlamaService not initialized')
+    }
+    const model = modelOverride || this.currentModel
+    if (!model) throw new Error('No model available for embeddings')
+
+    try {
+      // Ollama embeddings endpoint supports single text per call; do sequential to avoid overload
+      const vectors: number[][] = []
+      for (const t of texts) {
+        const res: any = await (this.ollama as any).embeddings({ model, prompt: t })
+        const v: number[] = res?.embedding || res?.data?.[0]?.embedding || []
+        vectors.push(v)
+      }
+      return vectors
+    } catch (error) {
+      console.error('❌ [LlamaService] Error generating embeddings:', error)
+      throw error
+    }
+  }
 } 
