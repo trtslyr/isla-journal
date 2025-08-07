@@ -20,6 +20,7 @@
     "setup:platform": "node -e \"console.log('Setting up for', process.platform, process.arch)\"",
     "rebuild:native": "npx @electron/rebuild --force",
     "rebuild:clean": "npm run clean:all && npm install && npm run rebuild:native",
+    "rebuild:windows": "npm run clean:modules && npm install --ignore-scripts && npx @electron/rebuild --force --arch=x64",
     "clean:all": "npm run clean:dist && npm run clean:modules",
     "clean:dist": "node -e \"const fs=require('fs'); const path='dist'; if(fs.existsSync(path)) fs.rmSync(path,{recursive:true,force:true}); console.log('dist cleaned')\"",
     "clean:modules": "node -e \"const fs=require('fs'); ['node_modules','package-lock.json'].forEach(p=>{if(fs.existsSync(p)) fs.rmSync(p,{recursive:true,force:true})}); console.log('modules cleaned')\"",
@@ -27,7 +28,8 @@
     "binaries:all": "node scripts/download-precompiled-binaries.js --all",
     "binaries:clean": "node scripts/download-precompiled-binaries.js --clean",
     "icons": "node scripts/generate-icons.js",
-    "dev:icon": "node scripts/dev-with-icon.js"
+    "dev:icon": "node scripts/dev-with-icon.js",
+    "build:windows": "node scripts/clean-build-windows.js"
   },
   "keywords": [
     "journal",
@@ -93,6 +95,7 @@
       "output": "release",
       "buildResources": "build"
     },
+
     "files": [
       "dist/**/*",
       "package.json",

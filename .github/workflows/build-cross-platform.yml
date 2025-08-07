@@ -451,29 +451,6 @@ jobs:
           retention-days: 30
           compression-level: 6
       
-      - name: Rename DMG files with architecture suffix
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "Renaming DMG files to include architecture..."
-          cd out/make || exit 1
-          
-          # Find and rename DMG files to include architecture
-          for dmg in $(find . -name "*.dmg"); do
-            dir=$(dirname "$dmg")
-            basename=$(basename "$dmg" .dmg)
-            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-              new_name="${basename}-apple-silicon.dmg"
-            else
-              new_name="${basename}-intel.dmg"
-            fi
-            echo "Renaming: $dmg → $dir/$new_name"
-            mv "$dmg" "$dir/$new_name"
-          done
-          
-          echo "DMG files after renaming:"
-          find . -name "*.dmg" -ls
-      
       - name: List ALL files in out directory
         shell: bash
         run: |
@@ -489,9 +466,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            out/**/*.dmg
-            out/**/*.exe
-            out/**/*.msi
+            **/*.dmg
+            **/*.exe
+            **/*.msi
           tag_name: ${{ github.ref_name }}
           name: "Isla Journal ${{ github.ref_name }} - NUCLEAR Option"
           body: |
