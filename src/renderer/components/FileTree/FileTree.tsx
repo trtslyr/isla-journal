@@ -634,10 +634,15 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   const renderRootSelector = () => {
     if (!rootPath) return null
+    const baseName = (() => {
+      const normalized = rootPath.replace(/\\/g, '/').replace(/\/$/, '')
+      const parts = normalized.split('/')
+      return parts[parts.length - 1] || normalized
+    })()
     return (
       <div className={`root-selector ${rootSelected ? 'selected' : ''}`} onClick={toggleRootSelection} title="Select entire root for AI context">
         <span className="tree-icon">🏠</span>
-        <span className="tree-name">Root: {rootPath}</span>
+        <span className="tree-name">{baseName}</span>
       </div>
     )
   }

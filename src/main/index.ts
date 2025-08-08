@@ -116,6 +116,7 @@ const createWindow = (): void => {
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     icon: iconPath,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -308,7 +309,7 @@ const createWindow = (): void => {
     mainWindow?.show()
     
     // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    // mainWindow?.webContents.openDevTools()
   })
 
   // Handle external links
