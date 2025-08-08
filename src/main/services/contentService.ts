@@ -13,6 +13,25 @@ export interface RAGResponse {
 }
 
 class ContentService {
+  private async ensureEmbeddingsForScope(scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }) {
+    try {
+      // Determine files in scope
+      const fileIds = database.getFileIdsForScope(scope)
+      if (fileIds.length === 0) return
+      const llama = LlamaService.getInstance()
+      for (const fileId of fileIds) {
+        const missing = database.getChunksMissingEmbeddings(fileId)
+        if (missing.length === 0) continue
+        for (const chunk of missing) {
+          const embedding = await llama.embedText(chunk.chunk_text)
+          database.saveChunkEmbedding(chunk.id, embedding)
+        }
+      }
+    } catch (error) {
+      console.log('⚠️ [ContentService] Failed to ensure embeddings:', error)
+    }
+  }
+
   /**
    * Perform RAG search and generate response with conversation context
    */
@@ -58,6 +77,9 @@ class ContentService {
         console.log('⚠️ [ContentService] Error loading pinned files:', error)
       }
 
+      // 2. Ensure embeddings exist for in-scope files
+      await this.ensureEmbeddingsForScope(scope)
+
       // 2. Search for relevant content (optionally scoped)
       let searchResults
       if (scope?.useRoot) {
@@ -71,24 +93,57 @@ class ContentService {
       } else {
         searchResults = database.searchContent(query, 5)
       }
-      
-      // 3. Build context from search results
-      let contextSources = ''
-      if (searchResults.length > 0) {
-        contextSources = `**🔍 Relevant content found:**\n${searchResults.map((result, index) => 
-          `[Source ${index + 1} from "${result.file_name}"]: ${result.content_snippet.replace(/<\/?mark>/g, '')}`
-        ).join('\n\n')}`
+
+      // 3. Vector retrieval from scoped embeddings
+      let vectorSources: Array<{ file_name: string; file_path: string; snippet: string; score: number }> = []
+      try {
+        const llama = LlamaService.getInstance()
+        const qEmb = await llama.embedText(query)
+        const fileIds = database.getFileIdsForScope(scope)
+        const embRows = database.getEmbeddingsForFileIds(fileIds, 2000)
+        // Compute cosine similarity
+        const dot = (a: number[], b: number[]) => a.reduce((s, v, i) => s + v * (b[i] || 0), 0)
+        const norm = (a: number[]) => Math.sqrt(a.reduce((s, v) => s + v * v, 0))
+        const qn = norm(qEmb) || 1
+        const scored = embRows.map(r => {
+          const sim = dot(qEmb, r.embedding) / (qn * (norm(r.embedding) || 1))
+          return { sim, r }
+        })
+        scored.sort((a, b) => b.sim - a.sim)
+        const top = scored.slice(0, 8)
+        vectorSources = top.map(({ sim, r }) => ({
+          file_name: r.file_name,
+          file_path: r.file_path,
+          snippet: r.chunk_text.slice(0, 300),
+          score: sim
+        }))
+      } catch (error) {
+        console.log('⚠️ [ContentService] Vector retrieval failed or unavailable:', error)
       }
+      
+      // 4. Build context from search results (keyword + vector)
+      let contextSources = ''
+      const keywordSection = searchResults.length > 0
+        ? `**🔍 Keyword matches:**\n${searchResults.map((result, index) => 
+          `[KW ${index + 1} from "${result.file_name}"]: ${result.content_snippet.replace(/<\/?mark>/g, '')}`
+        ).join('\n\n')}`
+        : ''
+      const vectorSection = vectorSources.length > 0
+        ? `**🧭 Semantic matches:**\n${vectorSources.map((v, i) => 
+          `[EMB ${i + 1} from "${v.file_name}"] (score=${v.score.toFixed(3)}): ${v.snippet}`
+        ).join('\n\n')}`
+        : ''
+      contextSources = [keywordSection, vectorSection].filter(Boolean).join('\n\n')
 
       // If no search results but we have pinned content, still proceed
-      if (searchResults.length === 0 && !pinnedContent) {
+      if (searchResults.length === 0 && vectorSources.length === 0 && !pinnedContent) {
         return {
           answer: "I couldn't find anything specific about that in your journal entries. What would you like to explore or share with me?",
           sources: []
         }
       }
 
-      // 4. Add conversation context if available
+      // 5. Add conversation context if available
       let conversationContext = ''
       if (conversationHistory && conversationHistory.length > 0) {
         const recentMessages = conversationHistory.slice(-4) // Last 4 messages for context
@@ -97,7 +152,7 @@ class ContentService {
         ).join('\n')}\n`
       }
 
-      // 5. Build conversational RAG prompt with pinned files always included
+      // 6. Build conversational RAG prompt with pinned files always included
       const ragPrompt = `You are the user's personal journal AI assistant. You have access to their private journal entries and should respond in a warm, supportive, and conversational way - like a close friend who knows them well.
 
 **Context from their journal:**
@@ -118,10 +173,10 @@ ${pinnedContent}${contextSources}${conversationContext}
 
 Remember: This is THEIR personal journal, so speak to them like you know their story and care about their journey.`
 
-      const totalSources = searchResults.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} search + pinned files)${scope?.includePaths?.length || scope?.includeDirectories?.length ? ' [SCOPED]' : ''}`)
+      const totalSources = searchResults.length + vectorSources.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
+      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} keyword + ${vectorSources.length} vector + pinned)${scope?.includePaths?.length || scope?.includeDirectories?.length || scope?.useRoot ? ' [SCOPED]' : ''}`)
 
-      // 6. Get LLM response
+      // 7. Get LLM response
       const llamaService = LlamaService.getInstance()
       const llmResponse = await llamaService.sendMessage([
         {
@@ -130,12 +185,19 @@ Remember: This is THEIR personal journal, so speak to them like you know their s
         }
       ])
 
-      // 7. Prepare sources (include both search results and pinned files info)
-      const sources = searchResults.map(result => ({
-        file_name: result.file_name,
-        file_path: result.file_path,
-        snippet: result.content_snippet.replace(/<\/?mark>/g, '')
-      }))
+      // 8. Prepare sources (include keyword, vector, and pinned info)
+      const sources = [
+        ...searchResults.map(result => ({
+          file_name: result.file_name,
+          file_path: result.file_path,
+          snippet: result.content_snippet.replace(/<\/?mark>/g, '')
+        })),
+        ...vectorSources.map(v => ({
+          file_name: v.file_name,
+          file_path: v.file_path,
+          snippet: v.snippet
+        }))
+      ]
 
       // Add pinned files info to sources
       if (pinnedContent) {
