@@ -32,9 +32,10 @@ interface FileTreeProps {
   onFileSelect: (filePath: string, fileName: string) => void
   selectedFile: string | null
   onDirectorySelect: () => void
+  onSelectionChange?: (selection: { includePaths: string[]; includeDirectories: string[]; useRoot: boolean }) => void
 }
 
-const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFile, onDirectorySelect }) => {
+const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFile, onDirectorySelect, onSelectionChange }) => {
   const [files, setFiles] = useState<FileItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,6 +43,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   const [pinnedItems, setPinnedItems] = useState<PinnedItem[]>([])
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [lastClickedItem, setLastClickedItem] = useState<string | null>(null)
+  const [rootSelected, setRootSelected] = useState<boolean>(false)
   
   // Search states
   const [searchQuery, setSearchQuery] = useState('')
@@ -176,6 +178,25 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     }
   }, [rootPath])
 
+  // Emit selection changes upward as RAG scope
+  useEffect(() => {
+    if (!onSelectionChange) return
+    const includePaths: string[] = []
+    const includeDirectories: string[] = []
+    selectedItems.forEach(p => {
+      const item = findItemByPath(files, p)
+      if (item) {
+        if (item.type === 'file') includePaths.push(item.path)
+        else includeDirectories.push(item.path)
+      }
+    })
+    onSelectionChange({
+      includePaths,
+      includeDirectories,
+      useRoot: rootSelected && !!rootPath
+    })
+  }, [selectedItems, rootSelected, files, rootPath])
+
   const toggleFolder = async (item: FileItem) => {
     const isCurrentlyExpanded = expandedFolders.has(item.path)
     const newExpanded = new Set(expandedFolders)
@@ -219,8 +240,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         newSelected.add(item.path)
       }
       setSelectedItems(newSelected)
+      setRootSelected(false)
     } else {
       setSelectedItems(new Set([item.path]))
+      setRootSelected(false)
     }
     
     setLastClickedItem(item.path)
@@ -229,6 +252,16 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       toggleFolder(item)
     } else {
       onFileSelect(item.path, item.name)
+    }
+  }
+
+  // Root selection button
+  const toggleRootSelection = () => {
+    if (!rootPath) return
+    const newRootSelected = !rootSelected
+    setRootSelected(newRootSelected)
+    if (newRootSelected) {
+      setSelectedItems(new Set())
     }
   }
 
@@ -570,6 +603,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                   onFileSelect(item.path, item.name)
                 }
                 setSelectedItems(new Set([item.path]))
+                setRootSelected(false)
               }}
               onMouseEnter={() => setHoveredItem(item.path)}
               onMouseLeave={() => setHoveredItem(null)}
@@ -594,6 +628,16 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             </div>
           ))}
         </div>
+      </div>
+    )
+  }
+
+  const renderRootSelector = () => {
+    if (!rootPath) return null
+    return (
+      <div className={`root-selector ${rootSelected ? 'selected' : ''}`} onClick={toggleRootSelection} title="Select entire root for AI context">
+        <span className="tree-icon">🏠</span>
+        <span className="tree-name">Root: {rootPath}</span>
       </div>
     )
   }
@@ -773,6 +817,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   return (
     <div className="file-tree">
+      {renderRootSelector()}
       <div className="panel-header">
         <div className="file-tree-header">
           <div className="header-actions">

@@ -16,7 +16,11 @@ class ContentService {
   /**
    * Perform RAG search and generate response with conversation context
    */
-  async searchAndAnswer(query: string, conversationHistory?: Array<{role: string, content: string}>): Promise<RAGResponse> {
+  async searchAndAnswer(
+    query: string,
+    conversationHistory?: Array<{role: string, content: string}>,
+    scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }
+  ): Promise<RAGResponse> {
     try {
       console.log(`🔍 [ContentService] Searching for: ${query}`)
 
@@ -54,8 +58,19 @@ class ContentService {
         console.log('⚠️ [ContentService] Error loading pinned files:', error)
       }
 
-      // 2. Search for relevant content
-      const searchResults = database.searchContent(query, 5)
+      // 2. Search for relevant content (optionally scoped)
+      let searchResults
+      if (scope?.useRoot) {
+        // If root selected, no filtering needed
+        searchResults = database.searchContent(query, 5)
+      } else if (scope?.includePaths?.length || scope?.includeDirectories?.length) {
+        searchResults = database.searchContentScoped(query, 5, {
+          includePaths: scope.includePaths || [],
+          includeDirectories: scope.includeDirectories || []
+        })
+      } else {
+        searchResults = database.searchContent(query, 5)
+      }
       
       // 3. Build context from search results
       let contextSources = ''
@@ -104,7 +119,7 @@ ${pinnedContent}${contextSources}${conversationContext}
 Remember: This is THEIR personal journal, so speak to them like you know their story and care about their journey.`
 
       const totalSources = searchResults.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} search + pinned files)`)
+      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} search + pinned files)${scope?.includePaths?.length || scope?.includeDirectories?.length ? ' [SCOPED]' : ''}`)
 
       // 6. Get LLM response
       const llamaService = LlamaService.getInstance()

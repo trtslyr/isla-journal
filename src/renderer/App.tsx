@@ -67,6 +67,8 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
+  // RAG selection scope
+  const [ragScope, setRagScope] = useState<{ includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }>({ useRoot: false })
 
   // Initialize theme on app load
   useEffect(() => {
@@ -438,7 +440,7 @@ const App: React.FC = () => {
 
       // Use RAG for intelligent journal-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id)
+      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id, ragScope)
       
       if (ragResponse && ragResponse.answer) {
         // Save RAG response to database
@@ -744,6 +746,7 @@ const App: React.FC = () => {
                 onFileSelect={handleFileSelect}
                 selectedFile={activeTab?.path || null}
                 onDirectorySelect={handleOpenDirectory}
+                onSelectionChange={(sel) => setRagScope(sel)}
               />
             </div>
           )}

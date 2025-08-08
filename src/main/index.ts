@@ -1167,7 +1167,7 @@ ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
   }
 })
 
-ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number) => {
+ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number, scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }) => {
   try {
     await database.ensureReady()
     console.log(`🧠 [IPC] RAG search and answer: ${query}`)
@@ -1182,7 +1182,7 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
       }))
     }
     
-    return await contentService.searchAndAnswer(query, conversationHistory)
+    return await contentService.searchAndAnswer(query, conversationHistory, scope)
   } catch (error) {
     console.error('❌ [IPC] Error in RAG search:', error)
     throw error

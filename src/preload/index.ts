@@ -32,8 +32,11 @@ const electronAPI = {
   searchContent: (query: string) => ipcRenderer.invoke('content:search', query),
   answerQuestion: (query: string, history?: Array<{role: string, content: string}>) => 
     ipcRenderer.invoke('content:answer', query, history),
-  contentSearchAndAnswer: (query: string, chatId?: number) => 
-    ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
+  contentSearchAndAnswer: (
+    query: string,
+    chatId?: number,
+    scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }
+  ) => ipcRenderer.invoke('content:searchAndAnswer', query, chatId, scope),
     
   // LLM operations
   llmSendMessage: (messages: Array<{role: string, content: string}>) => 

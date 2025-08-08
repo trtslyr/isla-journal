@@ -590,6 +590,89 @@ class IslaDatabase {
   }
 
   /**
+   * Scoped search: limit results to selected files and/or directories
+   */
+  public searchContentScoped(
+    query: string,
+    limit: number = 10,
+    scope?: { includePaths?: string[]; includeDirectories?: string[] }
+  ): SearchResult[] {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      // Clean and split query into individual words
+      const words = query.toLowerCase()
+        .replace(/['\"*?!@#$%^&()+={}[\\]|\\\\:\";'<>,.]/g, ' ')
+        .split(/\s+/)
+        .filter(word => word.length > 2)
+        .slice(0, 3)
+
+      if (words.length === 0) {
+        console.log('🔍 [Database] No valid search words found')
+        return []
+      }
+
+      // Normalize scope paths
+      const includePaths = (scope?.includePaths || []).map(p => this.normalizeFilePath(p))
+      const includeDirectories = (scope?.includeDirectories || []).map(p => this.normalizeFilePath(p))
+
+      // Build filter clause
+      const hasPathFilters = includePaths.length > 0 || includeDirectories.length > 0
+      let filterClause = ''
+      let filterParams: any[] = []
+      if (hasPathFilters) {
+        const clauses: string[] = []
+        if (includePaths.length > 0) {
+          const placeholders = includePaths.map(() => '?').join(', ')
+          clauses.push(`f.path IN (${placeholders})`)
+          filterParams.push(...includePaths)
+        }
+        if (includeDirectories.length > 0) {
+          includeDirectories.forEach(dir => {
+            // Ensure trailing slash for prefix match
+            const dirWithSlash = dir.endsWith('/') ? dir : dir + '/'
+            clauses.push(`f.path LIKE ?`)
+            filterParams.push(dirWithSlash + '%')
+          })
+        }
+        filterClause = ` AND (${clauses.join(' OR ')})`
+      }
+
+      const results: SearchResult[] = []
+      for (const word of words) {
+        const stmt = this.db.prepare(
+          `SELECT 
+              c.id,
+              c.file_id,
+              f.path as file_path,
+              f.name as file_name,
+              substr(c.chunk_text, 1, 200) as content_snippet,
+              1 as rank
+            FROM content_chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE LOWER(c.chunk_text) LIKE '%' || ? || '%'
+            ${filterClause}
+            LIMIT ?`
+        )
+
+        const params = [word, ...filterParams, Math.ceil(limit / words.length)]
+        const wordResults = stmt.all(...params) as SearchResult[]
+        results.push(...wordResults)
+      }
+
+      const uniqueResults = results.filter((result, index, self) =>
+        index === self.findIndex(r => r.id === result.id)
+      ).slice(0, limit)
+
+      console.log(`🔍 [Database] Found ${uniqueResults.length} scoped results for: ${query}`)
+      return uniqueResults
+    } catch (error) {
+      console.error('❌ [Database] Scoped search error:', error)
+      return []
+    }
+  }
+
+  /**
    * Get file content by ID
    */
   public getFileContent(fileId: number): string | null {
