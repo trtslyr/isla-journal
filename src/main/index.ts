@@ -667,15 +667,15 @@ ipcMain.handle('file:openDirectory', async () => {
         // First time - this is a root directory selection
         console.log('📁 [First Time] No previous directory found, setting root directory')
         isRootDirectoryChange = true
-      } else if (currentSavedDirectory !== dirPath && !path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
-        // This is a genuine root directory change (not a subdirectory)
-        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', dirPath)
+      } else if (currentSavedDirectory !== normalizedDirPath && path.relative(currentSavedDirectory, normalizedDirPath).startsWith('..')) {
+        // This is a genuine root directory change (new root outside previous one)
+        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', normalizedDirPath)
         shouldClearDatabase = true
         isRootDirectoryChange = true
-      } else if (!path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
+      } else if (!path.relative(currentSavedDirectory, normalizedDirPath).startsWith('..')) {
         // This is just subdirectory expansion - don't change root directory or clear database
-        console.log('📂 [Subdirectory Expansion]:', dirPath)
-      } else if (currentSavedDirectory === dirPath) {
+        console.log('📂 [Subdirectory Expansion]:', normalizedDirPath)
+      } else if (currentSavedDirectory === normalizedDirPath) {
         // Same directory - might be a refresh
         console.log('🔄 [Directory Refresh]:', dirPath)
       }
