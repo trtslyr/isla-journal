@@ -244,6 +244,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     } else {
       setSelectedItems(new Set([item.path]))
       setRootSelected(false)
+      // If it's a directory and it is the only selection, index recursively in background
+      if (item.type === 'directory') {
+        window.electronAPI?.dbIndexDirectoryRecursive?.(item.path).catch(() => {})
+      }
     }
     
     setLastClickedItem(item.path)
@@ -262,6 +266,8 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     setRootSelected(newRootSelected)
     if (newRootSelected) {
       setSelectedItems(new Set())
+      // Index entire root recursively when root is selected
+      window.electronAPI?.dbIndexDirectoryRecursive?.(rootPath).catch(() => {})
     }
   }
 

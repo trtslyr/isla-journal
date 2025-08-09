@@ -966,6 +966,22 @@ ipcMain.handle('db:reindexAll', async () => {
   }
 })
 
+// Recursively index a specific directory without clearing the database
+ipcMain.handle('db:indexDirectoryRecursive', async (_ , dirPath: string) => {
+  try {
+    await database.ensureReady()
+    const normalized = normalizePath(dirPath)
+    console.log('🔄 [IPC] Recursively indexing directory:', normalized)
+    await processDirectoryRecursively(normalized)
+    const stats = database.getStats()
+    console.log('✅ [IPC] Directory indexed:', normalized)
+    return stats
+  } catch (error) {
+    console.error('❌ [IPC] Error indexing directory recursively:', error)
+    throw error
+  }
+})
+
 // LLM IPC handlers
 ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, content: string}>) => {
   try {

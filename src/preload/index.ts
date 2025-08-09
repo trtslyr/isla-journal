@@ -23,6 +23,7 @@ const electronAPI = {
   dbClearAll: () => ipcRenderer.invoke('db:clearAll'),
   dbGetStats: () => ipcRenderer.invoke('db:getStats'),
   dbReindexAll: () => ipcRenderer.invoke('db:reindexAll'),
+  dbIndexDirectoryRecursive: (dirPath: string) => ipcRenderer.invoke('db:indexDirectoryRecursive', dirPath),
   
   // Settings operations
   settingsGet: (key: string) => ipcRenderer.invoke('settings:get', key),
