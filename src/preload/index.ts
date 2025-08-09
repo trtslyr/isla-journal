@@ -29,9 +29,10 @@ const electronAPI = {
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   
   // RAG/Content search
-  searchContent: (query: string) => ipcRenderer.invoke('content:search', query),
+  searchContent: (query: string, limit?: number) => ipcRenderer.invoke('content:search', query, limit),
+  // content:answer was deprecated; keep a shim to avoid renderer errors
   answerQuestion: (query: string, history?: Array<{role: string, content: string}>) => 
-    ipcRenderer.invoke('content:answer', query, history),
+    ipcRenderer.invoke('content:searchAndAnswer', query, undefined),
   contentSearchAndAnswer: (query: string, chatId?: number) => 
     ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
     
