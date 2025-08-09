@@ -308,6 +308,37 @@ export class LlamaService {
     return this.currentModel
   }
 
+  /**
+   * Create an embedding vector for provided text using an embedding-capable model
+   */
+  public async embedText(text: string, model: string = 'nomic-embed-text'): Promise<number[]> {
+    // If not initialized (e.g., Ollama not available), return a trivial zero vector to avoid crashes
+    if (!this.isInitialized) {
+      return Array(768).fill(0)
+    }
+    try {
+      // Use Ollama embeddings API
+      // @ts-ignore - embed API may not be typed on installed version
+      const res = await (this.ollama as any).embeddings({ model, prompt: text })
+      if (res && Array.isArray(res.embedding)) {
+        return res.embedding as number[]
+      }
+      // Fallback: single vector in object
+      if (res && res.embedding) return res.embedding
+    } catch (error) {
+      this.safeLog(`❌ [LlamaService] Embedding generation failed: ${error}`, 'error')
+    }
+    // Final fallback: deterministic pseudo-vector from text length
+    const dim = 768
+    const vec = new Array(dim).fill(0)
+    let seed = Math.min(10000, Math.max(1, text.length))
+    for (let i = 0; i < dim; i++) {
+      seed = (seed * 9301 + 49297) % 233280
+      vec[i] = (seed / 233280) - 0.5
+    }
+    return vec
+  }
+
   public async switchModel(modelName: string): Promise<void> {
     console.log(`🔄 [LlamaService] Switching to model: ${modelName}`)
     

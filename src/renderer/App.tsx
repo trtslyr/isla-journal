@@ -67,6 +67,8 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
+  // RAG selection scope
+  const [ragScope, setRagScope] = useState<{ includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }>({ useRoot: false })
 
   // Initialize theme on app load
   useEffect(() => {
@@ -247,21 +249,8 @@ const App: React.FC = () => {
     ))
   }
 
-  const saveTab = async (tabId: string) => {
-    const tab = tabs.find(t => t.id === tabId)
-    if (!tab || !tab.path) return
-
-    try {
-      await window.electronAPI.writeFile(tab.path, tab.content)
-      setTabs(prev => prev.map(t => 
-        t.id === tabId 
-          ? { ...t, hasUnsavedChanges: false }
-          : t
-      ))
-    } catch (error) {
-      console.error('Failed to save file:', error)
-    }
-  }
+  // View-only: saving is disabled
+  const saveTab = async (_tabId: string) => {}
 
   // Initialize app data on component mount
   useEffect(() => {
@@ -320,16 +309,7 @@ const App: React.FC = () => {
     initializeApp()
   }, [])
 
-  // Auto-save active tab
-  useEffect(() => {
-    if (!activeTab?.hasUnsavedChanges || !activeTab?.path) return
-
-    const timeoutId = setTimeout(async () => {
-      await saveTab(activeTab.id)
-    }, 1000)
-
-    return () => clearTimeout(timeoutId)
-  }, [activeTab?.content, activeTab?.hasUnsavedChanges])
+  // Auto-save disabled in view-only mode
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -349,11 +329,8 @@ const App: React.FC = () => {
     console.log('🎯 [App] rootDirectory state changed to:', rootDirectory)
   }, [rootDirectory])
 
-  const handleEditorChange = (value: string | undefined) => {
-    if (value !== undefined && activeTab) {
-      updateTabContent(activeTab.id, value)
-    }
-  }
+  // View-only: editor changes are ignored
+  const handleEditorChange = (_value: string | undefined) => {}
 
   const handleFileSelect = async (filePath: string, fileName: string) => {
     try {
@@ -438,7 +415,7 @@ const App: React.FC = () => {
 
       // Use RAG for intelligent journal-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id)
+      const ragResponse = await window.electronAPI.contentSearchAndAnswer(userContent, activeChat.id, ragScope)
       
       if (ragResponse && ragResponse.answer) {
         // Save RAG response to database
@@ -744,6 +721,7 @@ const App: React.FC = () => {
                 onFileSelect={handleFileSelect}
                 selectedFile={activeTab?.path || null}
                 onDirectorySelect={handleOpenDirectory}
+                onSelectionChange={(sel) => setRagScope(sel)}
               />
             </div>
           )}
@@ -786,7 +764,7 @@ const App: React.FC = () => {
                   className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
                   onClick={() => setActiveTabId(tab.id)}
                 >
-                  <span>{tab.name}{tab.hasUnsavedChanges ? ' •' : ''}</span>
+                  <span>{tab.name}</span>
                   <span 
                     className="tab-close"
                     onClick={(e) => {
@@ -827,9 +805,10 @@ const App: React.FC = () => {
             {activeTab && (
               <MonacoEditor
                 value={activeTab.content}
-                onChange={handleEditorChange}
+                onChange={() => { /* view-only: ignore edits */ }}
                 language="markdown"
                 theme={currentTheme}
+                readOnly={true}
               />
             )}
           </div>

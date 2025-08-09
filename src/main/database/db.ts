@@ -403,6 +403,18 @@ class IslaDatabase {
       )
     `)
 
+    // Embeddings table - stores vector embeddings for chunks
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chunk_embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chunk_id INTEGER NOT NULL UNIQUE,
+        embedding_json TEXT NOT NULL,
+        model TEXT DEFAULT 'nomic-embed-text',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+      )
+    `)
+
     // FTS removed - using direct content_chunks search instead
 
     // Search index table - for full-text search
@@ -585,6 +597,89 @@ class IslaDatabase {
       
     } catch (error) {
       console.error('❌ [Database] Search error:', error)
+      return []
+    }
+  }
+
+  /**
+   * Scoped search: limit results to selected files and/or directories
+   */
+  public searchContentScoped(
+    query: string,
+    limit: number = 10,
+    scope?: { includePaths?: string[]; includeDirectories?: string[] }
+  ): SearchResult[] {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      // Clean and split query into individual words
+      const words = query.toLowerCase()
+        .replace(/['\"*?!@#$%^&()+={}[\\]|\\\\:\";'<>,.]/g, ' ')
+        .split(/\s+/)
+        .filter(word => word.length > 2)
+        .slice(0, 3)
+
+      if (words.length === 0) {
+        console.log('🔍 [Database] No valid search words found')
+        return []
+      }
+
+      // Normalize scope paths
+      const includePaths = (scope?.includePaths || []).map(p => this.normalizeFilePath(p))
+      const includeDirectories = (scope?.includeDirectories || []).map(p => this.normalizeFilePath(p))
+
+      // Build filter clause
+      const hasPathFilters = includePaths.length > 0 || includeDirectories.length > 0
+      let filterClause = ''
+      let filterParams: any[] = []
+      if (hasPathFilters) {
+        const clauses: string[] = []
+        if (includePaths.length > 0) {
+          const placeholders = includePaths.map(() => '?').join(', ')
+          clauses.push(`f.path IN (${placeholders})`)
+          filterParams.push(...includePaths)
+        }
+        if (includeDirectories.length > 0) {
+          includeDirectories.forEach(dir => {
+            // Ensure trailing slash for prefix match
+            const dirWithSlash = dir.endsWith('/') ? dir : dir + '/'
+            clauses.push(`f.path LIKE ?`)
+            filterParams.push(dirWithSlash + '%')
+          })
+        }
+        filterClause = ` AND (${clauses.join(' OR ')})`
+      }
+
+      const results: SearchResult[] = []
+      for (const word of words) {
+        const stmt = this.db.prepare(
+          `SELECT 
+              c.id,
+              c.file_id,
+              f.path as file_path,
+              f.name as file_name,
+              substr(c.chunk_text, 1, 200) as content_snippet,
+              1 as rank
+            FROM content_chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE LOWER(c.chunk_text) LIKE '%' || ? || '%'
+            ${filterClause}
+            LIMIT ?`
+        )
+
+        const params = [word, ...filterParams, Math.ceil(limit / words.length)]
+        const wordResults = stmt.all(...params) as SearchResult[]
+        results.push(...wordResults)
+      }
+
+      const uniqueResults = results.filter((result, index, self) =>
+        index === self.findIndex(r => r.id === result.id)
+      ).slice(0, limit)
+
+      console.log(`🔍 [Database] Found ${uniqueResults.length} scoped results for: ${query}`)
+      return uniqueResults
+    } catch (error) {
+      console.error('❌ [Database] Scoped search error:', error)
       return []
     }
   }
@@ -1101,6 +1196,122 @@ class IslaDatabase {
         this.db = null // Ensure it's set to null even on error
       }
     }
+  }
+
+  /**
+   * List chunks for a file with their IDs and text
+   */
+  public getChunksForFile(fileId: number): Array<{ id: number; chunk_text: string; chunk_index: number }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const rows = this.db.prepare('SELECT id, chunk_text, chunk_index FROM content_chunks WHERE file_id = ? ORDER BY chunk_index ASC').all(fileId)
+    return rows as Array<{ id: number; chunk_text: string; chunk_index: number }>
+  }
+
+  /**
+   * Get chunk rows missing embeddings for a given file
+   */
+  public getChunksMissingEmbeddings(fileId: number): Array<{ id: number; chunk_text: string; chunk_index: number }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const rows = this.db.prepare(`
+      SELECT c.id, c.chunk_text, c.chunk_index
+      FROM content_chunks c
+      LEFT JOIN chunk_embeddings e ON e.chunk_id = c.id
+      WHERE c.file_id = ? AND e.id IS NULL
+      ORDER BY c.chunk_index ASC
+    `).all(fileId)
+    return rows as Array<{ id: number; chunk_text: string; chunk_index: number }>
+  }
+
+  /**
+   * Save or update an embedding for a chunk
+   */
+  public saveChunkEmbedding(chunkId: number, embedding: number[], model: string = 'nomic-embed-text'): void {
+    if (!this.db) throw new Error('Database not initialized')
+    const stmt = this.db.prepare(`
+      INSERT INTO chunk_embeddings (chunk_id, embedding_json, model)
+      VALUES (?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET embedding_json = excluded.embedding_json, model = excluded.model
+    `)
+    stmt.run(chunkId, JSON.stringify(embedding), model)
+  }
+
+  /**
+   * Resolve a set of file IDs matching a scope
+   */
+  public getFileIdsForScope(scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }): number[] {
+    if (!this.db) throw new Error('Database not initialized')
+    if (scope?.useRoot) {
+      const rows = this.db.prepare('SELECT id FROM files').all() as Array<{ id: number }>
+      return rows.map(r => r.id)
+    }
+    const includePaths = (scope?.includePaths || []).map(p => this.normalizeFilePath(p))
+    const includeDirectories = (scope?.includeDirectories || []).map(p => this.normalizeFilePath(p))
+    if (includePaths.length === 0 && includeDirectories.length === 0) {
+      // Default to all files if no scope provided
+      const rows = this.db.prepare('SELECT id FROM files').all() as Array<{ id: number }>
+      return rows.map(r => r.id)
+    }
+
+    let whereClauses: string[] = []
+    let params: any[] = []
+    if (includePaths.length > 0) {
+      whereClauses.push(`path IN (${includePaths.map(() => '?').join(', ')})`)
+      params.push(...includePaths)
+    }
+    includeDirectories.forEach(dir => {
+      const dirWithSlash = dir.endsWith('/') ? dir : dir + '/'
+      whereClauses.push('path LIKE ?')
+      params.push(dirWithSlash + '%')
+    })
+
+    const sql = `SELECT id FROM files WHERE ${whereClauses.join(' OR ')}`
+    const rows = this.db.prepare(sql).all(...params) as Array<{ id: number }>
+    return rows.map(r => r.id)
+  }
+
+  /**
+   * Fetch embeddings for chunks in given files (limited)
+   */
+  public getEmbeddingsForFileIds(
+    fileIds: number[],
+    maxTotal: number = 1000
+  ): Array<{ chunk_id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; embedding: number[] }> {
+    if (!this.db) throw new Error('Database not initialized')
+    if (fileIds.length === 0) return []
+    const placeholders = fileIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT 
+        c.id as chunk_id,
+        c.file_id as file_id,
+        f.path as file_path,
+        f.name as file_name,
+        c.chunk_text as chunk_text,
+        e.embedding_json as embedding_json
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      JOIN chunk_embeddings e ON e.chunk_id = c.id
+      WHERE c.file_id IN (${placeholders})
+      ORDER BY c.file_id, c.chunk_index
+      LIMIT ?
+    `).all(...fileIds, maxTotal) as Array<any>
+
+    return rows.map(r => ({
+      chunk_id: r.chunk_id,
+      file_id: r.file_id,
+      file_path: r.file_path,
+      file_name: r.file_name,
+      chunk_text: r.chunk_text,
+      embedding: JSON.parse(r.embedding_json)
+    }))
+  }
+
+  /**
+   * Get FileRecord by ID
+   */
+  public getFileById(fileId: number): FileRecord | null {
+    if (!this.db) throw new Error('Database not initialized')
+    const row = this.db.prepare('SELECT * FROM files WHERE id = ?').get(fileId)
+    return (row as FileRecord) || null
   }
 }
 

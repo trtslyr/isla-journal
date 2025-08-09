@@ -116,6 +116,7 @@ const createWindow = (): void => {
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     icon: iconPath,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -308,7 +309,7 @@ const createWindow = (): void => {
     mainWindow?.show()
     
     // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    // mainWindow?.webContents.openDevTools()
   })
 
   // Handle external links
@@ -965,6 +966,22 @@ ipcMain.handle('db:reindexAll', async () => {
   }
 })
 
+// Recursively index a specific directory without clearing the database
+ipcMain.handle('db:indexDirectoryRecursive', async (_ , dirPath: string) => {
+  try {
+    await database.ensureReady()
+    const normalized = normalizePath(dirPath)
+    console.log('🔄 [IPC] Recursively indexing directory:', normalized)
+    await processDirectoryRecursively(normalized)
+    const stats = database.getStats()
+    console.log('✅ [IPC] Directory indexed:', normalized)
+    return stats
+  } catch (error) {
+    console.error('❌ [IPC] Error indexing directory recursively:', error)
+    throw error
+  }
+})
+
 // LLM IPC handlers
 ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, content: string}>) => {
   try {
@@ -1167,7 +1184,7 @@ ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
   }
 })
 
-ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number) => {
+ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number, scope?: { includePaths?: string[]; includeDirectories?: string[]; useRoot?: boolean }) => {
   try {
     await database.ensureReady()
     console.log(`🧠 [IPC] RAG search and answer: ${query}`)
@@ -1182,7 +1199,7 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
       }))
     }
     
-    return await contentService.searchAndAnswer(query, conversationHistory)
+    return await contentService.searchAndAnswer(query, conversationHistory, scope)
   } catch (error) {
     console.error('❌ [IPC] Error in RAG search:', error)
     throw error
