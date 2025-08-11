@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 
 interface CreateModalProps {
   isOpen: boolean
-  type: 'file' | 'folder'
+  type: 'file' | 'directory'
   onConfirm: (name: string) => void
   onCancel: () => void
 }

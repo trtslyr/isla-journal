@@ -719,7 +719,7 @@ const App: React.FC = () => {
               </span>
             </div>
             <div className="title-bar-right">
-              <span className="app-info">v{version} ({platform})</span>
+               <span className="app-info">v{version} ({platform})</span>
               <button 
                 className="settings-gear-btn"
                 onClick={() => setShowSettings(true)}
