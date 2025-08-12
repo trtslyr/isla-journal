@@ -527,11 +527,12 @@ class IslaDatabase {
     try {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS embeddings (
-          chunk_id INTEGER PRIMARY KEY,
+          chunk_id INTEGER NOT NULL,
           vector TEXT NOT NULL,
           dim INTEGER NOT NULL,
           model TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
           FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
         );
       `)
@@ -539,6 +540,13 @@ class IslaDatabase {
       console.log('✅ [Database] Embeddings table ready')
     } catch (e) {
       console.warn('⚠️ [Database] Failed to ensure embeddings table:', e)
+    }
+
+    // Ensure embeddings table has composite primary key; migrate if needed
+    try {
+      this.migrateEmbeddingsSchemaIfNeeded()
+    } catch (e) {
+      console.warn('⚠️ [Database] Embeddings schema migration skipped/failed:', e)
     }
   }
 
@@ -1160,16 +1168,16 @@ class IslaDatabase {
 
     try {
       const normalizedPath = this.normalizeFilePath(filePath)
-      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath) as { modified_at: string } | undefined
+      const existing = this.db.prepare('SELECT file_mtime FROM files WHERE path = ?').get(normalizedPath) as { file_mtime: string } | undefined
       
-      if (!existing) {
-        // File doesn't exist in database, needs processing
+      if (!existing || !existing.file_mtime) {
+        // File doesn't exist in database (or missing mtime), needs processing
         return true
       }
       
-      const dbMtime = new Date(existing.modified_at)
-      // File needs processing if it's been modified since last time
-      return currentMtime > dbMtime
+      const dbFileMtime = new Date(existing.file_mtime)
+      // File needs processing if filesystem mtime is newer than stored file mtime
+      return currentMtime > dbFileMtime
     } catch (error) {
       console.error('❌ [Database] Error checking if file needs processing:', error)
       // On error, assume it needs processing to be safe
@@ -1356,10 +1364,9 @@ class IslaDatabase {
     const sql = `
       INSERT INTO embeddings (chunk_id, vector, dim, model)
       VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET
+      ON CONFLICT(chunk_id, model) DO UPDATE SET
         vector = excluded.vector,
         dim = excluded.dim,
-        model = excluded.model,
         created_at = CURRENT_TIMESTAMP
     `
     this.db.prepare(sql).run(chunkId, vectorJson, dim, model)
@@ -1401,6 +1408,52 @@ class IslaDatabase {
       this.db.prepare('DELETE FROM embeddings WHERE model = ?').run(model)
     } else {
       this.db.prepare('DELETE FROM embeddings').run()
+    }
+  }
+
+  private migrateEmbeddingsSchemaIfNeeded(): void {
+    if (!this.db) throw new Error('Database not initialized')
+    try {
+      // Check current schema
+      const pragma = this.db.prepare("PRAGMA table_info(embeddings)").all() as Array<{ name: string, pk: number }>
+      const hasChunkId = pragma.some(c => c.name === 'chunk_id')
+      const hasModel = pragma.some(c => c.name === 'model')
+      const pkCols = pragma.filter(c => c.pk === 1).map(c => c.name)
+      const isOldSchema = hasChunkId && hasModel && pkCols.length === 1 && pkCols[0] === 'chunk_id'
+
+      if (!isOldSchema) return
+
+      console.log('🔧 [Database] Migrating embeddings schema to composite primary key (chunk_id, model)...')
+
+      // Create new table with desired schema
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS embeddings_new (
+          chunk_id INTEGER NOT NULL,
+          vector TEXT NOT NULL,
+          dim INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
+          FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+        );
+      `)
+
+      // Copy data from old table (deduplicate by last write per chunk)
+      // If multiple rows somehow exist, prefer the most recent
+      this.db.exec(`
+        INSERT OR IGNORE INTO embeddings_new (chunk_id, vector, dim, model, created_at)
+        SELECT chunk_id, vector, dim, model, created_at
+        FROM embeddings;
+      `)
+
+      // Replace old table
+      this.db.exec('DROP TABLE IF EXISTS embeddings;')
+      this.db.exec('ALTER TABLE embeddings_new RENAME TO embeddings;')
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings (model);')
+
+      console.log('✅ [Database] Embeddings schema migration complete')
+    } catch (e) {
+      console.warn('⚠️ [Database] Embeddings schema migration skipped/failed:', e)
     }
   }
 }

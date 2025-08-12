@@ -148,6 +148,47 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow: BrowserWindow | null = null
 let vaultWatcher: import('chokidar').FSWatcher | null = null
 
+// Embeddings background builder
+let embeddingsDebounceTimer: NodeJS.Timeout | null = null
+let embeddingsBuilding = false
+async function scheduleEmbeddingsBuild(reason: string) {
+  try { console.log(`🧮 [Embeddings] Schedule build (${reason})`) } catch {}
+  if (embeddingsDebounceTimer) clearTimeout(embeddingsDebounceTimer)
+  embeddingsDebounceTimer = setTimeout(async () => {
+    if (embeddingsBuilding) { try { console.log('⏳ [Embeddings] Build already running, skipping') } catch {} ; return }
+    embeddingsBuilding = true
+    try {
+      await database.ensureReady()
+      const llama = LlamaService.getInstance()
+      const model = llama.getCurrentModel()
+      if (!model) { try { console.log('⚠️ [Embeddings] No model loaded, skipping build') } catch {}; return }
+
+      let totalEmbedded = 0
+      for (;;) {
+        const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+        if (!batch.length) break
+        const texts = batch.map((b: any) => b.chunk_text)
+        try {
+          const vectors = await llama.embedTexts(texts, model)
+          for (let i = 0; i < batch.length; i++) {
+            ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
+          }
+          totalEmbedded += batch.length
+        } catch (e) {
+          console.error('❌ [Embeddings] Batch embedding failed:', e)
+          break
+        }
+      }
+      try { console.log(`✅ [Embeddings] Build complete for model=${model} (embedded ${totalEmbedded})`) } catch {}
+      try { mainWindow?.webContents.send('embeddings:built', { model, totalEmbedded }) } catch {}
+    } catch (e) {
+      console.error('❌ [Embeddings] Build failed:', e)
+    } finally {
+      embeddingsBuilding = false
+    }
+  }, 800) // debounce
+}
+
 function startVaultWatcher(rootDir: string) {
   try {
     // Close previous watcher
@@ -170,6 +211,7 @@ function startVaultWatcher(rootDir: string) {
         const content = await readFile(filePath, 'utf-8')
         const name = path.basename(filePath)
         database.saveFile(filePath, name, content)
+        scheduleEmbeddingsBuild('watcher:addOrChange')
       } catch (e) {
         console.error('Watcher add/change failed:', e)
       }
@@ -178,6 +220,7 @@ function startVaultWatcher(rootDir: string) {
       try {
         if (!filePath.toLowerCase().endsWith('.md')) return
         database.deleteFileByPath(filePath)
+        scheduleEmbeddingsBuild('watcher:unlink')
       } catch (e) {
         console.error('Watcher unlink failed:', e)
       }
@@ -501,6 +544,9 @@ app.whenReady().then(async () => {
     llamaReady = true
     console.log('✅ [Main] LLM service initialization completed successfully')
     console.log('🤖 [Main] AI features are READY and FUNCTIONAL')
+
+    // Kick off embeddings build if we already have indexed chunks
+    scheduleEmbeddingsBuild('llm:init')
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
     console.error('❌ [Main] LLM service initialization failed:', errorMsg)
@@ -524,6 +570,16 @@ app.whenReady().then(async () => {
   }
   console.log(`🤖 [Main] LLM service status: ${llamaReady ? '✅ READY' : '❌ UNAVAILABLE'}`)
   console.log('🤖 [Main] ===============================================')
+
+  // After database init and window creation, if a root directory is selected, start watcher
+  try {
+    const selectedDir = database.getSetting('selectedDirectory')
+    if (selectedDir) {
+      startVaultWatcher(selectedDir)
+      // Schedule embeddings because we may have just loaded existing chunks
+      scheduleEmbeddingsBuild('app:start-up')
+    }
+  } catch {}
 
   // Set app menu
   if (process.platform === 'darwin') {
@@ -879,6 +935,8 @@ ipcMain.handle('file:openDirectory', async () => {
     console.log(`📊 [Database Stats] Files: ${stats.fileCount}, Chunks: ${stats.chunkCount}, FTS Index: ${stats.indexSize}`)
     
     console.log('📤 Returning files count:', files.length)
+    // Trigger background embeddings build after indexing pass
+    try { scheduleEmbeddingsBuild('readDirectory') } catch {}
     return files
   } catch (error) {
     console.error('Error reading directory:', error)
@@ -1064,6 +1122,9 @@ ipcMain.handle('db:reindexAll', async () => {
     
     const stats = database.getStats()
     console.log('✅ [IPC] Reindexing completed:', stats)
+
+    // Schedule embeddings rebuild after reindex completes
+    scheduleEmbeddingsBuild('reindexAll')
     return stats
   } catch (error) {
     console.error('❌ [IPC] Error reindexing all files:', error)
