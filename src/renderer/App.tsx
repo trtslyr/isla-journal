@@ -218,7 +218,7 @@ const App: React.FC = () => {
         }
       })
     })
-    const offDone = window.electronAPI.onContentStreamDone?.(({ answer, sources }) => {
+    const offDone = window.electronAPI.onContentStreamDone?.(async ({ answer, sources }) => {
       setChatMessages(prev => {
         const last = prev[prev.length-1]
         if (last && last.role === 'assistant') {
@@ -228,6 +228,20 @@ const App: React.FC = () => {
         return prev
       })
       setIsAiThinking(false)
+      // Refresh from DB to ensure persistence reflected in UI (optional but safe)
+      try {
+        if (activeChat?.id) {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at)
+          })))
+        }
+      } catch (e) {
+        console.error('❌ [App] Failed to refresh messages after stream:', e)
+      }
     })
 
     return () => {
@@ -322,6 +336,10 @@ const App: React.FC = () => {
         // Get app info
         const versionInfo = await window.electronAPI.getVersion()
         setVersion(versionInfo)
+        try {
+          const plat = await window.electronAPI.getPlatform()
+          setPlatform(plat)
+        } catch {}
 
         // Load saved directory from settings
         try {

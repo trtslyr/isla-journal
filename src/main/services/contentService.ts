@@ -102,11 +102,18 @@ class ContentService {
       return `Date range: ${start} → ${end}`
     })()
 
+    // Build conversation context block
+    let conversationContext = ''
+    if (conversationHistory && conversationHistory.length > 0) {
+      const recentMessages = conversationHistory.slice(-6)
+      conversationContext = recentMessages.map(msg => `${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`).join('\n')
+    }
+
     const retrievedBlock = results.length>0
       ? results.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
       : ''
     const today = new Date().toISOString()
-    const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
+    const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\n${conversationContext ? `Recent conversation:\n${conversationContext}\n\n` : ''}Context from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
     const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
     try {
@@ -246,13 +253,13 @@ class ContentService {
       // 4. Add conversation context if available
       let conversationContext = ''
       if (conversationHistory && conversationHistory.length > 0) {
-        const recentMessages = conversationHistory.slice(-4)
+        const recentMessages = conversationHistory.slice(-6)
         conversationContext = recentMessages.map(msg => `${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`).join('\n')
       }
 
       // 5. Build general notes assistant prompt with blocks
       const today = new Date().toISOString()
-      const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
+      const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\n${conversationContext ? `Recent conversation:\n${conversationContext}\n\n` : ''}Context from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
       const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
       console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      

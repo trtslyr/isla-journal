@@ -1341,14 +1341,40 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const { prompt, sources } = await contentService.preparePrompt(query, [])
+
+    // Build conversation history (last N messages) if provided
+    let conversationHistory: Array<{role: string, content: string}> = []
+    if (chatId) {
+      try {
+        const recentMessages = database.getChatMessages(chatId, 8)
+        conversationHistory = recentMessages.map(msg => ({ role: msg.role, content: msg.content }))
+      } catch {}
+    }
+
+    const { prompt, sources } = await contentService.preparePrompt(query, conversationHistory)
     let full = ''
+
     // Stream via LlamaService
     await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
       full += chunk
       try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
     })
+
+    // Emit completion to renderer
     try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
+
+    // Persist assistant message with sources if chatId present
+    if (chatId && typeof database.addChatMessage === 'function') {
+      try {
+        const sourcesText = sources && sources.length
+          ? `\n\nSources:\n${sources.map((s, i)=>`(${i+1}) ${s.file_name}`).join('\n')}`
+          : ''
+        database.addChatMessage(chatId, 'assistant', `${full}${sourcesText}`)
+      } catch (e) {
+        console.error('⚠️ [IPC] Failed to persist streamed assistant message:', e)
+      }
+    }
+
     return { started: true }
   } catch (error) {
     console.error('❌ [IPC] Error in streaming RAG:', error)
