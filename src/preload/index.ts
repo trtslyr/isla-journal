@@ -51,6 +51,17 @@ const electronAPI = {
     ipcRenderer.on('llm:downloadProgress', (_, data) => callback(data))
     return unsubscribe
   },
+ 
+  // Embeddings
+  embeddingsListPending: (limit?: number) => ipcRenderer.invoke('embeddings:listPending', limit ?? 100),
+  embeddingsUpsert: (chunkId: number, vector: number[], dim: number, model: string) => ipcRenderer.invoke('embeddings:upsert', chunkId, vector, dim, model),
+  embeddingsGetStats: () => ipcRenderer.invoke('embeddings:getStats'),
+  embeddingsSetModel: (model: string) => ipcRenderer.invoke('embeddings:setModel', model),
+  onEmbeddingsProgress: (callback: (data: any) => void) => {
+    const unsubscribe = () => ipcRenderer.removeAllListeners('embeddings:progress')
+    ipcRenderer.on('embeddings:progress', (_, data) => callback(data))
+    return unsubscribe
+  },
   
   // Chat operations
   chatCreate: (title: string) => ipcRenderer.invoke('chat:create', title),
@@ -67,7 +78,9 @@ const electronAPI = {
   // License operations removed - now handled in renderer process only
   
   // System operations
-  openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url)
+  openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url),
+  // Watcher
+  watcherStart: (rootDir: string) => ipcRenderer.invoke('watcher:start', rootDir)
 }
 
 // Expose the API to the renderer process

@@ -12,142 +12,125 @@ export interface RAGResponse {
   }>
 }
 
+export type DateFilter = { start: Date; end: Date } | null
+export function extractDateFilter(qIn: string, now = new Date()): DateFilter {
+  const q = qIn.toLowerCase()
+  const iso = q.match(/\b(\d{4})-(\d{2})(?:-(\d{2}))?\b/)
+  if (iso) {
+    const y = +iso[1], m = +iso[2]-1, d = iso[3] ? +iso[3] : 1
+    const start = new Date(Date.UTC(y,m,d))
+    const end = iso[3] ? new Date(Date.UTC(y,m,d+1)) : new Date(Date.UTC(y,m+1,1))
+    return { start, end }
+  }
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const today = startOfDay(now)
+  if (q.includes('today')) return { start: today, end: new Date(+today + 86400000) }
+  if (q.includes('yesterday')) { const y = new Date(+today - 86400000); return { start: y, end: today } }
+  if (q.includes('last week')) return { start: new Date(+today - 7*86400000), end: today }
+  const m = q.match(/last (\d+)\s*days?/) ; if (m) { const n = Math.min(365, +m[1]||7); return { start: new Date(+today - n*86400000), end: today } }
+  return null
+}
+
 class ContentService {
+  /** Build prompt and sources for RAG; used by both sync and streaming paths */
+  async prepareRAG(query: string, conversationHistory?: Array<{role: string, content: string}>) {
+    // Date filter
+    const dateFilter = extractDateFilter(query)
+
+    // Pinned
+    let pinnedContent = ''
+    try {
+      const pinnedItemsJson = database.getSetting('pinnedItems')
+      if (pinnedItemsJson) {
+        const pinnedItems = JSON.parse(pinnedItemsJson)
+        const pinnedSources: string[] = []
+        for (let i = 0; i < pinnedItems.length && pinnedSources.length < 5; i++) {
+          const item = pinnedItems[i]
+          if (item.type === 'file' && item.path.endsWith('.md')) {
+            try {
+              const normalizedPath = normalize(resolve(item.path))
+              const content = await readFile(normalizedPath, 'utf-8')
+              const snippet = content.length > 240 ? content.substring(0, 240) + '…' : content
+              pinnedSources.push(`[${item.name}]: ${snippet}`)
+            } catch {}
+          }
+        }
+        if (pinnedSources.length > 0) pinnedContent = pinnedSources.map(s => `- ${s}`).join('\n')
+      }
+    } catch {}
+
+    // Retrieval
+    let results = (database as any).searchContentFTS ? (database as any).searchContentFTS(query, 20, dateFilter || undefined) : database.searchContent(query, 10)
+    try {
+      const llama = LlamaService.getInstance()
+      const emb = await llama.embedText(query)
+      if (emb.vector && emb.vector.length > 0 && (database as any).topByEmbeddingSimilarity) {
+        const embTop = (database as any).topByEmbeddingSimilarity(emb.vector, 20)
+        const combined = new Map<string, { file_id: number; file_path: string; file_name: string; content_snippet: string; score: number }>()
+        const add = (key: string, item: any, score: number) => {
+          const existing = combined.get(key)
+          if (!existing || score > existing.score) combined.set(key, { ...item, score })
+        }
+        results.forEach((r: any) => add(`${r.file_id}:${r.id || r.content_snippet}`, r, 1 / (1 + (r.rank || 1))))
+        embTop.forEach((r: any) => add(`${r.file_id}:${r.content_snippet}`, r, 0.6 * r.sim + 0.4))
+        results = Array.from(combined.values()).sort((a, b) => b.score - a.score).slice(0, 20) as any
+      }
+    } catch {}
+
+    // Blocks
+    let dateScopedBlock = ''
+    if (dateFilter && results.length > 0) {
+      const byFile = new Map<number, { file: string; path: string; snippets: string[] }>()
+      for (const r of results) {
+        const entry = byFile.get(r.file_id) || { file: r.file_name, path: r.file_path, snippets: [] }
+        if (entry.snippets.length < 2) entry.snippets.push(r.content_snippet.replace(/\n/g, ' '))
+        byFile.set(r.file_id, entry)
+      }
+      dateScopedBlock = Array.from(byFile.values()).slice(0, 5).map(e => `- [${e.file}] ${e.snippets.join(' … ')}`).join('\n')
+    }
+    const retrievedBlock = results.slice(0, 8).map((r) => `- [${r.file_name}] ${r.content_snippet.replace(/<\/?.*?>/g, '')}`).join('\n')
+
+    const today = new Date()
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+    const prompt = `You are a concise, friendly assistant for the user's local notes.
+Today is ${today.toISOString().slice(0,10)} (timezone: ${tz}).
+
+Context from notes:
+${pinnedContent ? 'Pinned:\n' + pinnedContent + '\n\n' : ''}${dateScopedBlock ? 'Date-scoped:\n' + dateScopedBlock + '\n\n' : ''}${retrievedBlock ? 'Retrieved:\n' + retrievedBlock + '\n\n' : ''}
+User’s request: ${query}
+
+Instructions:
+- Prefer the supplied context; cite filenames.
+- Keep answers tight (2–4 short paragraphs; bullets for steps).
+- If context is sparse, say so and suggest next steps or date ranges.
+- If the request implies dates, prioritize those notes.`
+
+    const sources = results.slice(0, 8).map((r: any) => ({
+      file_name: r.file_name,
+      file_path: r.file_path,
+      snippet: r.content_snippet.replace(/<\/?.*?>/g, '')
+    }))
+
+    return { prompt, sources }
+  }
   /**
    * Perform RAG search and generate response with conversation context
    */
   async searchAndAnswer(query: string, conversationHistory?: Array<{role: string, content: string}>): Promise<RAGResponse> {
     try {
       console.log(`🔍 [ContentService] Searching for: ${query}`)
-
-      // 1. Get pinned files content first with cross-platform path handling
-      let pinnedContent = ''
-      try {
-        const pinnedItemsJson = database.getSetting('pinnedItems')
-        if (pinnedItemsJson) {
-          const pinnedItems = JSON.parse(pinnedItemsJson)
-          
-          const pinnedSources = []
-          for (let i = 0; i < pinnedItems.length; i++) {
-            const item = pinnedItems[i]
-            if (item.type === 'file' && item.path.endsWith('.md')) {
-              try {
-                // Normalize path for cross-platform compatibility
-                const normalizedPath = normalize(resolve(item.path))
-                const content = await readFile(normalizedPath, 'utf-8')
-                // Get first 300 chars as snippet
-                const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
-                pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
-                console.log(`📌 [ContentService] Successfully read pinned file: ${item.name} (${normalizedPath})`)
-              } catch (error) {
-                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name} - ${error.message}`)
-              }
-            }
-          }
-          
-          if (pinnedSources.length > 0) {
-            pinnedContent = `**📌 Your pinned files (always included):**\n${pinnedSources.join('\n\n')}\n\n`
-            console.log(`📌 [ContentService] Added ${pinnedSources.length} pinned files to context`)
-          }
-        }
-      } catch (error) {
-        console.log('⚠️ [ContentService] Error loading pinned files:', error)
-      }
-
-      // 2. Search for relevant content
-      const searchResults = database.searchContent(query, 5)
-      
-      // 3. Build context from search results
-      let contextSources = ''
-      if (searchResults.length > 0) {
-        contextSources = `**🔍 Relevant content found:**\n${searchResults.map((result, index) => 
-          `[Source ${index + 1} from "${result.file_name}"]: ${result.content_snippet.replace(/<\/?mark>/g, '')}`
-        ).join('\n\n')}`
-      }
-
-      // If no search results but we have pinned content, still proceed
-      if (searchResults.length === 0 && !pinnedContent) {
+      const rag = await this.prepareRAG(query, conversationHistory)
+      if (!rag.sources || rag.sources.length === 0) {
         return {
-          answer: "I couldn't find anything specific about that in your journal entries. What would you like to explore or share with me?",
+          answer: "I couldn't find much in your notes about that. Try adding a date (e.g., 2024-05 or yesterday) or opening more files.",
           sources: []
         }
       }
-
-      // 4. Add conversation context if available
-      let conversationContext = ''
-      if (conversationHistory && conversationHistory.length > 0) {
-        const recentMessages = conversationHistory.slice(-4) // Last 4 messages for context
-        conversationContext = `\n**Recent conversation:**\n${recentMessages.map(msg => 
-          `${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`
-        ).join('\n')}\n`
-      }
-
-      // 5. Build conversational RAG prompt with pinned files always included
-      const ragPrompt = `You are the user's personal journal AI assistant. You have access to their private journal entries and should respond in a warm, supportive, and conversational way - like a close friend who knows them well.
-
-**Context from their journal:**
-${pinnedContent}${contextSources}${conversationContext}
-
-**User's question:** ${query}
-
-**Instructions:**
-- Respond naturally and conversationally, like you're chatting with a close friend
-- Reference specific details from their journal entries when relevant
-- Be supportive, insightful, and encouraging  
-- When they mention people in their life, acknowledge those relationships warmly
-- Ask thoughtful follow-up questions to keep the conversation going
-- Use "you" and "your" to make it personal
-- If this is a follow-up question, build on the previous conversation naturally
-- If the journal context doesn't directly answer their question, still try to be helpful based on what you know about them
-- Keep responses focused but conversational (2-4 paragraphs max)
-
-Remember: This is THEIR personal journal, so speak to them like you know their story and care about their journey.`
-
-      const totalSources = searchResults.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${searchResults.length} search + pinned files)`)
-
-      // 6. Get LLM response
       const llamaService = LlamaService.getInstance()
-      const llmResponse = await llamaService.sendMessage([
-        {
-          role: 'user',
-          content: ragPrompt
-        }
-      ])
-
-      // 7. Prepare sources (include both search results and pinned files info)
-      const sources = searchResults.map(result => ({
-        file_name: result.file_name,
-        file_path: result.file_path,
-        snippet: result.content_snippet.replace(/<\/?mark>/g, '')
-      }))
-
-      // Add pinned files info to sources
-      if (pinnedContent) {
-        try {
-          const pinnedItemsJson = database.getSetting('pinnedItems')
-          if (pinnedItemsJson) {
-            const pinnedItems = JSON.parse(pinnedItemsJson)
-            pinnedItems.forEach((item: any) => {
-              if (item.type === 'file' && item.path.endsWith('.md')) {
-                sources.push({
-                  file_name: `📌 ${item.name}`,
-                  file_path: item.path,
-                  snippet: '(Pinned file - always included in context)'
-                })
-              }
-            })
-          }
-        } catch (error) {
-          console.log('⚠️ [ContentService] Error adding pinned files to sources:', error)
-        }
-      }
-
-      console.log(`✅ [ContentService] Generated RAG response`)
-
+      const llmResponse = await llamaService.sendMessage([{ role: 'user', content: rag.prompt }])
       return {
         answer: llmResponse,
-        sources
+        sources: rag.sources
       }
 
     } catch (error) {
@@ -161,6 +144,10 @@ Remember: This is THEIR personal journal, so speak to them like you know their s
    */
   searchOnly(query: string, limit: number = 10) {
     console.log(`🔍 [ContentService] Text search for: ${query}`)
+    const dateFilter = extractDateFilter(query)
+    if ((database as any).searchContentFTS) {
+      return (database as any).searchContentFTS(query, limit, dateFilter || undefined)
+    }
     return database.searchContent(query, limit)
   }
 

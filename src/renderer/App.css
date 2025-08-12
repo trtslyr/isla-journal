@@ -24,6 +24,33 @@
   --collapsed-panel-width: 40px;
 }
 
+:root{
+  --bg:#0f1115; --surface:#171a21; --muted:#8b91a1; --text:#e6e9ef;
+  --card:#1b1f27; --border:#20232b; --accent:#5b8cff;
+  --radius:12px; --shadow:0 4px 16px rgba(0,0,0,.25);
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px;
+  --content-max:820px;
+}
+
+body, html, #root, .app { background: var(--bg); color: var(--text); }
+.panel{background:var(--surface); border-right:1px solid var(--border)}
+.note-card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow)}
+.prose{max-width:var(--content-max); margin:0 auto; color:var(--text); line-height:1.6}
+.ghost-btn{background:transparent; border:0; color:var(--muted)}
+.ghost-btn:hover{color:var(--text); background:rgba(255,255,255,.04); border-radius:8px}
+
+/* Center editor content */
+.editor-panel .panel-content{ display:flex; justify-content:center; }
+.editor-panel .panel-content > div{ max-width: var(--content-max); width: 100%; }
+
+/* Chat panel polish */
+.ai-chat-panel .chat-container{ max-width: 560px; margin: 0 auto; }
+.ai-chat-panel .chat-input{ border-radius: 10px; border:1px solid var(--border); background: var(--card); color: var(--text); }
+.ai-chat-panel .send-button{ background: var(--accent); color: white; border: none; border-radius: 8px; padding: 6px 10px; }
+
+/* Titlebar spacing */
+.title-bar{ background: var(--surface); border-bottom: 1px solid var(--border); }
+
 /* Light Theme - Cream & Brown */
 [data-theme="light"] {
   --bg-primary: #F5F2E8;        /* Light cream - main background */
