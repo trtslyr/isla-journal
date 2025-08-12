@@ -24,6 +24,7 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
 import { EmbeddingsService } from './services/embeddingsService'
+import { WatcherService } from './services/watcherService'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -421,6 +422,14 @@ app.whenReady().then(async () => {
     console.log('🗄️ [Main] ===============================================')
 
   createWindow()
+  // Start watcher if a directory is already saved
+  try {
+    const saved = database.getSetting('selectedDirectory')
+    if (saved) {
+      await WatcherService.getInstance().start(saved)
+      console.log('👀 [Watcher] Started on saved directory', saved)
+    }
+  } catch {}
 
   // BULLETPROOF LLM service initialization
   console.log('🤖 [Main] ========== LLM SERVICE INITIALIZATION ==========')
@@ -745,6 +754,13 @@ ipcMain.handle('file:openDirectory', async () => {
     if (isRootDirectoryChange) {
       database.setSetting('selectedDirectory', normalizedDirPath)
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
+      // Start watcher on the selected directory
+      try {
+        await WatcherService.getInstance().start(normalizedDirPath)
+        console.log('👀 [Watcher] Started on', normalizedDirPath)
+      } catch (e) {
+        console.warn('⚠️ [Watcher] Failed to start:', e)
+      }
     }
     
     const entries = await readdir(normalizedDirPath, { withFileTypes: true })
@@ -1485,5 +1501,15 @@ ipcMain.handle('system:openExternal', async (_, url: string) => {
   } catch (error) {
     console.error('❌ [IPC] Error opening external URL:', error)
     throw error
+  }
+}) 
+
+// Explicit watcher start IPC
+ipcMain.handle('watcher:start', async (_, rootDir: string) => {
+  try {
+    await WatcherService.getInstance().start(rootDir)
+    return true
+  } catch (e) {
+    return false
   }
 }) 

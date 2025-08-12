@@ -78,7 +78,9 @@ const electronAPI = {
   // License operations removed - now handled in renderer process only
   
   // System operations
-  openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url)
+  openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url),
+  // Watcher
+  watcherStart: (rootDir: string) => ipcRenderer.invoke('watcher:start', rootDir)
 }
 
 // Expose the API to the renderer process
