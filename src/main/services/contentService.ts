@@ -69,7 +69,25 @@ class ContentService {
       } catch {}
 
       // 2. Search for relevant content (FTS preferred)
-      const results = (database as any).searchContentFTS ? (database as any).searchContentFTS(query, 20, dateFilter || undefined) : database.searchContent(query, 10)
+      let results = (database as any).searchContentFTS ? (database as any).searchContentFTS(query, 20, dateFilter || undefined) : database.searchContent(query, 10)
+
+      // Embeddings hybrid union (Phase 3)
+      try {
+        const llama = LlamaService.getInstance()
+        const emb = await llama.embedText(query)
+        if (emb.vector && emb.vector.length > 0 && (database as any).topByEmbeddingSimilarity) {
+          const embTop = (database as any).topByEmbeddingSimilarity(emb.vector, 20)
+          const combined = new Map<string, { file_id: number; file_path: string; file_name: string; content_snippet: string; score: number }>()
+          const add = (key: string, item: any, score: number) => {
+            const existing = combined.get(key)
+            if (!existing || score > existing.score) combined.set(key, { ...item, score })
+          }
+          // Normalize FTS to score (lower bm25 is better). Use inverse as heuristic.
+          results.forEach((r: any) => add(`${r.file_id}:${r.id || r.content_snippet}`, r, 1 / (1 + (r.rank || 1))))
+          embTop.forEach((r: any) => add(`${r.file_id}:${r.content_snippet}`, r, 0.6 * r.sim + 0.4))
+          results = Array.from(combined.values()).sort((a, b) => b.score - a.score).slice(0, 20) as any
+        }
+      } catch {}
 
       // Build DATE_SCOPED block if date filter applied
       let dateScopedBlock = ''

@@ -23,6 +23,7 @@ const isDev = process.env.NODE_ENV === 'development' && !app.isPackaged
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
+import { EmbeddingsService } from './services/embeddingsService'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -456,6 +457,16 @@ app.whenReady().then(async () => {
   }
   console.log(`🤖 [Main] LLM service status: ${llamaReady ? '✅ READY' : '❌ UNAVAILABLE'}`)
   console.log('🤖 [Main] ===============================================')
+
+  // Start embeddings service (Phase 3 groundwork)
+  try {
+    const emb = EmbeddingsService.getInstance()
+    if (mainWindow) emb.setMainWindow(mainWindow)
+    await emb.start(1)
+    console.log('✅ [Main] Embeddings service started')
+  } catch (e) {
+    console.warn('⚠️ [Main] Embeddings service failed to start:', e)
+  }
 
   // Set app menu
   if (process.platform === 'darwin') {
@@ -1045,6 +1056,16 @@ ipcMain.handle('embeddings:getStats', async () => {
   } catch (error) {
     console.error('❌ [IPC] Error getting embedding stats:', error)
     return { total: 0 }
+  }
+})
+
+ipcMain.handle('embeddings:setModel', async (_, model: string) => {
+  try {
+    const emb = EmbeddingsService.getInstance()
+    emb.setModel(model)
+    return true
+  } catch (e) {
+    return false
   }
 })
 
