@@ -7,6 +7,7 @@ import { FileTree } from './components/FileTree'
 import Settings from './components/Settings'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
+import StatusBar from './components/Layout/StatusBar'
 
 interface ChatMessage {
   id: string
@@ -60,6 +61,8 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState('')
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [showChatDropdown, setShowChatDropdown] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [currentModelName, setCurrentModelName] = useState<string | null>(null)
   
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false)
@@ -70,7 +73,6 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
-  const [showPreview, setShowPreview] = useState(false)
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -142,10 +144,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
-      if (isCmd && e.shiftKey && e.key.toLowerCase() === 'v') {
-        e.preventDefault()
-        setShowPreview(p => !p)
-      }
+      // reserved for future shortcuts
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -218,7 +217,7 @@ const App: React.FC = () => {
         }
       })
     })
-    const offDone = window.electronAPI.onContentStreamDone?.(({ answer, sources }) => {
+    const offDone = window.electronAPI.onContentStreamDone?.(async ({ answer, sources }) => {
       setChatMessages(prev => {
         const last = prev[prev.length-1]
         if (last && last.role === 'assistant') {
@@ -228,6 +227,21 @@ const App: React.FC = () => {
         return prev
       })
       setIsAiThinking(false)
+      // Refresh from DB to ensure persistence reflected in UI (optional but safe)
+      try {
+        if (activeChat?.id) {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        }
+      } catch (e) {
+        console.error('❌ [App] Failed to refresh messages after stream:', e)
+      }
     })
 
     return () => {
@@ -322,6 +336,10 @@ const App: React.FC = () => {
         // Get app info
         const versionInfo = await window.electronAPI.getVersion()
         setVersion(versionInfo)
+        try {
+          const plat = await window.electronAPI.getPlatform()
+          setPlatform(plat)
+        } catch {}
 
         // Load saved directory from settings
         try {
@@ -342,6 +360,16 @@ const App: React.FC = () => {
         const chats = await window.electronAPI.chatGetAll()
         setAllChats(chats)
 
+        // Load LLM models and current model
+        try {
+          const models = await window.electronAPI.llmGetAvailableModels?.()
+          if (Array.isArray(models)) setAvailableModels(models)
+          const cm = await window.electronAPI.llmGetCurrentModel?.()
+          setCurrentModelName(cm || null)
+        } catch (e) {
+          console.warn('LLM model info load failed:', e)
+        }
+
         // Load active chat and its messages (if any exist)
         const activeChat = await window.electronAPI.chatGetActive()
         if (activeChat) {
@@ -351,7 +379,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         }
         // No automatic chat creation - user can create chats when needed
@@ -499,6 +528,17 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
+        // Refresh to ensure persistence reflected
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        } catch {}
       }
 
     } catch (error) {
@@ -520,7 +560,16 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
-        
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        } catch {}
       } catch (fallbackError) {
         console.error('❌ [App] Even fallback LLM failed:', fallbackError)
         alert('Failed to get AI response. Please check your connection and try again.')
@@ -591,7 +640,8 @@ const App: React.FC = () => {
           id: msg.id.toString(),
           content: msg.content,
           role: msg.role as 'user' | 'assistant',
-          timestamp: new Date(msg.created_at)
+          timestamp: new Date(msg.created_at),
+          sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
         })))
         console.log('📚 [App] Loaded', messages.length, 'messages for chat')
       } else {
@@ -772,13 +822,18 @@ const App: React.FC = () => {
         />
  
         {/* Center Panel - Editor */}
-        <EditorPane
-          activeTab={activeTab || null}
-          theme={currentTheme}
-          showPreview={showPreview}
-          onTogglePreview={() => setShowPreview(p => !p)}
-          onChange={handleEditorChange}
-        />
+        <div style={{ display:'flex', flex:1, flexDirection:'column', minWidth:0 }}>
+          <div style={{ flex:1, display:'flex', justifyContent:'center', overflow:'hidden' }}>
+            <div style={{ flex:1, maxWidth: 900 }}>
+              <EditorPane
+                activeTab={activeTab || null}
+                theme={currentTheme}
+                onChange={handleEditorChange}
+              />
+            </div>
+          </div>
+          <StatusBar activeFilePath={activeTab?.path || null} content={activeTab?.content || ''} />
+        </div>
 
         {/* Right Panel - AI Chat */}
         <div 
@@ -798,6 +853,25 @@ const App: React.FC = () => {
           <div className="panel-header">
             <div className="chat-title">
               <span>AI Journal Assistant</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                <select
+                  style={{ background:'var(--bg-tertiary)', color:'var(--text-primary)', border:'1px solid var(--border-color)', borderRadius:4, padding:'2px 6px' }}
+                  onChange={async (e)=>{
+                    const next = e.target.value
+                    try { 
+                      await window.electronAPI.llmSwitchModel(next)
+                      setCurrentModelName(next)
+                    } catch (err) { console.error('Switch model failed', err) }
+                  }}
+                  onClick={(e)=>e.stopPropagation()}
+                  value={currentModelName || ''}
+                >
+                  {currentModelName == null && <option value="" disabled>Switch model…</option>}
+                  {availableModels.map((m)=> (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </span>
             </div>
           </div>
           
@@ -896,7 +970,13 @@ const App: React.FC = () => {
                           <span className="message-icon">
                             {message.role === 'user' ? '>' : '<'}
                           </span>
-                          <span className="message-text">{message.content}</span>
+                          <span className="message-text">
+                            {message.role === 'assistant' ? (
+                              <MarkdownPreview markdown={message.content} />
+                            ) : (
+                              message.content
+                            )}
+                          </span>
                         </div>
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                           <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>

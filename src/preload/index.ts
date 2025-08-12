@@ -78,8 +78,8 @@ const electronAPI = {
   chatDelete: (chatId: number) => ipcRenderer.invoke('chat:delete', chatId),
   chatRename: (chatId: number, title: string) => ipcRenderer.invoke('chat:rename', chatId, title),
   chatGetMessages: (chatId: number) => ipcRenderer.invoke('chat:getMessages', chatId),
-  chatAddMessage: (chatId: number, role: string, content: string) => 
-    ipcRenderer.invoke('chat:addMessage', chatId, role, content),
+  chatAddMessage: (chatId: number, role: string, content: string, metadata?: any) => 
+    ipcRenderer.invoke('chat:addMessage', chatId, role, content, metadata),
 
   
   // License operations removed - now handled in renderer process only

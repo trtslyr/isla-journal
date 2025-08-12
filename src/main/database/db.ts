@@ -61,6 +61,7 @@ export interface ChatMessageRecord {
   role: 'user' | 'assistant' | 'system'
   content: string
   created_at: string
+  metadata?: string | null
 }
 
 export interface AppSettings {
@@ -404,6 +405,30 @@ class IslaDatabase {
       )
     `)
 
+    // Per-chunk metadata (heading context)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chunk_meta (
+        chunk_id INTEGER PRIMARY KEY,
+        heading_path TEXT,
+        heading TEXT,
+        level INTEGER,
+        FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+      )
+    `)
+
+    // Headings table per file (for outline/backlinks later)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS headings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL,
+        level INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        char_index INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
+      )
+    `)
+
     // FTS removed - using direct content_chunks search instead
 
     // Search index table - for full-text search
@@ -436,6 +461,7 @@ class IslaDatabase {
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
         content TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        metadata TEXT,
         FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE
       )
     `)
@@ -456,6 +482,8 @@ class IslaDatabase {
       CREATE INDEX IF NOT EXISTS idx_files_modified ON files (modified_at);
       CREATE INDEX IF NOT EXISTS idx_search_word ON search_index (word);
       CREATE INDEX IF NOT EXISTS idx_search_file ON search_index (file_id);
+      CREATE INDEX IF NOT EXISTS idx_headings_file ON headings (file_id);
+      CREATE INDEX IF NOT EXISTS idx_headings_level ON headings (level);
       CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats (updated_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages (chat_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at);
@@ -490,6 +518,17 @@ class IslaDatabase {
       } catch (e) {
         console.warn('⚠️ [Database] Failed to add note_date:', e)
       }
+    }
+
+    // Add metadata to chat_messages if missing
+    try {
+      const chatCols: Array<{name: string}> = this.db.prepare("PRAGMA table_info(chat_messages)").all() as any
+      const hasMetadata = chatCols.some(c => c.name === 'metadata')
+      if (!hasMetadata) {
+        this.db.exec("ALTER TABLE chat_messages ADD COLUMN metadata TEXT")
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to ensure chat_messages.metadata:', e)
     }
 
     // Indexes for new columns
@@ -612,8 +651,9 @@ class IslaDatabase {
     if (this.ftsReady) {
       this.db.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
     }
+    this.db.prepare('DELETE FROM headings WHERE file_id = ?').run(fileId)
 
-    const chunks = this.chunkContent(content)
+    const { chunks, headings } = this.chunkContentStructured(content)
 
     const insertChunk = this.db.prepare(`
       INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
@@ -624,38 +664,103 @@ class IslaDatabase {
       ? this.db.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
       : null
 
+    const insertChunkMeta = this.db.prepare(`
+      INSERT OR REPLACE INTO chunk_meta (chunk_id, heading_path, heading, level)
+      VALUES (?, ?, ?, ?)
+    `)
+
+    const insertHeading = this.db.prepare(`
+      INSERT INTO headings (file_id, level, text, char_index)
+      VALUES (?, ?, ?, ?)
+    `)
+
     const tx = this.db.transaction(() => {
+      // Insert headings for outline
+      headings.forEach(h => insertHeading.run(fileId, h.level, h.text, h.charIndex))
+
       chunks.forEach((chunk, index) => {
-        const res = insertChunk.run(fileId, chunk, index)
+        const res = insertChunk.run(fileId, chunk.text, index)
         const chunkId = Number(res.lastInsertRowid)
-        if (insertFts) insertFts.run(chunkId, chunk, fileId)
+        if (insertFts) insertFts.run(chunkId, chunk.text, fileId)
+        insertChunkMeta.run(chunkId, chunk.headingPath, chunk.heading, chunk.level)
       })
     })
 
     tx()
 
-    console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName}`)
+    console.log(`📝 [Database] Indexed ${chunks.length} chunks (${headings.length} headings) for ${fileName}`)
   }
 
   /**
-   * Split content into overlapping chunks
+   * Split content into heading-aware overlapping chunks and extract headings
    */
-  private chunkContent(content: string): string[] {
-    const chunkSize = 500
-    const overlap = 100
-    const chunks: string[] = []
-    
-    // Clean content
-    const cleanContent = content.replace(/\s+/g, ' ').trim()
-    
-    for (let i = 0; i < cleanContent.length; i += (chunkSize - overlap)) {
-      const chunk = cleanContent.slice(i, i + chunkSize)
-      if (chunk.trim().length > 50) { // Only add meaningful chunks
-        chunks.push(chunk.trim())
+  private chunkContentStructured(content: string): { chunks: Array<{ text: string; headingPath: string; heading: string; level: number }>; headings: Array<{ level: number; text: string; charIndex: number }> } {
+    const lines = content.split(/\r?\n/)
+    const headings: Array<{ level: number; text: string; charIndex: number }> = []
+    const chunks: Array<{ text: string; headingPath: string; heading: string; level: number }> = []
+
+    // Track heading path
+    const pathStack: Array<{ level: number; text: string }> = []
+    const textBlocks: Array<{ start: number; end: number; text: string; level: number; heading: string; headingPath: string }> = []
+    let currentStart = 0
+    let currentLevel = 0
+    let currentHeading = ''
+    let currentPath = ''
+    let charOffset = 0
+
+    const flushBlock = (endLine: number) => {
+      const blockLines = lines.slice(currentStart, endLine)
+      const blockText = blockLines.join('\n').trim()
+      if (blockText) {
+        textBlocks.push({ start: currentStart, end: endLine, text: blockText, level: currentLevel, heading: currentHeading, headingPath: currentPath })
       }
     }
-    
-    return chunks.length > 0 ? chunks : [cleanContent]
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      const m = line.match(/^(#{1,6})\s+(.*)$/)
+      if (m) {
+        // flush previous block before heading
+        flushBlock(i)
+        const level = m[1].length
+        const text = (m[2] || '').trim()
+        headings.push({ level, text, charIndex: charOffset })
+        // maintain path stack
+        while (pathStack.length && pathStack[pathStack.length - 1].level >= level) {
+          pathStack.pop()
+        }
+        pathStack.push({ level, text })
+        currentPath = pathStack.map(h => h.text).join(' > ')
+        currentHeading = text
+        currentLevel = level
+        currentStart = i + 1
+      }
+      charOffset += line.length + 1
+    }
+    // flush last block
+    flushBlock(lines.length)
+
+    // Now turn blocks into overlapping chunks by token-like length
+    const maxLen = 800
+    const overlap = 150
+    for (const block of textBlocks) {
+      const text = block.text.replace(/\s+/g, ' ').trim()
+      if (!text) continue
+      if (text.length <= maxLen) {
+        chunks.push({ text, headingPath: block.headingPath, heading: block.heading, level: block.level || 0 })
+      } else {
+        for (let i = 0; i < text.length; i += (maxLen - overlap)) {
+          const slice = text.slice(i, i + maxLen)
+          if (slice.trim().length > 50) {
+            chunks.push({ text: slice.trim(), headingPath: block.headingPath, heading: block.heading, level: block.level || 0 })
+          }
+        }
+      }
+    }
+    if (chunks.length === 0 && content.trim()) {
+      chunks.push({ text: content.trim(), headingPath: '', heading: '', level: 0 })
+    }
+    return { chunks, headings }
   }
 
   /**
@@ -1062,16 +1167,17 @@ class IslaDatabase {
   /**
    * Add message to chat
    */
-  public addChatMessage(chatId: number, role: 'user' | 'assistant' | 'system', content: string): ChatMessageRecord {
+  public addChatMessage(chatId: number, role: 'user' | 'assistant' | 'system', content: string, metadata?: any): ChatMessageRecord {
     if (!this.db) throw new Error('Database not initialized')
 
     const transaction = this.db.transaction(() => {
       // Insert message
       const insertMessage = this.db!.prepare(`
-        INSERT INTO chat_messages (chat_id, role, content) 
-        VALUES (?, ?, ?)
+        INSERT INTO chat_messages (chat_id, role, content, metadata) 
+        VALUES (?, ?, ?, ?)
       `)
-      const result = insertMessage.run(chatId, role, content)
+      const metadataString = metadata == null ? null : JSON.stringify(metadata)
+      const result = insertMessage.run(chatId, role, content, metadataString)
 
       // Update chat timestamp
       const updateChat = this.db!.prepare('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -1094,7 +1200,7 @@ class IslaDatabase {
     if (limit) {
       // For conversation context - get recent messages in reverse chronological order
       const stmt = this.db.prepare(`
-        SELECT id, chat_id, role, content, created_at 
+        SELECT id, chat_id, role, content, created_at, metadata 
         FROM chat_messages 
         WHERE chat_id = ? 
         ORDER BY created_at DESC 
@@ -1107,7 +1213,7 @@ class IslaDatabase {
       return messages.reverse()
     } else {
       // Original functionality - get all messages in chronological order
-      const query = this.db.prepare('SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC')
+      const query = this.db.prepare('SELECT id, chat_id, role, content, created_at, metadata FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC')
       return query.all(chatId) as ChatMessageRecord[]
     }
   }
@@ -1403,7 +1509,24 @@ class IslaDatabase {
       this.db.prepare('DELETE FROM embeddings').run()
     }
   }
+
+  /** Load file by chunk id (for recency boost and metadata) */
+  public getFileByChunkId?(chunkId: number): { id: number; path: string; name: string; file_mtime?: string } | null
 }
 
 // Export singleton instance
 export const database = new IslaDatabase() 
+
+// Extend prototype with helper without changing public API typing everywhere
+;(database as any).getFileByChunkId = function (this: IslaDatabase, chunkId: number) {
+  if (!this.db) throw new Error('Database not initialized')
+  const sql = `
+    SELECT f.id, f.path, f.name, f.file_mtime
+    FROM content_chunks c
+    JOIN files f ON f.id = c.file_id
+    WHERE c.id = ?
+    LIMIT 1
+  `
+  const row = this.db.prepare(sql).get(chunkId) as any
+  return row || null
+} 

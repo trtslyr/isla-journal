@@ -1260,10 +1260,10 @@ ipcMain.handle('chat:setActive', async (_, chatId: number) => {
   }
 })
 
-ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string) => {
+ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string, metadata?: any) => {
   try {
     await database.ensureReady()
-    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content)
+    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content, metadata)
   } catch (error) {
     console.error('❌ [IPC] Error adding chat message:', error)
     throw error
@@ -1329,7 +1329,18 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
       }))
     }
     
-    return await contentService.searchAndAnswer(query, conversationHistory)
+    const result = await contentService.searchAndAnswer(query, conversationHistory)
+
+    // Persist assistant message with structured sources if chatId present
+    if (chatId && typeof database.addChatMessage === 'function') {
+      try {
+        database.addChatMessage(chatId, 'assistant', result.answer, { sources: result.sources })
+      } catch (e) {
+        console.error('⚠️ [IPC] Failed to persist assistant message (non-stream):', e)
+      }
+    }
+
+    return result
   } catch (error) {
     console.error('❌ [IPC] Error in RAG search:', error)
     throw error
@@ -1341,14 +1352,37 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const { prompt, sources } = await contentService.preparePrompt(query, [])
+
+    // Build conversation history (last N messages) if provided
+    let conversationHistory: Array<{role: string, content: string}> = []
+    if (chatId) {
+      try {
+        const recentMessages = database.getChatMessages(chatId, 8)
+        conversationHistory = recentMessages.map(msg => ({ role: msg.role, content: msg.content }))
+      } catch {}
+    }
+
+    const { prompt, sources } = await contentService.preparePrompt(query, conversationHistory)
     let full = ''
+
     // Stream via LlamaService
     await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
       full += chunk
       try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
     })
+
+    // Emit completion to renderer
     try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
+
+    // Persist assistant message with structured sources if chatId present
+    if (chatId && typeof database.addChatMessage === 'function') {
+      try {
+        database.addChatMessage(chatId, 'assistant', full, { sources })
+      } catch (e) {
+        console.error('⚠️ [IPC] Failed to persist streamed assistant message:', e)
+      }
+    }
+
     return { started: true }
   } catch (error) {
     console.error('❌ [IPC] Error in streaming RAG:', error)

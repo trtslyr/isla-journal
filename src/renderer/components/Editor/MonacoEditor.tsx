@@ -45,6 +45,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
 
     const toggleBold = () => wrapSelection('**')
     const toggleItalic = () => wrapSelection('*')
+    const toggleInlineCode = () => wrapSelection('`')
 
     const insertLink = () => {
       const model = editor.getModel(); if (!model) return
@@ -73,7 +74,38 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       editor.focus()
     }
 
-    onReady({ wrapSelection, toggleBold, toggleItalic, insertLink, insertList, insertCodeBlock })
+    const insertHeading = (level: 1|2|3|4|5|6) => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel) || 'Heading'
+      const hashes = '#'.repeat(Math.max(1, Math.min(6, level)))
+      const md = `${hashes} ${text}`
+      editor.executeEdits('heading', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertQuote = () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const md = text.split('\n').map(line => `> ${line || ''}`).join('\n')
+      editor.executeEdits('quote', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertHorizontalRule = () => {
+      const model = editor.getModel(); if (!model) return
+      const pos = editor.getPosition(); if (!pos) return
+      const md = `\n\n---\n\n`
+      editor.executeEdits('hr', [{
+        range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+        text: md,
+        forceMoveMarkers: true
+      }])
+      editor.focus()
+    }
+
+    onReady({ wrapSelection, toggleBold, toggleItalic, insertLink, insertList, insertCodeBlock, insertHeading, insertQuote, insertHorizontalRule, toggleInlineCode })
   }
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
@@ -98,6 +130,61 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       automaticLayout: true,
     })
 
+    // Update status bar on cursor/selection
+    editor.onDidChangeCursorSelection(() => {
+      const pos = editor.getPosition()
+      const sel = editor.getSelection()
+      const model = editor.getModel()
+      const text = (model && sel) ? model.getValueInRange(sel) : ''
+      window.dispatchEvent(new CustomEvent('isla:cursor', { detail: { lineNumber: pos?.lineNumber, column: pos?.column, selectionText: text } }))
+    })
+
+    // Listen for external editor option changes (e.g., word wrap)
+    const optionListener = (e: any) => {
+      try {
+        const detail = e.detail || {}
+        editor.updateOptions(detail)
+      } catch {}
+    }
+    window.addEventListener('isla:editorOption', optionListener as any)
+
+    // Toggle markdown task list on click at line start
+    editor.onMouseDown((e) => {
+      try {
+        if (!e.target || !e.target.position) return
+        const pos = e.target.position
+        const model = editor.getModel(); if (!model) return
+        const line = model.getLineContent(pos.lineNumber)
+        const m = line.match(/^\s*- \[( |x|X)\](.*)$/)
+        if (!m) return
+        // Only toggle if clicking near the checkbox area (first few columns)
+        if (pos.column > (line.indexOf(']') + 2)) return
+        const checked = m[1].toLowerCase() === 'x'
+        const before = line
+        const after = line.replace(/^\s*- \[(?: |x|X)\]/, `- [${checked ? ' ' : 'x'}]`)
+        if (after !== before) {
+          const range = new monaco.Range(pos.lineNumber, 1, pos.lineNumber, line.length + 1)
+          editor.executeEdits('toggle-task', [{ range, text: after, forceMoveMarkers: true }])
+        }
+      } catch {}
+    })
+
+    // Keyboard shortcuts for bold/italic
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const after = `**${text}**`
+      editor.executeEdits('kb-bold', [{ range: sel, text: after, forceMoveMarkers: true }])
+    })
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const after = `*${text}*`
+      editor.executeEdits('kb-italic', [{ range: sel, text: after, forceMoveMarkers: true }])
+    })
+
     // Paste image handler
     editor.onPaste(async (e) => {
       try {
@@ -112,8 +199,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
         const arrayBuffer = await blob.arrayBuffer()
         const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
 
-        // Determine save directory: try current file directory from parent context if exposed
-        // As a fallback, save next to selectedDirectory root
+        // Determine save directory
         const rootDir = await (window as any).electronAPI?.settingsGet?.('selectedDirectory')
         if (!rootDir) return
 
