@@ -1099,13 +1099,17 @@ ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
     // Process in small batches to avoid blocking too much
     let totalEmbedded = 0
     for (;;) {
-      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || database.listChunksNeedingEmbeddings(50) || []
       if (!batch.length) break
 
       const texts = batch.map((b: any) => b.chunk_text)
       const vectors = await llama.embedTexts(texts, model)
       for (let i = 0; i < batch.length; i++) {
-        ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
+        if ((database as any).upsertEmbeddingCompat) {
+          (database as any).upsertEmbeddingCompat(batch[i].id, vectors[i], model)
+        } else {
+          database.upsertEmbedding(batch[i].id, vectors[i], vectors[i]?.length || 0, model)
+        }
       }
       totalEmbedded += batch.length
     }

@@ -1022,6 +1022,41 @@ class IslaDatabase {
     return { total: row.total }
   }
 
+  // Compatibility: return embeddings joined with chunk and file info
+  public getEmbeddingsForModel(model: string): Array<{ chunk_id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; vector: number[] }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const rows = this.db.prepare(`
+      SELECT e.chunk_id, e.vector, c.file_id, c.chunk_text, f.name as file_name, f.path as file_path
+      FROM embeddings e
+      JOIN content_chunks c ON e.chunk_id = c.id
+      JOIN files f ON c.file_id = f.id
+      WHERE e.model = ?
+    `).all(model) as Array<{ chunk_id:number; vector:string; file_id:number; chunk_text:string; file_name:string; file_path:string }>
+    return rows.map(r => {
+      let v: number[] = []
+      try { v = JSON.parse(r.vector) } catch {}
+      return { chunk_id: r.chunk_id, file_id: r.file_id, file_path: r.file_path, file_name: r.file_name, chunk_text: r.chunk_text, vector: v }
+    })
+  }
+
+  // Compatibility wrapper expected by IPC: list chunks missing embeddings (model-agnostic)
+  public getChunksNeedingEmbeddings(model: string, limit: number = 50): Array<{ id: number; file_id: number; chunk_text: string; file_name: string; file_path: string }>{
+    // Current schema stores one embedding per chunk (overwrites by model). We treat any missing embedding as needing work.
+    return this.listChunksNeedingEmbeddings(limit)
+  }
+
+  // Compatibility wrapper: upsert without dim parameter
+  public upsertEmbeddingCompat(chunkId: number, vector: number[], model: string): void {
+    this.upsertEmbedding(chunkId, vector, vector.length, model)
+  }
+
+  // Compatibility: stats per model (best-effort with current schema)
+  public getEmbeddingsStats(model: string): { embeddedCount: number; chunkCount: number }{
+    if (!this.db) throw new Error('Database not initialized')
+    const embedded = this.db.prepare('SELECT COUNT(*) as c FROM embeddings WHERE model = ?').get(model) as { c: number }
+    const chunks = this.db.prepare('SELECT COUNT(*) as c FROM content_chunks').get() as { c: number }
+    return { embeddedCount: embedded.c, chunkCount: chunks.c }
+  }
   public topByEmbeddingSimilarity(queryVector: number[], limit: number = 20): Array<{ file_id: number; file_path: string; file_name: string; content_snippet: string; sim: number }>{
     if (!this.db) throw new Error('Database not initialized')
     const rows = this.db.prepare(`
