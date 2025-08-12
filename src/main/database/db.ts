@@ -1599,6 +1599,11 @@ class IslaDatabase {
     }))
   }
 
+  /** Expose database file path (for backup/restore) */
+  public getDatabaseFilePath(): string {
+    return this.dbPath
+  }
+
   /** Clear all embeddings (for rebuild) */
   public clearEmbeddings(model?: string): void {
     if (!this.db) throw new Error('Database not initialized')

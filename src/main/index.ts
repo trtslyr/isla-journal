@@ -24,6 +24,7 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
 import chokidar from 'chokidar'
+import { Worker } from 'worker_threads'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -147,6 +148,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow: BrowserWindow | null = null
 let vaultWatcher: import('chokidar').FSWatcher | null = null
+let indexingWorker: Worker | null = null
 
 // Embeddings background builder
 let embeddingsDebounceTimer: NodeJS.Timeout | null = null
@@ -241,6 +243,38 @@ function startVaultWatcher(rootDir: string) {
     console.log('👀 [Watcher] Started for:', rootDir)
   } catch (e) {
     console.error('❌ [Watcher] Failed to start:', e)
+  }
+}
+
+function startIndexingWorker(rootDir: string) {
+  try {
+    if (indexingWorker) {
+      try { indexingWorker.terminate() } catch {}
+      indexingWorker = null
+    }
+    const workerPath = join(__dirname, '../workers/indexWorker.js')
+    indexingWorker = new Worker(workerPath)
+    indexingWorker.on('message', (msg: any) => {
+      if (!msg || !msg.type) return
+      if (msg.type === 'start') {
+        try { mainWindow?.webContents.send('indexer:start', { total: msg.total }) } catch {}
+      } else if (msg.type === 'progress') {
+        try { mainWindow?.webContents.send('indexer:progress', { processed: msg.processed, total: msg.total }) } catch {}
+      } else if (msg.type === 'file') {
+        try {
+          const { path: p, name, content } = msg
+          database.saveFile(p, name, content)
+        } catch (e) { console.error('Indexer save failed:', e) }
+      } else if (msg.type === 'done') {
+        try { mainWindow?.webContents.send('indexer:done', { processed: msg.processed, total: msg.total }) } catch {}
+        scheduleEmbeddingsBuild('indexWorker:done')
+      }
+    })
+    indexingWorker.on('error', (e) => { console.error('Indexer error:', e) })
+    indexingWorker.on('exit', (code) => { console.log('Indexer exited:', code); indexingWorker = null })
+    indexingWorker.postMessage({ type: 'start', rootDir })
+  } catch (e) {
+    console.error('Failed to start indexing worker:', e)
   }
 }
 
@@ -888,17 +922,8 @@ ipcMain.handle('file:openDirectory', async () => {
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
       // Start watcher
       startVaultWatcher(normalizedDirPath)
-      // Kick off a background full recursive index (non-blocking)
-      ;(async ()=>{
-        try {
-          console.log('🔄 [Indexer] Starting background recursive indexing...')
-          await processDirectoryRecursively(normalizedDirPath)
-          console.log('✅ [Indexer] Background recursive indexing complete')
-          scheduleEmbeddingsBuild('initial-recursive-index')
-        } catch (e) {
-          console.error('❌ [Indexer] Background recursive indexing failed:', e)
-        }
-      })()
+      // Kick off a background full recursive index (worker)
+      startIndexingWorker(normalizedDirPath)
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
@@ -1145,29 +1170,63 @@ ipcMain.handle('db:reindexAll', async () => {
   try {
     await database.ensureReady()
     console.log('🔄 [IPC] Starting reindex of all files...')
-    
-    // Get the current selected directory
     const selectedDirectory = database.getSetting('selectedDirectory')
-    if (!selectedDirectory) {
-      throw new Error('No directory selected for reindexing')
-    }
-    
-    // Clear existing content first
+    if (!selectedDirectory) throw new Error('No directory selected for reindexing')
     database.clearAllContent()
     console.log('🗑️ [IPC] Cleared existing content')
-    
-    // Recursively reindex all markdown files in the directory
-    await processDirectoryRecursively(selectedDirectory)
-    
+    // Use worker for indexing
+    startIndexingWorker(selectedDirectory)
     const stats = database.getStats()
-    console.log('✅ [IPC] Reindexing completed:', stats)
-
-    // Schedule embeddings rebuild after reindex completes
-    scheduleEmbeddingsBuild('reindexAll')
+    console.log('✅ [IPC] Reindexing triggered via worker:', stats)
     return stats
   } catch (error) {
     console.error('❌ [IPC] Error reindexing all files:', error)
     throw error
+  }
+})
+
+// DB backup
+ipcMain.handle('db:backup', async () => {
+  try {
+    await database.ensureReady()
+    const src = database.getDatabaseFilePath()
+    const dst = join(app.getPath('userData'), `isla-backup-${Date.now()}.db`)
+    const { copyFile } = await import('fs/promises')
+    await copyFile(src, dst)
+    return { success: true, path: dst }
+  } catch (e) {
+    console.error('❌ [IPC] Backup failed:', e)
+    return { success: false, error: String(e?.message || e) }
+  }
+})
+
+// DB restore
+ipcMain.handle('db:restore', async (_, backupPath: string) => {
+  try {
+    await database.ensureReady()
+    const dst = database.getDatabaseFilePath()
+    const { copyFile } = await import('fs/promises')
+    database.close()
+    await copyFile(backupPath, dst)
+    await database.initialize()
+    return { success: true }
+  } catch (e) {
+    console.error('❌ [IPC] Restore failed:', e)
+    return { success: false, error: String(e?.message || e) }
+  }
+})
+
+// Health check
+ipcMain.handle('system:health', async () => {
+  try {
+    const llama = LlamaService.getInstance()
+    const model = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+    const dbReady = true
+    const llmReady = !!llama.getCurrentModel()
+    const indexStats = database.getStats()
+    return { dbReady, llmReady, embeddingsModel: model || null, indexStats }
+  } catch (e) {
+    return { dbReady: false, llmReady: false, embeddingsModel: null, indexStats: { fileCount: 0, chunkCount: 0, indexSize: 0 } }
   }
 })
 
