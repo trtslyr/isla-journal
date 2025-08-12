@@ -24,6 +24,38 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
 
+// Simple file logging in production
+function setupProductionFileLogging() {
+  try {
+    if (isDev) return
+    const fs = require('fs')
+    const path = require('path')
+    const userDataDir = app.getPath('userData')
+    const logDir = path.join(userDataDir, 'logs')
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true })
+    }
+    const logFile = path.join(logDir, 'isla.log')
+    const stream = fs.createWriteStream(logFile, { flags: 'a' })
+    const write = (level: string, args: any[]) => {
+      try {
+        const ts = new Date().toISOString()
+        const line = `[${ts}] [${level}] ${args.map(a => {
+          if (a instanceof Error) return a.stack || a.message
+          try { return typeof a === 'object' ? JSON.stringify(a) : String(a) } catch { return String(a) }
+        }).join(' ')}\n`
+        stream.write(line)
+      } catch {}
+    }
+    const cLog = console.log.bind(console)
+    const cErr = console.error.bind(console)
+    const cWarn = console.warn.bind(console)
+    console.log = (...args: any[]) => { write('log', args); cLog(...args) }
+    console.error = (...args: any[]) => { write('error', args); cErr(...args) }
+    console.warn = (...args: any[]) => { write('warn', args); cWarn(...args) }
+  } catch {}
+}
+
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
 try {
@@ -122,14 +154,13 @@ const createWindow = (): void => {
       preload: join(__dirname, '../preload/index.js'),
       // Fixed platform and environment-specific settings
       ...(isDev && {
-        webSecurity: true, // Enable web security in dev
+        webSecurity: true,
         allowRunningInsecureContent: false
       }),
       ...(!isDev && {
-        webSecurity: false, // Disable web security for packaged apps (all platforms)
-        allowRunningInsecureContent: true, // Allow local file loading
-        enableRemoteModule: false, // Security: disable remote module
-        nodeIntegrationInWorker: false // Security: disable node in workers
+        webSecurity: true,
+        enableRemoteModule: false,
+        nodeIntegrationInWorker: false
       })
     }
   })
@@ -307,8 +338,9 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    if (isDev) {
+      mainWindow?.webContents.openDevTools()
+    }
   })
 
   // Handle external links
@@ -321,6 +353,9 @@ const createWindow = (): void => {
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   try {
+    // Initialize file logging in production
+    setupProductionFileLogging()
+
     // BULLETPROOF Windows diagnostics and error handling
     console.log('🚀 [Main] ========== ISLA JOURNAL WINDOWS INITIALIZATION ==========')
     console.log(`🪟 [Main] Platform: ${process.platform}`)
@@ -856,7 +891,7 @@ ipcMain.handle('file:writeFile', async (_, filePath: string, content: string) =>
   }
 })
 
-ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string) => {
+ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string, content?: string) => {
   try {
     // Ensure .md extension
     if (!fileName.endsWith('.md')) {
@@ -865,7 +900,7 @@ ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string) =
     
     const normalizedDirPath = normalizePath(dirPath)
     const filePath = normalizePath(join(normalizedDirPath, fileName))
-    const initialContent = `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
+    const initialContent = typeof content === 'string' ? content : `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
     
     console.log('📝 [File] Creating new file:', filePath)
     await writeFile(filePath, initialContent, 'utf-8')
@@ -1155,6 +1190,17 @@ ipcMain.handle('chat:rename', async (_, chatId: number, newTitle: string) => {
   }
 })
 
+ipcMain.handle('chat:clearMessages', async (_, chatId: number) => {
+  try {
+    await database.ensureReady()
+    database.clearChatMessages(chatId)
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error clearing chat messages:', error)
+    throw error
+  }
+})
+
 // RAG/Content Search IPC handlers
 ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
   try {
@@ -1267,8 +1313,13 @@ ipcMain.handle('file:delete', async (_, filePath: string) => {
       
       // Remove from database if it was a markdown file
       if (filePath.endsWith('.md')) {
-        // TODO: Add method to remove file from database
-        console.log('🗑️ [Database] Should remove from index:', filePath)
+        try {
+          await database.ensureReady()
+          database.deleteFileByPath(filePath)
+          console.log('🗑️ [Database] Removed from index:', filePath)
+        } catch (dbErr) {
+          console.error('⚠️ [Database] Failed to remove from index:', dbErr)
+        }
       }
     }
     
@@ -1304,13 +1355,10 @@ ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
     // Update database if it was a markdown file
     if (oldPath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
+        await database.ensureReady()
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
-        console.log('📝 [Database] Updated index for renamed file:', fileName)
+        database.updateFilePath(oldPath, newPath, fileName)
+        console.log('📝 [Database] Updated index path for renamed file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after rename:', dbError)
       }
@@ -1353,13 +1401,10 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     // Update database if it was a markdown file
     if (sourcePath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
+        await database.ensureReady()
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
-        console.log('📝 [Database] Updated index for moved file:', fileName)
+        database.updateFilePath(sourcePath, newPath, fileName)
+        console.log('📝 [Database] Updated index path for moved file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after move:', dbError)
       }
