@@ -300,6 +300,9 @@ class IslaDatabase {
       console.log('📋 [Database] Tables and indexes created')
       console.log('🔧 [Database] Schema validation completed (FTS removed)')
 
+      // Apply schema migrations for added columns (idempotent)
+      this.migrateSchema()
+
     } catch (error) {
       console.error('❌ [Database] Failed to initialize:', error)
       
@@ -310,6 +313,24 @@ class IslaDatabase {
       } else {
         throw error
       }
+    }
+  }
+
+  private migrateSchema(): void {
+    if (!this.db) throw new Error('Database not initialized')
+    try {
+      const columns: Array<{ name: string }> = this.db.prepare("PRAGMA table_info(files)").all() as any
+      const names = new Set(columns.map(c => c.name))
+      if (!names.has('file_mtime')) {
+        this.db.exec("ALTER TABLE files ADD COLUMN file_mtime DATETIME")
+      }
+      if (!names.has('note_date')) {
+        this.db.exec("ALTER TABLE files ADD COLUMN note_date DATE")
+      }
+      // Ensure new index exists
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_files_note_date ON files (note_date)")
+    } catch (e) {
+      console.warn('⚠️ [Database] Migration warning:', e)
     }
   }
 
