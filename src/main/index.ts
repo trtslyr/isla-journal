@@ -159,11 +159,12 @@ function startVaultWatcher(rootDir: string) {
       const lower = p.toLowerCase()
       if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
       if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
-      // Skip binaries and images for indexing
-      if (!lower.endsWith('.md')) return true
+      if (lower.includes('/dist/') || lower.endsWith('/dist')) return true
+      if (lower.includes('/build/') || lower.endsWith('/build')) return true
       return false
     }
-    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    // Watch recursively; index existing files on start
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
     const onAddOrChange = async (filePath: string) => {
       try {
         if (!filePath.toLowerCase().endsWith('.md')) return
