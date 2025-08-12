@@ -1,6 +1,9 @@
 import { Ollama } from 'ollama'
 import { BrowserWindow } from 'electron'
 import { DeviceDetectionService, ModelRecommendation } from './deviceDetection'
+import { Worker } from 'worker_threads'
+import path from 'path'
+import { v4 as uuidv4 } from 'uuid'
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -22,6 +25,8 @@ export class LlamaService {
   private currentModel: string | null = null
   private isInitialized = false
   private mainWindow: BrowserWindow | null = null
+  private embedWorker: Worker | null = null
+  private pendingEmbeds: Map<string, { resolve: (v:number[][])=>void; reject: (e:any)=>void }> = new Map()
 
   public static getInstance(): LlamaService {
     if (!LlamaService.instance) {
@@ -329,6 +334,42 @@ export class LlamaService {
     return await this.deviceService.getRecommendedModel()
   }
 
+  public async ensureEmbeddingsModelAvailable(modelName: string, onProgress?: (progress: number, status: string) => void): Promise<void> {
+    await this.ensureModelAvailableInternal(modelName, onProgress)
+  }
+
+  private async ensureModelAvailableInternal(modelName: string, onProgress?: (progress: number, status: string) => void): Promise<void> {
+    await this.ensureModelAvailable(modelName, onProgress)
+  }
+
+  private ensureEmbedWorker(): void {
+    if (this.embedWorker) return
+    const workerPath = path.join(__dirname, '../workers/embeddingWorker.js')
+    this.embedWorker = new Worker(workerPath)
+    this.embedWorker.on('message', (msg: any) => {
+      if (!msg || !msg.requestId) return
+      const entry = this.pendingEmbeds.get(msg.requestId)
+      if (!entry) return
+      this.pendingEmbeds.delete(msg.requestId)
+      if (msg.type === 'result') entry.resolve(msg.vectors)
+      else entry.reject(new Error(msg.error || 'Embedding worker error'))
+    })
+    this.embedWorker.on('error', (err) => {
+      for (const [id, entry] of this.pendingEmbeds) {
+        entry.reject(err)
+        this.pendingEmbeds.delete(id)
+      }
+      this.embedWorker = null
+    })
+    this.embedWorker.on('exit', (code) => {
+      for (const [id, entry] of this.pendingEmbeds) {
+        entry.reject(new Error(`Embedding worker exited with code ${code}`))
+        this.pendingEmbeds.delete(id)
+      }
+      this.embedWorker = null
+    })
+  }
+
   public async embedTexts(texts: string[], modelOverride?: string): Promise<number[][]> {
     if (!this.isInitialized) {
       throw new Error('LlamaService not initialized')
@@ -337,14 +378,14 @@ export class LlamaService {
     if (!model) throw new Error('No model available for embeddings')
 
     try {
-      // Ollama embeddings endpoint supports single text per call; do sequential to avoid overload
-      const vectors: number[][] = []
-      for (const t of texts) {
-        const res: any = await (this.ollama as any).embeddings({ model, prompt: t })
-        const v: number[] = res?.embedding || res?.data?.[0]?.embedding || []
-        vectors.push(v)
-      }
-      return vectors
+      // Offload to worker
+      this.ensureEmbedWorker()
+      const requestId = uuidv4()
+      const p = new Promise<number[][]>((resolve, reject) => {
+        this.pendingEmbeds.set(requestId, { resolve, reject })
+      })
+      this.embedWorker!.postMessage({ type: 'embed', requestId, model, texts })
+      return await p
     } catch (error) {
       console.error('❌ [LlamaService] Error generating embeddings:', error)
       throw error

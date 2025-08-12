@@ -4,6 +4,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
 import path from 'path'
 import os from 'os'
+import crypto from 'crypto'
 
 // Safe console wrapper for Windows compatibility
 const safeConsole = {
@@ -460,6 +461,7 @@ class IslaDatabase {
       CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages (chat_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at);
       CREATE INDEX IF NOT EXISTS idx_settings_key ON app_settings (key);
+      CREATE INDEX IF NOT EXISTS idx_chunks_file ON content_chunks (file_id, chunk_index);
     `)
 
     console.log('📋 [Database] Tables and indexes created')
@@ -490,6 +492,32 @@ class IslaDatabase {
       } catch (e) {
         console.warn('⚠️ [Database] Failed to add note_date:', e)
       }
+    }
+
+    // Add chunk_hash to content_chunks if missing
+    try {
+      const chunkCols: Array<{name: string}> = this.db.prepare("PRAGMA table_info(content_chunks)").all() as any
+      const hasChunkHash = chunkCols.some(c => c.name === 'chunk_hash')
+      if (!hasChunkHash) {
+        this.db.exec("ALTER TABLE content_chunks ADD COLUMN chunk_hash TEXT")
+        // Index to speed up matching
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_file_hash ON content_chunks (file_id, chunk_hash)")
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to ensure chunk_hash on content_chunks:', e)
+    }
+
+    // Add heading_path, section_title, token_count to content_chunks if missing
+    try {
+      const chunkCols2: Array<{name: string}> = this.db.prepare("PRAGMA table_info(content_chunks)").all() as any
+      const hasHeadingPath = chunkCols2.some(c => c.name === 'heading_path')
+      const hasSectionTitle = chunkCols2.some(c => c.name === 'section_title')
+      const hasTokenCount = chunkCols2.some(c => c.name === 'token_count')
+      if (!hasHeadingPath) this.db.exec("ALTER TABLE content_chunks ADD COLUMN heading_path TEXT")
+      if (!hasSectionTitle) this.db.exec("ALTER TABLE content_chunks ADD COLUMN section_title TEXT")
+      if (!hasTokenCount) this.db.exec("ALTER TABLE content_chunks ADD COLUMN token_count INTEGER")
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to add heading metadata on content_chunks:', e)
     }
 
     // Indexes for new columns
@@ -527,11 +555,12 @@ class IslaDatabase {
     try {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS embeddings (
-          chunk_id INTEGER PRIMARY KEY,
+          chunk_id INTEGER NOT NULL,
           vector TEXT NOT NULL,
           dim INTEGER NOT NULL,
           model TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
           FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
         );
       `)
@@ -539,6 +568,13 @@ class IslaDatabase {
       console.log('✅ [Database] Embeddings table ready')
     } catch (e) {
       console.warn('⚠️ [Database] Failed to ensure embeddings table:', e)
+    }
+
+    // Ensure embeddings table has composite primary key; migrate if needed
+    try {
+      this.migrateEmbeddingsSchemaIfNeeded()
+    } catch (e) {
+      console.warn('⚠️ [Database] Embeddings schema migration skipped/failed:', e)
     }
   }
 
@@ -601,61 +637,231 @@ class IslaDatabase {
     console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
   }
 
+  /** Compute a stable hash for a chunk */
+  private computeChunkHash(text: string): string {
+    return crypto.createHash('sha1').update(text).digest('hex')
+  }
+
   /**
-   * Break content into chunks and update FTS index
+   * Break content into chunks and update FTS index (diff by chunk hash)
    */
   private updateContentChunks(fileId: number, filePath: string, fileName: string, content: string): void {
     if (!this.db) throw new Error('Database not initialized')
 
-    // Clear existing chunks and FTS rows for this file
-    this.db.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
-    if (this.ftsReady) {
-      this.db.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
-    }
-
     const chunks = this.chunkContent(content)
 
-    const insertChunk = this.db.prepare(`
-      INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
-      VALUES (?, ?, ?)
-    `)
+    // Load existing chunks for file
+    const existingRows = this.db.prepare('SELECT id, chunk_hash, chunk_index FROM content_chunks WHERE file_id = ?').all(fileId) as Array<{ id:number, chunk_hash:string|null, chunk_index:number }>
 
-    const insertFts = this.ftsReady
-      ? this.db.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
-      : null
+    const hashToIds = new Map<string, number[]>()
+    for (const row of existingRows) {
+      if (!row.chunk_hash) continue
+      const arr = hashToIds.get(row.chunk_hash) || []
+      arr.push(row.id)
+      hashToIds.set(row.chunk_hash, arr)
+    }
+
+    const toInsert: typeof chunks = []
+    const keep: Array<{ id:number; index:number; hash:string }> = []
+
+    for (const nc of chunks) {
+      const pool = hashToIds.get(nc.hash)
+      if (pool && pool.length) {
+        const id = pool.shift()!
+        keep.push({ id, index: nc.index, hash: nc.hash })
+      } else {
+        toInsert.push(nc)
+      }
+    }
+
+    // Any remaining ids in hashToIds are removals
+    const toDeleteIds: number[] = []
+    for (const arr of hashToIds.values()) {
+      for (const id of arr) toDeleteIds.push(id)
+    }
+
+    const updateIndexStmt = this.db.prepare('UPDATE content_chunks SET chunk_index = ? WHERE id = ?')
+    const insertChunkStmt = this.db.prepare('INSERT INTO content_chunks (file_id, chunk_text, chunk_index, chunk_hash, heading_path, section_title, token_count) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    const deleteChunkStmt = this.db.prepare('DELETE FROM content_chunks WHERE id = ?')
+
+    const insertFts = this.ftsReady ? this.db.prepare('INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)') : null
+    const deleteFts = this.ftsReady ? this.db.prepare('DELETE FROM chunks_fts WHERE rowid = ?') : null
 
     const tx = this.db.transaction(() => {
-      chunks.forEach((chunk, index) => {
-        const res = insertChunk.run(fileId, chunk, index)
-        const chunkId = Number(res.lastInsertRowid)
-        if (insertFts) insertFts.run(chunkId, chunk, fileId)
-      })
+      // Delete removed
+      for (const id of toDeleteIds) {
+        deleteChunkStmt.run(id)
+        if (deleteFts) deleteFts.run(id)
+      }
+      // Insert new
+      for (const ins of toInsert) {
+        const res = insertChunkStmt.run(fileId, ins.text, ins.index, ins.hash, ins.headingPath, ins.sectionTitle, ins.tokenCount)
+        const newId = Number(res.lastInsertRowid)
+        if (insertFts) insertFts.run(newId, ins.text, fileId)
+      }
+      // Update index for kept (no text change)
+      for (const k of keep) {
+        updateIndexStmt.run(k.index, k.id)
+      }
     })
 
     tx()
 
-    console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName}`)
+    console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName} (inserted ${toInsert.length}, removed ${toDeleteIds.length}, kept ${keep.length})`)
   }
 
   /**
-   * Split content into overlapping chunks
+   * Estimate tokens ~4 chars per token
    */
-  private chunkContent(content: string): string[] {
-    const chunkSize = 500
-    const overlap = 100
-    const chunks: string[] = []
-    
-    // Clean content
-    const cleanContent = content.replace(/\s+/g, ' ').trim()
-    
-    for (let i = 0; i < cleanContent.length; i += (chunkSize - overlap)) {
-      const chunk = cleanContent.slice(i, i + chunkSize)
-      if (chunk.trim().length > 50) { // Only add meaningful chunks
-        chunks.push(chunk.trim())
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.trim().length / 4)
+  }
+
+  /**
+   * Split markdown into structural units (paragraphs, code blocks) with heading breadcrumbs
+   */
+  private splitMarkdown(content: string): Array<{ text: string; headingPath: string; sectionTitle: string }> {
+    const lines = content.replace(/\r\n?/g, '\n').split('\n')
+    const headingLevels: string[] = []
+    const units: Array<{ text: string; headingPath: string; sectionTitle: string }> = []
+    let i = 0
+    let inCode = false
+    let codeFence = ''
+    let buffer: string[] = []
+    let sectionTitle = ''
+
+    const flushBuffer = () => {
+      if (buffer.length === 0) return
+      const text = buffer.join('\n').trim()
+      if (text) {
+        const headingPath = headingLevels.filter(Boolean).join(' > ')
+        units.push({ text, headingPath, sectionTitle })
+      }
+      buffer = []
+    }
+
+    while (i < lines.length) {
+      const line = lines[i]
+      const hMatch = !inCode && line.match(/^(#{1,6})\s+(.+?)\s*$/)
+      const fenceMatch = line.match(/^```(.*)$/)
+
+      if (fenceMatch) {
+        if (!inCode) {
+          // start code block
+          inCode = true
+          codeFence = fenceMatch[1] || ''
+          buffer.push(line)
+        } else {
+          // end code block
+          buffer.push(line)
+          inCode = false
+          flushBuffer()
+        }
+        i++
+        continue
+      }
+
+      if (hMatch && !inCode) {
+        // heading found
+        flushBuffer()
+        const level = hMatch[1].length
+        const title = hMatch[2].trim()
+        headingLevels.length = level
+        headingLevels[level - 1] = title
+        sectionTitle = title
+        i++
+        continue
+      }
+
+      if (!inCode && line.trim() === '') {
+        // paragraph break
+        flushBuffer()
+        i++
+        continue
+      }
+
+      buffer.push(line)
+      i++
+    }
+    flushBuffer()
+    return units
+  }
+
+  /**
+   * Break content into markdown-aware, token-based chunks (~450 tokens, 50 overlap)
+   */
+  private chunkContent(content: string): Array<{ text: string; index: number; hash: string; headingPath: string; sectionTitle: string; tokenCount: number }> {
+    const targetTokens = 450
+    const overlapTokens = 60
+    const units = this.splitMarkdown(content)
+    const chunks: Array<{ text: string; index: number; hash: string; headingPath: string; sectionTitle: string; tokenCount: number }> = []
+
+    let current: string[] = []
+    let currentTokens = 0
+    let currentHeading = ''
+    let currentSection = ''
+
+    const pushChunk = () => {
+      const text = current.join('\n').trim()
+      if (!text) return
+      const tokenCount = this.estimateTokens(text)
+      const headingPath = currentHeading
+      const sectionTitle = currentSection
+      chunks.push({ text, index: chunks.length, hash: this.computeChunkHash(text), headingPath, sectionTitle, tokenCount })
+    }
+
+    for (let uIndex = 0; uIndex < units.length; uIndex++) {
+      const u = units[uIndex]
+      const tTokens = this.estimateTokens(u.text)
+      if (currentTokens === 0) { currentHeading = u.headingPath; currentSection = u.sectionTitle }
+
+      if (currentTokens + tTokens > targetTokens && current.length > 0) {
+        pushChunk()
+        // overlap: keep last unit
+        const last = current.length ? current[current.length - 1] : ''
+        current = last ? [last] : []
+        currentTokens = last ? this.estimateTokens(last) : 0
+        currentHeading = u.headingPath
+        currentSection = u.sectionTitle
+      }
+      current.push(u.text)
+      currentTokens += tTokens
+
+      // proactively split very long single units
+      if (tTokens > targetTokens * 1.2) {
+        // split by sentences
+        const sentences = u.text.split(/(?<=[.!?])\s+/)
+        let buf: string[] = []
+        let bufT = 0
+        for (const s of sentences) {
+          const sT = this.estimateTokens(s)
+          if (bufT + sT > targetTokens) {
+            const part = buf.join(' ').trim()
+            if (part) {
+              chunks.push({ text: part, index: chunks.length, hash: this.computeChunkHash(part), headingPath: u.headingPath, sectionTitle: u.sectionTitle, tokenCount: this.estimateTokens(part) })
+            }
+            buf = [s]
+            bufT = sT
+          } else {
+            buf.push(s)
+            bufT += sT
+          }
+        }
+        const remain = buf.join(' ').trim()
+        if (remain) {
+          chunks.push({ text: remain, index: chunks.length, hash: this.computeChunkHash(remain), headingPath: u.headingPath, sectionTitle: u.sectionTitle, tokenCount: this.estimateTokens(remain) })
+        }
+        current = []
+        currentTokens = 0
       }
     }
-    
-    return chunks.length > 0 ? chunks : [cleanContent]
+
+    if (currentTokens > 0) pushChunk()
+
+    // enforce overlap by trimming if necessary
+    // (already handled when pushing)
+
+    return chunks
   }
 
   /**
@@ -1160,16 +1366,16 @@ class IslaDatabase {
 
     try {
       const normalizedPath = this.normalizeFilePath(filePath)
-      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath) as { modified_at: string } | undefined
+      const existing = this.db.prepare('SELECT file_mtime FROM files WHERE path = ?').get(normalizedPath) as { file_mtime: string } | undefined
       
-      if (!existing) {
-        // File doesn't exist in database, needs processing
+      if (!existing || !existing.file_mtime) {
+        // File doesn't exist in database (or missing mtime), needs processing
         return true
       }
       
-      const dbMtime = new Date(existing.modified_at)
-      // File needs processing if it's been modified since last time
-      return currentMtime > dbMtime
+      const dbFileMtime = new Date(existing.file_mtime)
+      // File needs processing if filesystem mtime is newer than stored file mtime
+      return currentMtime > dbFileMtime
     } catch (error) {
       console.error('❌ [Database] Error checking if file needs processing:', error)
       // On error, assume it needs processing to be safe
@@ -1356,10 +1562,9 @@ class IslaDatabase {
     const sql = `
       INSERT INTO embeddings (chunk_id, vector, dim, model)
       VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET
+      ON CONFLICT(chunk_id, model) DO UPDATE SET
         vector = excluded.vector,
         dim = excluded.dim,
-        model = excluded.model,
         created_at = CURRENT_TIMESTAMP
     `
     this.db.prepare(sql).run(chunkId, vectorJson, dim, model)
@@ -1394,6 +1599,11 @@ class IslaDatabase {
     }))
   }
 
+  /** Expose database file path (for backup/restore) */
+  public getDatabaseFilePath(): string {
+    return this.dbPath
+  }
+
   /** Clear all embeddings (for rebuild) */
   public clearEmbeddings(model?: string): void {
     if (!this.db) throw new Error('Database not initialized')
@@ -1402,6 +1612,98 @@ class IslaDatabase {
     } else {
       this.db.prepare('DELETE FROM embeddings').run()
     }
+  }
+
+  private migrateEmbeddingsSchemaIfNeeded(): void {
+    if (!this.db) throw new Error('Database not initialized')
+    try {
+      // Check current schema
+      const pragma = this.db.prepare("PRAGMA table_info(embeddings)").all() as Array<{ name: string, pk: number }>
+      const hasChunkId = pragma.some(c => c.name === 'chunk_id')
+      const hasModel = pragma.some(c => c.name === 'model')
+      const pkCols = pragma.filter(c => c.pk === 1).map(c => c.name)
+      const isOldSchema = hasChunkId && hasModel && pkCols.length === 1 && pkCols[0] === 'chunk_id'
+
+      if (!isOldSchema) return
+
+      console.log('🔧 [Database] Migrating embeddings schema to composite primary key (chunk_id, model)...')
+
+      // Create new table with desired schema
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS embeddings_new (
+          chunk_id INTEGER NOT NULL,
+          vector TEXT NOT NULL,
+          dim INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
+          FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+        );
+      `)
+
+      // Copy data from old table (deduplicate by last write per chunk)
+      // If multiple rows somehow exist, prefer the most recent
+      this.db.exec(`
+        INSERT OR IGNORE INTO embeddings_new (chunk_id, vector, dim, model, created_at)
+        SELECT chunk_id, vector, dim, model, created_at
+        FROM embeddings;
+      `)
+
+      // Replace old table
+      this.db.exec('DROP TABLE IF EXISTS embeddings;')
+      this.db.exec('ALTER TABLE embeddings_new RENAME TO embeddings;')
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings (model);')
+
+      console.log('✅ [Database] Embeddings schema migration complete')
+    } catch (e) {
+      console.warn('⚠️ [Database] Embeddings schema migration skipped/failed:', e)
+    }
+  }
+
+  /** Return most recent files by file_mtime or modified_at */
+  public getRecentFiles(limit: number = 10): Array<{ id: number; path: string; name: string; content: string; file_mtime: string | null }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT id, path, name, content, COALESCE(file_mtime, modified_at) as file_mtime
+      FROM files
+      ORDER BY datetime(COALESCE(file_mtime, modified_at)) DESC
+      LIMIT ?
+    `
+    return this.db.prepare(sql).all(limit) as any
+  }
+
+  /** Return recent chunks joined with file metadata (for general query fallback) */
+  public getRecentChunks(limit: number = 20): Array<{ id:number; file_id:number; file_path:string; file_name:string; content_snippet:string }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT c.id, c.file_id, f.path as file_path, f.name as file_name,
+             substr(c.chunk_text, 1, 200) as content_snippet
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      ORDER BY datetime(COALESCE(f.file_mtime, f.modified_at)) DESC, c.chunk_index ASC
+      LIMIT ?
+    `
+    return this.db.prepare(sql).all(limit) as any
+  }
+
+  /** Build a context window around a chunk (previous..next) and return combined snippet with file metadata */
+  public getChunkWindow(chunkId: number, window: number = 1): { id:number; file_id:number; file_path:string; file_name:string; content_snippet:string } | null {
+    if (!this.db) throw new Error('Database not initialized')
+    const row = this.db.prepare('SELECT id, file_id, chunk_index FROM content_chunks WHERE id = ?').get(chunkId) as { id:number; file_id:number; chunk_index:number } | undefined
+    if (!row) return null
+    const start = row.chunk_index - window
+    const end = row.chunk_index + window
+    const sql = `
+      SELECT c.chunk_text, c.chunk_index, f.path as file_path, f.name as file_name, c.file_id
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      WHERE c.file_id = ? AND c.chunk_index BETWEEN ? AND ?
+      ORDER BY c.chunk_index ASC
+    `
+    const parts = this.db.prepare(sql).all(row.file_id, start, end) as Array<{ chunk_text:string; chunk_index:number; file_path:string; file_name:string; file_id:number }>
+    if (!parts.length) return null
+    const snippet = parts.map(p => p.chunk_text).join(' ')
+    return { id: row.id, file_id: parts[0].file_id, file_path: parts[0].file_path, file_name: parts[0].file_name, content_snippet: snippet.slice(0, 600) }
   }
 }
 

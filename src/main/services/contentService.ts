@@ -1,6 +1,5 @@
 import { database } from '../database'
 import { LlamaService } from './llamaService'
-import { readFile } from 'fs/promises'
 import { normalize, resolve } from 'path'
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -40,6 +39,76 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
   return null
 }
 
+function rrfMerge(fts: any[], vec: any[], k: number = 60): any[] {
+  const K = k
+  const map = new Map<number, { item: any; score: number }>()
+  fts.forEach((r, i) => {
+    const score = 1.0 / (K + i + 1)
+    if (!map.has(r.id)) map.set(r.id, { item: { ...r, sim: 0 }, score })
+    else map.get(r.id)!.score += score
+  })
+  vec.forEach((r, i) => {
+    const score = 1.0 / (K + i + 1)
+    if (!map.has(r.id)) map.set(r.id, { item: r, score })
+    else map.get(r.id)!.score += score
+  })
+  return Array.from(map.values()).sort((a,b)=>b.score-a.score).map(x=>({ ...x.item, score: x.score }))
+}
+
+function trimContextByChars(lines: string[], maxChars: number): string[] {
+  const out: string[] = []
+  let total = 0
+  for (const l of lines) {
+    if (total + l.length > maxChars) break
+    out.push(l)
+    total += l.length
+  }
+  return out
+}
+
+function approxTokenCount(s: string): number {
+  // Rough: 4 chars per token
+  return Math.ceil(s.length / 4)
+}
+
+function mmrDiversify<T extends { id:number; content_snippet:string }>(items: T[], k: number, lambda: number = 0.7): T[] {
+  const selected: typeof items = []
+  const remaining = items.slice()
+  const sim = (a:string,b:string)=>{
+    // Jaccard over terms as a cheap proxy
+    const A = new Set(a.toLowerCase().split(/\W+/).filter(Boolean))
+    const B = new Set(b.toLowerCase().split(/\W+/).filter(Boolean))
+    const inter = [...A].filter(x=>B.has(x)).length
+    const union = new Set([...A, ...B]).size || 1
+    return inter / union
+  }
+  while (selected.length < k && remaining.length) {
+    let bestIdx = 0
+    let bestScore = -Infinity
+    for (let i = 0; i < remaining.length; i++) {
+      const cand = remaining[i]
+      const relevance = 1 // already ranked by RRF; treat as equal baseline
+      let diversityPenalty = 0
+      for (const s of selected) diversityPenalty = Math.max(diversityPenalty, sim(cand.content_snippet, s.content_snippet))
+      const score = lambda * relevance - (1 - lambda) * diversityPenalty
+      if (score > bestScore) { bestScore = score; bestIdx = i }
+    }
+    selected.push(remaining.splice(bestIdx,1)[0])
+  }
+  return selected
+}
+
+function applySimpleFilters(query: string): { cleaned: string; pathPrefix?: string; tag?: string } {
+  let cleaned = query
+  let pathPrefix: string | undefined
+  let tag: string | undefined
+  const pathMatch = query.match(/\bpath:([^\s]+)/)
+  if (pathMatch) { pathPrefix = pathMatch[1]; cleaned = cleaned.replace(pathMatch[0], '').trim() }
+  const tagMatch = query.match(/\btag:([^\s]+)/)
+  if (tagMatch) { tag = tagMatch[1]; cleaned = cleaned.replace(tagMatch[0], '').trim() }
+  return { cleaned, pathPrefix, tag }
+}
+
 class ContentService {
   /**
    * Prepare prompt and sources for RAG (without sending to LLM)
@@ -59,8 +128,9 @@ class ContentService {
           if (item.type === 'file' && item.path.endsWith('.md')) {
             try {
               const normalizedPath = normalize(resolve(item.path))
-              const content = await readFile(normalizedPath, 'utf-8')
-              const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
+                              const dbFile = database.getFile(normalizedPath)
+                const content = dbFile?.content || ''
+                const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
               pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
             } catch {}
           }
@@ -75,10 +145,10 @@ class ContentService {
     let results: any[] = ftsResults
     try {
       const llama = LlamaService.getInstance()
-      const model = llama.getCurrentModel()
-      if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-        const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
-        const qVec = (await llama.embedTexts([query], model))[0] || []
+      const embeddingsModel = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+      if (embeddingsModel && typeof (database as any).getEmbeddingsForModel === 'function') {
+        const allEmb = (database as any).getEmbeddingsForModel(embeddingsModel) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+        const qVec = (await llama.embedTexts([query], embeddingsModel))[0] || []
         const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
         const topE = scored.slice(0, 30)
@@ -127,159 +197,116 @@ class ContentService {
     try {
       console.log(`🔍 [ContentService] Searching for: ${query}`)
 
-      // Date filter
-      const dateFilter = extractDateFilter(query)
+      const { cleaned, pathPrefix } = applySimpleFilters(query)
+      const dateFilter = extractDateFilter(cleaned)
 
-      // 1. Get pinned files content first with cross-platform path handling
+      // Conversation context
+      let conversationContext = ''
+      if (conversationHistory && conversationHistory.length > 0) {
+        const recentMessages = conversationHistory.slice(-6)
+        conversationContext = recentMessages.map(msg => `${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`).join('\n')
+      }
+
+      // Pinned (from DB cache)
       let pinnedContent = ''
       try {
         const pinnedItemsJson = database.getSetting('pinnedItems')
         if (pinnedItemsJson) {
           const pinnedItems = JSON.parse(pinnedItemsJson)
-          
-          const pinnedSources = []
-          for (let i = 0; i < pinnedItems.length; i++) {
-            const item = pinnedItems[i]
+          const pinnedSources: string[] = []
+          for (const item of pinnedItems) {
             if (item.type === 'file' && item.path.endsWith('.md')) {
               try {
-                // Normalize path for cross-platform compatibility
                 const normalizedPath = normalize(resolve(item.path))
-                const content = await readFile(normalizedPath, 'utf-8')
-                // Get first 300 chars as snippet
+                const dbFile = database.getFile(normalizedPath)
+                const content = dbFile?.content || ''
                 const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
                 pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
-                console.log(`📌 [ContentService] Successfully read pinned file: ${item.name} (${normalizedPath})`)
-              } catch (error) {
-                console.log(`⚠️ [ContentService] Could not read pinned file: ${item.name} - ${error.message}`)
-              }
+              } catch (e) {}
             }
           }
-          
-          if (pinnedSources.length > 0) {
-            pinnedContent = `**📌 Your pinned files (always included):**\n${pinnedSources.join('\n\n')}\n\n`
-            console.log(`📌 [ContentService] Added ${pinnedSources.length} pinned files to context`)
-          }
+          if (pinnedSources.length > 0) pinnedContent = `Pinned notes:\n${pinnedSources.join('\n\n')}\n\n`
         }
-      } catch (error) {
-        console.log('⚠️ [ContentService] Error loading pinned files:', error)
+      } catch {}
+
+      // Retrieval
+      const hasFTS = typeof (database as any).searchContentFTS === 'function'
+      let ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(cleaned, 60, dateFilter) : database.searchContent(cleaned, 60)
+      if (pathPrefix) {
+        ftsResults = ftsResults.filter(r => String(r.file_path || '').includes(pathPrefix!))
       }
 
-      // 2. Retrieval: FTS + embeddings hybrid if available
-      const hasFTS = typeof (database as any).searchContentFTS === 'function'
-      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
-
-      let hybridResults: any[] = ftsResults
+      // Embeddings set
+      let vecResults: any[] = []
       try {
         const llama = LlamaService.getInstance()
-        const model = llama.getCurrentModel()
-        if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-          const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
-          // Build query vector
-          const qVec = (await llama.embedTexts([query], model))[0] || []
-          // Score top-N embeddings
-          const scored = allEmb.map(e => ({
-            id: e.chunk_id,
-            file_id: e.file_id,
-            file_path: e.file_path,
-            file_name: e.file_name,
-            content_snippet: e.chunk_text.slice(0, 200),
-            sim: cosineSimilarity(qVec, e.vector)
-          }))
-          scored.sort((a,b) => b.sim - a.sim)
-          const topE = scored.slice(0, 30)
-
-          // Merge with FTS: weighted score: 0.6*sim + 0.4*(normalized BM25 inverse)
-          const ftsMap = new Map<number, any>()
-          ftsResults.forEach((r, idx) => ftsMap.set(r.id, { ...r, ftsRank: 1/(1+idx) }))
-
-          const merged = new Map<number, any>()
-          // Seed with FTS
-          for (const r of ftsResults) {
-            merged.set(r.id, { ...r, sim: 0, score: 0.4 * (typeof r.rank === 'number' ? 1/(1+r.rank) : r.ftsRank || 1) })
-          }
-          // Add embeddings
-          for (const e of topE) {
-            const existing = merged.get(e.id)
-            const sim = Math.max(0, e.sim)
-            const eScore = 0.6 * sim
-            if (existing) {
-              existing.sim = Math.max(existing.sim || 0, sim)
-              existing.score = Math.max(existing.score || 0, existing.score + eScore)
-              merged.set(e.id, existing)
-            } else {
-              merged.set(e.id, { ...e, rank: 0, ftsRank: 0, score: eScore })
-            }
-          }
-
-          hybridResults = Array.from(merged.values())
-          hybridResults.sort((a,b) => (b.score || 0) - (a.score || 0))
-          hybridResults = hybridResults.slice(0, 20)
+        const embeddingsModel = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+        if (embeddingsModel && typeof (database as any).getEmbeddingsForModel === 'function') {
+          const allEmb = (database as any).getEmbeddingsForModel(embeddingsModel) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+          const qVec = (await llama.embedTexts([cleaned], embeddingsModel))[0] || []
+          const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
+          scored.sort((a,b)=>b.sim-a.sim)
+          vecResults = scored.slice(0, 60)
+          if (pathPrefix) vecResults = vecResults.filter(r => String(r.file_path || '').includes(pathPrefix!))
         }
-      } catch (e) {
-        console.log('⚠️ [ContentService] Hybrid retrieval fallback:', e)
+      } catch {}
+
+      let results: any[]
+      if ((ftsResults?.length||0) === 0 && (vecResults?.length||0) === 0) {
+        results = (database as any).getRecentChunks?.(20) || []
+      } else {
+        results = rrfMerge(ftsResults, vecResults)
       }
 
-      const results = hybridResults
+      // Parent-child expansion: expand each top result with neighboring chunks
+      const expandWindow = 1
+      const expanded: any[] = []
+      for (const r of results.slice(0, 20)) {
+        const win = (database as any).getChunkWindow?.(r.id, expandWindow)
+        if (win) expanded.push(win)
+        else expanded.push(r)
+      }
 
-      // 3. Build context blocks
-      const pinnedBlock = pinnedContent ? `Pinned notes:\n${pinnedContent}` : ''
+      // MMR diversify top-N
+      const diversified = mmrDiversify(expanded, 12, 0.7)
 
-      let dateBlock = ''
-      if (dateFilter) {
+      // Token-ish cap
+      const maxTokens = 1200
+      const lines: string[] = []
+      let tokens = 0
+      for (const r of diversified) {
+        const line = `${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`
+        const t = approxTokenCount(line)
+        if (tokens + t > maxTokens) break
+        lines.push(line)
+        tokens += t
+      }
+      const retrievedBlock = lines.map((t,i)=>`(${i+1}) ${t}`).join('\n')
+
+      const dateBlock = (()=>{
+        if (!dateFilter) return ''
         const start = dateFilter.start.toISOString().slice(0,10)
         const end = new Date(+dateFilter.end - 1).toISOString().slice(0,10)
-        dateBlock = `Date range: ${start} → ${end}`
+        return `Date range: ${start} → ${end}`
+      })()
+
+      if (lines.length === 0 && !pinnedContent) {
+        return { answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).", sources: [] }
       }
 
-      let retrievedBlock = ''
-      if (results.length > 0) {
-        retrievedBlock = results.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
-      }
-
-      if (results.length === 0 && !pinnedContent) {
-        return {
-          answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).",
-          sources: []
-        }
-      }
-
-      // 4. Add conversation context if available
-      let conversationContext = ''
-      if (conversationHistory && conversationHistory.length > 0) {
-        const recentMessages = conversationHistory.slice(-4)
-        conversationContext = recentMessages.map(msg => `${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`).join('\n')
-      }
-
-      // 5. Build general notes assistant prompt with blocks
       const today = new Date().toISOString()
-      const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
+      const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nConversation context (recent):\n${conversationContext}\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-      const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      
-
-      // 6. Get LLM response
       const llamaService = LlamaService.getInstance()
-      const llmResponse = await llamaService.sendMessage([
-        { role: 'user', content: ragPrompt }
-      ])
+      const llmResponse = await llamaService.sendMessage([{ role: 'user', content: ragPrompt }])
 
-      // 7. Sources list
-      const sources = results.map((r: any) => ({
-        file_name: r.file_name,
-        file_path: r.file_path,
-        snippet: String(r.content_snippet || '').replace(/<\/?mark>/g, '')
-      }))
-      // Add pinned labels (without reading again)
+      const sources = diversified.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
       if (pinnedContent) {
         try {
           const pinnedItemsJson = database.getSetting('pinnedItems')
           if (pinnedItemsJson) {
             const pinnedItems = JSON.parse(pinnedItemsJson)
-            pinnedItems.forEach((item: any) => {
-              if (item.type === 'file' && item.path.endsWith('.md')) {
-                sources.push({ file_name: `📌 ${item.name}`, file_path: item.path, snippet: '(Pinned)' })
-              }
-            })
+            pinnedItems.forEach((item: any) => { if (item.type === 'file' && item.path.endsWith('.md')) { sources.push({ file_name: `📌 ${item.name}`, file_path: item.path, snippet: '(Pinned)' }) } })
           }
         } catch {}
       }

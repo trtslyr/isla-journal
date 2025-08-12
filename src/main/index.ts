@@ -24,6 +24,7 @@ import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
 import chokidar from 'chokidar'
+import { Worker } from 'worker_threads'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -147,6 +148,58 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow: BrowserWindow | null = null
 let vaultWatcher: import('chokidar').FSWatcher | null = null
+let indexingWorker: Worker | null = null
+
+// Embeddings background builder
+let embeddingsDebounceTimer: NodeJS.Timeout | null = null
+let embeddingsBuilding = false
+
+// Indexable file types
+const indexableExtensions = new Set(['.md', '.mdx', '.txt'])
+function isIndexableFile(name: string): boolean {
+  const i = name.lastIndexOf('.')
+  if (i < 0) return false
+  const ext = name.slice(i).toLowerCase()
+  return indexableExtensions.has(ext)
+}
+
+async function scheduleEmbeddingsBuild(reason: string) {
+  try { console.log(`🧮 [Embeddings] Schedule build (${reason})`) } catch {}
+  if (embeddingsDebounceTimer) clearTimeout(embeddingsDebounceTimer)
+  embeddingsDebounceTimer = setTimeout(async () => {
+    if (embeddingsBuilding) { try { console.log('⏳ [Embeddings] Build already running, skipping') } catch {} ; return }
+    embeddingsBuilding = true
+    try {
+      await database.ensureReady()
+      const llama = LlamaService.getInstance()
+      const model = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+      if (!model) { try { console.log('⚠️ [Embeddings] No embeddings model set, skipping build') } catch {}; return }
+
+      let totalEmbedded = 0
+      for (;;) {
+        const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+        if (!batch.length) break
+        const texts = batch.map((b: any) => b.chunk_text)
+        try {
+          const vectors = await llama.embedTexts(texts, model)
+          for (let i = 0; i < batch.length; i++) {
+            ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
+          }
+          totalEmbedded += batch.length
+        } catch (e) {
+          console.error('❌ [Embeddings] Batch embedding failed:', e)
+          break
+        }
+      }
+      try { console.log(`✅ [Embeddings] Build complete for model=${model} (embedded ${totalEmbedded})`) } catch {}
+      try { mainWindow?.webContents.send('embeddings:built', { model, totalEmbedded }) } catch {}
+    } catch (e) {
+      console.error('❌ [Embeddings] Build failed:', e)
+    } finally {
+      embeddingsBuilding = false
+    }
+  }, 800) // debounce
+}
 
 function startVaultWatcher(rootDir: string) {
   try {
@@ -160,24 +213,26 @@ function startVaultWatcher(rootDir: string) {
       if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
       if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
       // Skip binaries and images for indexing
-      if (!lower.endsWith('.md')) return true
+      if (!isIndexableFile(lower)) return true
       return false
     }
     vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
     const onAddOrChange = async (filePath: string) => {
       try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
+        if (!isIndexableFile(filePath)) return
         const content = await readFile(filePath, 'utf-8')
         const name = path.basename(filePath)
         database.saveFile(filePath, name, content)
+        scheduleEmbeddingsBuild('watcher:addOrChange')
       } catch (e) {
         console.error('Watcher add/change failed:', e)
       }
     }
     const onUnlink = async (filePath: string) => {
       try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
+        if (!isIndexableFile(filePath)) return
         database.deleteFileByPath(filePath)
+        scheduleEmbeddingsBuild('watcher:unlink')
       } catch (e) {
         console.error('Watcher unlink failed:', e)
       }
@@ -188,6 +243,38 @@ function startVaultWatcher(rootDir: string) {
     console.log('👀 [Watcher] Started for:', rootDir)
   } catch (e) {
     console.error('❌ [Watcher] Failed to start:', e)
+  }
+}
+
+function startIndexingWorker(rootDir: string) {
+  try {
+    if (indexingWorker) {
+      try { indexingWorker.terminate() } catch {}
+      indexingWorker = null
+    }
+    const workerPath = join(__dirname, '../workers/indexWorker.js')
+    indexingWorker = new Worker(workerPath)
+    indexingWorker.on('message', (msg: any) => {
+      if (!msg || !msg.type) return
+      if (msg.type === 'start') {
+        try { mainWindow?.webContents.send('indexer:start', { total: msg.total }) } catch {}
+      } else if (msg.type === 'progress') {
+        try { mainWindow?.webContents.send('indexer:progress', { processed: msg.processed, total: msg.total }) } catch {}
+      } else if (msg.type === 'file') {
+        try {
+          const { path: p, name, content } = msg
+          database.saveFile(p, name, content)
+        } catch (e) { console.error('Indexer save failed:', e) }
+      } else if (msg.type === 'done') {
+        try { mainWindow?.webContents.send('indexer:done', { processed: msg.processed, total: msg.total }) } catch {}
+        scheduleEmbeddingsBuild('indexWorker:done')
+      }
+    })
+    indexingWorker.on('error', (e) => { console.error('Indexer error:', e) })
+    indexingWorker.on('exit', (code) => { console.log('Indexer exited:', code); indexingWorker = null })
+    indexingWorker.postMessage({ type: 'start', rootDir })
+  } catch (e) {
+    console.error('Failed to start indexing worker:', e)
   }
 }
 
@@ -489,6 +576,24 @@ app.whenReady().then(async () => {
 
   createWindow()
 
+  // Ensure embeddings model setting and availability
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const existingEmbModel = database.getSetting('embeddingsModel')
+    const defaultEmbModel = 'nomic-embed-text'
+    const embModel = existingEmbModel || defaultEmbModel
+    if (!existingEmbModel) {
+      database.setSetting('embeddingsModel', embModel)
+      try { mainWindow?.webContents.send('settings:changed', { key: 'embeddingsModel', value: embModel }) } catch {}
+    }
+    try {
+      await llama.ensureEmbeddingsModelAvailable(embModel, (p, s)=>{ try{ mainWindow?.webContents.send('embeddings:downloadProgress', { model: embModel, progress: p, status: s }) } catch{} })
+    } catch (e) {
+      console.warn('⚠️ [Main] Failed to ensure embeddings model is available:', e)
+    }
+  } catch {}
+
   // BULLETPROOF LLM service initialization
   console.log('🤖 [Main] ========== LLM SERVICE INITIALIZATION ==========')
   let llamaReady = false
@@ -501,6 +606,9 @@ app.whenReady().then(async () => {
     llamaReady = true
     console.log('✅ [Main] LLM service initialization completed successfully')
     console.log('🤖 [Main] AI features are READY and FUNCTIONAL')
+
+    // Kick off embeddings build if we already have indexed chunks
+    scheduleEmbeddingsBuild('llm:init')
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
     console.error('❌ [Main] LLM service initialization failed:', errorMsg)
@@ -524,6 +632,16 @@ app.whenReady().then(async () => {
   }
   console.log(`🤖 [Main] LLM service status: ${llamaReady ? '✅ READY' : '❌ UNAVAILABLE'}`)
   console.log('🤖 [Main] ===============================================')
+
+  // After database init and window creation, if a root directory is selected, start watcher
+  try {
+    const selectedDir = database.getSetting('selectedDirectory')
+    if (selectedDir) {
+      startVaultWatcher(selectedDir)
+      // Schedule embeddings because we may have just loaded existing chunks
+      scheduleEmbeddingsBuild('app:start-up')
+    }
+  } catch {}
 
   // Set app menu
   if (process.platform === 'darwin') {
@@ -804,6 +922,8 @@ ipcMain.handle('file:openDirectory', async () => {
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
       // Start watcher
       startVaultWatcher(normalizedDirPath)
+      // Kick off a background full recursive index (worker)
+      startIndexingWorker(normalizedDirPath)
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
@@ -817,13 +937,13 @@ ipcMain.handle('file:openDirectory', async () => {
       
       console.log('🔍 Processing:', entry.name, 'Type:', entry.isDirectory() ? 'directory' : 'file')
       
-      // Skip hidden files and non-markdown files (except directories)
+      // Skip hidden files and non-indexable files (except directories)
       if (entry.name.startsWith('.')) {
         console.log('⏭️ Skipping hidden file:', entry.name)
         continue
       }
-      if (entry.isFile() && !entry.name.endsWith('.md')) {
-        console.log('⏭️ Skipping non-markdown file:', entry.name)
+      if (entry.isFile() && !isIndexableFile(entry.name)) {
+        console.log('⏭️ Skipping non-indexable file:', entry.name)
         continue
       }
       
@@ -839,7 +959,7 @@ ipcMain.handle('file:openDirectory', async () => {
       }
       
       // ✅ SMART INCREMENTAL RAG PROCESSING - Only process new/changed files
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile() && isIndexableFile(entry.name)) {
         try {
           const needsProcessing = database.needsProcessing(fullPath, stats.mtime)
           
@@ -879,6 +999,8 @@ ipcMain.handle('file:openDirectory', async () => {
     console.log(`📊 [Database Stats] Files: ${stats.fileCount}, Chunks: ${stats.chunkCount}, FTS Index: ${stats.indexSize}`)
     
     console.log('📤 Returning files count:', files.length)
+    // Trigger background embeddings build after indexing pass
+    try { scheduleEmbeddingsBuild('readDirectory') } catch {}
     return files
   } catch (error) {
     console.error('Error reading directory:', error)
@@ -899,7 +1021,7 @@ async function processDirectoryRecursively(dirPath: string): Promise<void> {
       
       const fullPath = join(dirPath, entry.name)
       
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile() && isIndexableFile(entry.name)) {
         try {
           console.log('📖 [Recursive] Reading content for RAG processing:', entry.name, 'in', dirPath)
           const content = await readFile(fullPath, 'utf-8')
@@ -1048,26 +1170,63 @@ ipcMain.handle('db:reindexAll', async () => {
   try {
     await database.ensureReady()
     console.log('🔄 [IPC] Starting reindex of all files...')
-    
-    // Get the current selected directory
     const selectedDirectory = database.getSetting('selectedDirectory')
-    if (!selectedDirectory) {
-      throw new Error('No directory selected for reindexing')
-    }
-    
-    // Clear existing content first
+    if (!selectedDirectory) throw new Error('No directory selected for reindexing')
     database.clearAllContent()
     console.log('🗑️ [IPC] Cleared existing content')
-    
-    // Recursively reindex all markdown files in the directory
-    await processDirectoryRecursively(selectedDirectory)
-    
+    // Use worker for indexing
+    startIndexingWorker(selectedDirectory)
     const stats = database.getStats()
-    console.log('✅ [IPC] Reindexing completed:', stats)
+    console.log('✅ [IPC] Reindexing triggered via worker:', stats)
     return stats
   } catch (error) {
     console.error('❌ [IPC] Error reindexing all files:', error)
     throw error
+  }
+})
+
+// DB backup
+ipcMain.handle('db:backup', async () => {
+  try {
+    await database.ensureReady()
+    const src = database.getDatabaseFilePath()
+    const dst = join(app.getPath('userData'), `isla-backup-${Date.now()}.db`)
+    const { copyFile } = await import('fs/promises')
+    await copyFile(src, dst)
+    return { success: true, path: dst }
+  } catch (e) {
+    console.error('❌ [IPC] Backup failed:', e)
+    return { success: false, error: String(e?.message || e) }
+  }
+})
+
+// DB restore
+ipcMain.handle('db:restore', async (_, backupPath: string) => {
+  try {
+    await database.ensureReady()
+    const dst = database.getDatabaseFilePath()
+    const { copyFile } = await import('fs/promises')
+    database.close()
+    await copyFile(backupPath, dst)
+    await database.initialize()
+    return { success: true }
+  } catch (e) {
+    console.error('❌ [IPC] Restore failed:', e)
+    return { success: false, error: String(e?.message || e) }
+  }
+})
+
+// Health check
+ipcMain.handle('system:health', async () => {
+  try {
+    const llama = LlamaService.getInstance()
+    const model = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+    const dbReady = true
+    const llmReady = !!llama.getCurrentModel()
+    const indexStats = database.getStats()
+    return { dbReady, llmReady, embeddingsModel: model || null, indexStats }
+  } catch (e) {
+    return { dbReady: false, llmReady: false, embeddingsModel: null, indexStats: { fileCount: 0, chunkCount: 0, indexSize: 0 } }
   }
 })
 
@@ -1093,8 +1252,8 @@ ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel()
-    if (!model) throw new Error('No model selected for embeddings')
+    const model = modelName || database.getSetting('embeddingsModel') || llama.getCurrentModel()
+    if (!model) throw new Error('No embeddings model selected')
 
     // Process in small batches to avoid blocking too much
     let totalEmbedded = 0
@@ -1120,7 +1279,7 @@ ipcMain.handle('embeddings:stats', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel() || 'unknown'
+    const model = modelName || database.getSetting('embeddingsModel') || llama.getCurrentModel() || 'unknown'
     const stats = (database as any).getEmbeddingsStats?.(model) || { embeddedCount: 0, chunkCount: 0 }
     return { model, ...stats }
   } catch (error) {
@@ -1402,6 +1561,16 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
     // If root directory changed via settings, (re)start watcher
     if (key === 'selectedDirectory' && typeof value === 'string' && value) {
       startVaultWatcher(value)
+    }
+    // If embeddingsModel changed, ensure available and rebuild
+    if (key === 'embeddingsModel' && typeof value === 'string' && value) {
+      try {
+        const llama = LlamaService.getInstance()
+        await llama.ensureEmbeddingsModelAvailable(value, (p, s)=>{ try{ mainWindow?.webContents.send('embeddings:downloadProgress', { model: value, progress: p, status: s }) } catch{} })
+      } catch (e) {
+        console.warn('⚠️ [IPC] Could not ensure embeddings model availability:', e)
+      }
+      scheduleEmbeddingsBuild('settings:embeddingsModelChanged')
     }
     return true
   } catch (error) {
