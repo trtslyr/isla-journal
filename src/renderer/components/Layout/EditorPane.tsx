@@ -57,6 +57,24 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, showPreview, 
               <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
               <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
               <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
+              <button
+                className="search-btn"
+                title="Insert last AI answer at cursor"
+                onClick={async ()=>{
+                  try {
+                    const active = await window.electronAPI?.chatGetActive?.()
+                    if (!active) return
+                    const msgs = await window.electronAPI?.chatGetMessages?.(active.id)
+                    if (!msgs || !msgs.length) return
+                    const lastAssistant = [...msgs].reverse().find((m:any)=>m.role==='assistant')
+                    if (!lastAssistant) return
+                    // Use wrapSelection with empty prefix to replace selection; otherwise insert as code block for safety
+                    editorApiRef.current?.wrapSelection('', lastAssistant.content)
+                  } catch (e) {
+                    console.error('Insert AI answer failed:', e)
+                  }
+                }}
+              >⇥ AI</button>
             </div>
             <div style={{flex:1}}>
               <MonacoEditor
