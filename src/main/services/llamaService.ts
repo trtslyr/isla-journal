@@ -328,4 +328,18 @@ export class LlamaService {
   public async getRecommendedModelInfo(): Promise<ModelRecommendation> {
     return await this.deviceService.getRecommendedModel()
   }
+
+  public async embedText(text: string, model: string = 'nomic-embed-text'): Promise<{ vector: number[]; dim: number; model: string }>{
+    // Use Ollama embeddings endpoint via low-level request on the same host
+    // ollama-js SDK provides embeddings API as of recent versions
+    try {
+      // @ts-ignore - types may lag
+      const result = await (this.ollama as any).embeddings({ model, prompt: text })
+      const vector: number[] = result?.embedding || result?.data?.[0]?.embedding || []
+      return { vector, dim: vector.length, model }
+    } catch (e) {
+      console.error('❌ [LlamaService] Embedding failed:', e)
+      return { vector: [], dim: 0, model }
+    }
+  }
 } 

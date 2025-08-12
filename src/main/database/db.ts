@@ -426,6 +426,18 @@ class IslaDatabase {
       )
     `)
 
+    // Embeddings table for hybrid retrieval
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS embeddings (
+        chunk_id INTEGER PRIMARY KEY,
+        vector TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+      )
+    `)
+
     // Create FTS5 virtual table for chunk text with external content table linkage
     try {
       this.db.exec(`
@@ -506,6 +518,7 @@ class IslaDatabase {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_files_path ON files (path);
       CREATE INDEX IF NOT EXISTS idx_files_modified ON files (modified_at);
+      CREATE INDEX IF NOT EXISTS idx_embeddings_file_id ON embeddings (chunk_id);
       CREATE INDEX IF NOT EXISTS idx_files_note_date ON files (note_date);
       CREATE INDEX IF NOT EXISTS idx_search_word ON search_index (word);
       CREATE INDEX IF NOT EXISTS idx_search_file ON search_index (file_id);
@@ -574,6 +587,8 @@ class IslaDatabase {
 
     // Clear existing chunks for this file
     this.db.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
+    // Also clear embeddings for chunks of this file (will be regenerated lazily)
+    this.db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM content_chunks WHERE file_id = ?)').run(fileId)
 
     // Split content into chunks (500 chars with 100 char overlap)
     const chunks = this.chunkContent(content)
@@ -958,6 +973,70 @@ class IslaDatabase {
       console.error('❌ [Database] Error getting stats:', error)
       return { fileCount: 0, chunkCount: 0, indexSize: 0 }
     }
+  }
+
+  // ========================
+  // EMBEDDINGS
+  // ========================
+
+  public listChunksNeedingEmbeddings(limit: number = 100): Array<{ id: number; file_id: number; chunk_text: string; file_name: string; file_path: string }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const stmt = this.db.prepare(`
+      SELECT c.id, c.file_id, c.chunk_text, f.name as file_name, f.path as file_path
+      FROM content_chunks c
+      JOIN files f ON c.file_id = f.id
+      LEFT JOIN embeddings e ON e.chunk_id = c.id
+      WHERE e.chunk_id IS NULL
+      ORDER BY c.id ASC
+      LIMIT ?
+    `)
+    return stmt.all(limit) as any
+  }
+
+  public upsertEmbedding(chunkId: number, vector: number[], dim: number, model: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+    const stmt = this.db.prepare(`
+      INSERT INTO embeddings (chunk_id, vector, dim, model, created_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(chunk_id) DO UPDATE SET vector=excluded.vector, dim=excluded.dim, model=excluded.model, created_at=CURRENT_TIMESTAMP
+    `)
+    stmt.run(chunkId, JSON.stringify(vector), dim, model)
+  }
+
+  public getEmbeddingStats(): { total: number } {
+    if (!this.db) throw new Error('Database not initialized')
+    const row = this.db.prepare('SELECT COUNT(*) as total FROM embeddings').get() as { total: number }
+    return { total: row.total }
+  }
+
+  public topByEmbeddingSimilarity(queryVector: number[], limit: number = 20): Array<{ file_id: number; file_path: string; file_name: string; content_snippet: string; sim: number }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const rows = this.db.prepare(`
+      SELECT e.chunk_id, e.vector, c.file_id, c.chunk_text, f.name as file_name, f.path as file_path
+      FROM embeddings e
+      JOIN content_chunks c ON e.chunk_id = c.id
+      JOIN files f ON c.file_id = f.id
+    `).all() as Array<{ chunk_id: number; vector: string; file_id: number; chunk_text: string; file_name: string; file_path: string }>
+
+    const q = queryVector
+    const qLen = Math.sqrt(q.reduce((s, v) => s + v*v, 0)) || 1
+    const scored = rows.map(r => {
+      let v: number[] = []
+      try { v = JSON.parse(r.vector) } catch {}
+      const vLen = Math.sqrt(v.reduce((s, x) => s + x*x, 0)) || 1
+      const dot = Math.min(q.length, v.length) ? q.slice(0, Math.min(q.length, v.length)).reduce((s, x, i) => s + x * (v[i] || 0), 0) : 0
+      const sim = dot / (qLen * vLen)
+      return {
+        file_id: r.file_id,
+        file_path: r.file_path,
+        file_name: r.file_name,
+        content_snippet: r.chunk_text.slice(0, 200),
+        sim
+      }
+    })
+
+    scored.sort((a, b) => b.sim - a.sim)
+    return scored.slice(0, limit)
   }
 
   /**

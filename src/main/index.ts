@@ -1016,6 +1016,38 @@ ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, conte
   }
 })
 
+// Embeddings IPC (Phase 3 groundwork)
+ipcMain.handle('embeddings:listPending', async (_, limit: number = 100) => {
+  try {
+    await database.ensureReady()
+    return (database as any).listChunksNeedingEmbeddings ? (database as any).listChunksNeedingEmbeddings(limit) : []
+  } catch (error) {
+    console.error('❌ [IPC] Error listing pending embeddings:', error)
+    return []
+  }
+})
+
+ipcMain.handle('embeddings:upsert', async (_, chunkId: number, vector: number[], dim: number, model: string) => {
+  try {
+    await database.ensureReady()
+    if ((database as any).upsertEmbedding) (database as any).upsertEmbedding(chunkId, vector, dim, model)
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error upserting embedding:', error)
+    return false
+  }
+})
+
+ipcMain.handle('embeddings:getStats', async () => {
+  try {
+    await database.ensureReady()
+    return (database as any).getEmbeddingStats ? (database as any).getEmbeddingStats() : { total: 0 }
+  } catch (error) {
+    console.error('❌ [IPC] Error getting embedding stats:', error)
+    return { total: 0 }
+  }
+})
+
 ipcMain.handle('llm:getStatus', async () => {
   try {
     const llamaService = LlamaService.getInstance()
