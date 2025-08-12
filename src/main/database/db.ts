@@ -507,6 +507,19 @@ class IslaDatabase {
       console.warn('⚠️ [Database] Failed to ensure chunk_hash on content_chunks:', e)
     }
 
+    // Add heading_path, section_title, token_count to content_chunks if missing
+    try {
+      const chunkCols2: Array<{name: string}> = this.db.prepare("PRAGMA table_info(content_chunks)").all() as any
+      const hasHeadingPath = chunkCols2.some(c => c.name === 'heading_path')
+      const hasSectionTitle = chunkCols2.some(c => c.name === 'section_title')
+      const hasTokenCount = chunkCols2.some(c => c.name === 'token_count')
+      if (!hasHeadingPath) this.db.exec("ALTER TABLE content_chunks ADD COLUMN heading_path TEXT")
+      if (!hasSectionTitle) this.db.exec("ALTER TABLE content_chunks ADD COLUMN section_title TEXT")
+      if (!hasTokenCount) this.db.exec("ALTER TABLE content_chunks ADD COLUMN token_count INTEGER")
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to add heading metadata on content_chunks:', e)
+    }
+
     // Indexes for new columns
     try {
       this.db.exec(`
@@ -636,7 +649,6 @@ class IslaDatabase {
     if (!this.db) throw new Error('Database not initialized')
 
     const chunks = this.chunkContent(content)
-    const newChunks = chunks.map((t, idx) => ({ text: t, index: idx, hash: this.computeChunkHash(t) }))
 
     // Load existing chunks for file
     const existingRows = this.db.prepare('SELECT id, chunk_hash, chunk_index FROM content_chunks WHERE file_id = ?').all(fileId) as Array<{ id:number, chunk_hash:string|null, chunk_index:number }>
@@ -649,10 +661,10 @@ class IslaDatabase {
       hashToIds.set(row.chunk_hash, arr)
     }
 
-    const toInsert: Array<{ text:string, index:number, hash:string }> = []
-    const keep: Array<{ id:number, index:number, hash:string }> = []
+    const toInsert: typeof chunks = []
+    const keep: Array<{ id:number; index:number; hash:string }> = []
 
-    for (const nc of newChunks) {
+    for (const nc of chunks) {
       const pool = hashToIds.get(nc.hash)
       if (pool && pool.length) {
         const id = pool.shift()!
@@ -669,7 +681,7 @@ class IslaDatabase {
     }
 
     const updateIndexStmt = this.db.prepare('UPDATE content_chunks SET chunk_index = ? WHERE id = ?')
-    const insertChunkStmt = this.db.prepare('INSERT INTO content_chunks (file_id, chunk_text, chunk_index, chunk_hash) VALUES (?, ?, ?, ?)')
+    const insertChunkStmt = this.db.prepare('INSERT INTO content_chunks (file_id, chunk_text, chunk_index, chunk_hash, heading_path, section_title, token_count) VALUES (?, ?, ?, ?, ?, ?, ?)')
     const deleteChunkStmt = this.db.prepare('DELETE FROM content_chunks WHERE id = ?')
 
     const insertFts = this.ftsReady ? this.db.prepare('INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)') : null
@@ -683,7 +695,7 @@ class IslaDatabase {
       }
       // Insert new
       for (const ins of toInsert) {
-        const res = insertChunkStmt.run(fileId, ins.text, ins.index, ins.hash)
+        const res = insertChunkStmt.run(fileId, ins.text, ins.index, ins.hash, ins.headingPath, ins.sectionTitle, ins.tokenCount)
         const newId = Number(res.lastInsertRowid)
         if (insertFts) insertFts.run(newId, ins.text, fileId)
       }
@@ -695,28 +707,161 @@ class IslaDatabase {
 
     tx()
 
-    console.log(`📝 [Database] Indexed ${newChunks.length} chunks for ${fileName} (inserted ${toInsert.length}, removed ${toDeleteIds.length}, kept ${keep.length})`)
+    console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName} (inserted ${toInsert.length}, removed ${toDeleteIds.length}, kept ${keep.length})`)
   }
 
   /**
-   * Split content into overlapping chunks
+   * Estimate tokens ~4 chars per token
    */
-  private chunkContent(content: string): string[] {
-    const chunkSize = 500
-    const overlap = 100
-    const chunks: string[] = []
-    
-    // Clean content
-    const cleanContent = content.replace(/\s+/g, ' ').trim()
-    
-    for (let i = 0; i < cleanContent.length; i += (chunkSize - overlap)) {
-      const chunk = cleanContent.slice(i, i + chunkSize)
-      if (chunk.trim().length > 50) { // Only add meaningful chunks
-        chunks.push(chunk.trim())
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.trim().length / 4)
+  }
+
+  /**
+   * Split markdown into structural units (paragraphs, code blocks) with heading breadcrumbs
+   */
+  private splitMarkdown(content: string): Array<{ text: string; headingPath: string; sectionTitle: string }> {
+    const lines = content.replace(/\r\n?/g, '\n').split('\n')
+    const headingLevels: string[] = []
+    const units: Array<{ text: string; headingPath: string; sectionTitle: string }> = []
+    let i = 0
+    let inCode = false
+    let codeFence = ''
+    let buffer: string[] = []
+    let sectionTitle = ''
+
+    const flushBuffer = () => {
+      if (buffer.length === 0) return
+      const text = buffer.join('\n').trim()
+      if (text) {
+        const headingPath = headingLevels.filter(Boolean).join(' > ')
+        units.push({ text, headingPath, sectionTitle })
+      }
+      buffer = []
+    }
+
+    while (i < lines.length) {
+      const line = lines[i]
+      const hMatch = !inCode && line.match(/^(#{1,6})\s+(.+?)\s*$/)
+      const fenceMatch = line.match(/^```(.*)$/)
+
+      if (fenceMatch) {
+        if (!inCode) {
+          // start code block
+          inCode = true
+          codeFence = fenceMatch[1] || ''
+          buffer.push(line)
+        } else {
+          // end code block
+          buffer.push(line)
+          inCode = false
+          flushBuffer()
+        }
+        i++
+        continue
+      }
+
+      if (hMatch && !inCode) {
+        // heading found
+        flushBuffer()
+        const level = hMatch[1].length
+        const title = hMatch[2].trim()
+        headingLevels.length = level
+        headingLevels[level - 1] = title
+        sectionTitle = title
+        i++
+        continue
+      }
+
+      if (!inCode && line.trim() === '') {
+        // paragraph break
+        flushBuffer()
+        i++
+        continue
+      }
+
+      buffer.push(line)
+      i++
+    }
+    flushBuffer()
+    return units
+  }
+
+  /**
+   * Break content into markdown-aware, token-based chunks (~450 tokens, 50 overlap)
+   */
+  private chunkContent(content: string): Array<{ text: string; index: number; hash: string; headingPath: string; sectionTitle: string; tokenCount: number }> {
+    const targetTokens = 450
+    const overlapTokens = 60
+    const units = this.splitMarkdown(content)
+    const chunks: Array<{ text: string; index: number; hash: string; headingPath: string; sectionTitle: string; tokenCount: number }> = []
+
+    let current: string[] = []
+    let currentTokens = 0
+    let currentHeading = ''
+    let currentSection = ''
+
+    const pushChunk = () => {
+      const text = current.join('\n').trim()
+      if (!text) return
+      const tokenCount = this.estimateTokens(text)
+      const headingPath = currentHeading
+      const sectionTitle = currentSection
+      chunks.push({ text, index: chunks.length, hash: this.computeChunkHash(text), headingPath, sectionTitle, tokenCount })
+    }
+
+    for (let uIndex = 0; uIndex < units.length; uIndex++) {
+      const u = units[uIndex]
+      const tTokens = this.estimateTokens(u.text)
+      if (currentTokens === 0) { currentHeading = u.headingPath; currentSection = u.sectionTitle }
+
+      if (currentTokens + tTokens > targetTokens && current.length > 0) {
+        pushChunk()
+        // overlap: keep last unit
+        const last = current.length ? current[current.length - 1] : ''
+        current = last ? [last] : []
+        currentTokens = last ? this.estimateTokens(last) : 0
+        currentHeading = u.headingPath
+        currentSection = u.sectionTitle
+      }
+      current.push(u.text)
+      currentTokens += tTokens
+
+      // proactively split very long single units
+      if (tTokens > targetTokens * 1.2) {
+        // split by sentences
+        const sentences = u.text.split(/(?<=[.!?])\s+/)
+        let buf: string[] = []
+        let bufT = 0
+        for (const s of sentences) {
+          const sT = this.estimateTokens(s)
+          if (bufT + sT > targetTokens) {
+            const part = buf.join(' ').trim()
+            if (part) {
+              chunks.push({ text: part, index: chunks.length, hash: this.computeChunkHash(part), headingPath: u.headingPath, sectionTitle: u.sectionTitle, tokenCount: this.estimateTokens(part) })
+            }
+            buf = [s]
+            bufT = sT
+          } else {
+            buf.push(s)
+            bufT += sT
+          }
+        }
+        const remain = buf.join(' ').trim()
+        if (remain) {
+          chunks.push({ text: remain, index: chunks.length, hash: this.computeChunkHash(remain), headingPath: u.headingPath, sectionTitle: u.sectionTitle, tokenCount: this.estimateTokens(remain) })
+        }
+        current = []
+        currentTokens = 0
       }
     }
-    
-    return chunks.length > 0 ? chunks : [cleanContent]
+
+    if (currentTokens > 0) pushChunk()
+
+    // enforce overlap by trimming if necessary
+    // (already handled when pushing)
+
+    return chunks
   }
 
   /**
