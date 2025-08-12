@@ -71,15 +71,21 @@ class ContentService {
 
     // Retrieval (FTS/Hybrid)
     const hasFTS = typeof (database as any).searchContentFTS === 'function'
-    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : (database as any).searchContent(query, 20, dateFilter)
     let results: any[] = ftsResults
     try {
       const llama = LlamaService.getInstance()
       const model = llama.getCurrentModel()
-      if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-        const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+      if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
+        let candidateIds = ftsResults.map(r => r.id).slice(0, 200)
+        // If no FTS results, fall back to scoring embeddings in small batches (optional)
+        if (candidateIds.length === 0 && typeof (database as any).getEmbeddingsForModel === 'function') {
+          const allEmbMeta = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+          candidateIds = allEmbMeta.slice(0, 500).map(e => e.chunk_id)
+        }
+        const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
         const qVec = (await llama.embedTexts([query], model))[0] || []
-        const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
+        const scored = embRows.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
         const topE = scored.slice(0, 30)
         const merged = new Map<number, any>()
@@ -166,18 +172,23 @@ class ContentService {
 
       // 2. Retrieval: FTS + embeddings hybrid if available
       const hasFTS = typeof (database as any).searchContentFTS === 'function'
-      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : (database as any).searchContent(query, 20, dateFilter)
 
       let hybridResults: any[] = ftsResults
       try {
         const llama = LlamaService.getInstance()
         const model = llama.getCurrentModel()
-        if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-          const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+        if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
+          let candidateIds = ftsResults.map(r => r.id).slice(0, 200)
+          if (candidateIds.length === 0 && typeof (database as any).getEmbeddingsForModel === 'function') {
+            const allEmbMeta = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+            candidateIds = allEmbMeta.slice(0, 500).map(e => e.chunk_id)
+          }
+          const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
           // Build query vector
           const qVec = (await llama.embedTexts([query], model))[0] || []
           // Score top-N embeddings
-          const scored = allEmb.map(e => ({
+          const scored = embRows.map(e => ({
             id: e.chunk_id,
             file_id: e.file_id,
             file_path: e.file_path,
@@ -204,7 +215,7 @@ class ContentService {
             const eScore = 0.6 * sim
             if (existing) {
               existing.sim = Math.max(existing.sim || 0, sim)
-              existing.score = Math.max(existing.score || 0, existing.score + eScore)
+              existing.score = (existing.score || 0) + eScore
               merged.set(e.id, existing)
             } else {
               merged.set(e.id, { ...e, rank: 0, ftsRank: 0, score: eScore })

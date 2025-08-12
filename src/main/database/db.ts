@@ -578,25 +578,29 @@ class IslaDatabase {
 
     const noteDate = this.deriveNoteDate(fileName, content)
 
-    const stmt = this.db.prepare(`
-      INSERT INTO files (path, name, content, modified_at, size, file_mtime, note_date)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        name=excluded.name,
-        content=excluded.content,
-        modified_at=CURRENT_TIMESTAMP,
-        size=excluded.size,
-        file_mtime=excluded.file_mtime,
-        note_date=COALESCE(excluded.note_date, files.note_date)
-    `)
-    const result = stmt.run(normalizedPath, fileName, content, content.length, fileMtimeIso, noteDate)
+    const tx = this.db.transaction(() => {
+      const stmt = this.db!.prepare(`
+        INSERT INTO files (path, name, content, modified_at, size, file_mtime, note_date)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+          name=excluded.name,
+          content=excluded.content,
+          modified_at=CURRENT_TIMESTAMP,
+          size=excluded.size,
+          file_mtime=excluded.file_mtime,
+          note_date=COALESCE(excluded.note_date, files.note_date)
+      `)
+      stmt.run(normalizedPath, fileName, content, content.length, fileMtimeIso, noteDate)
 
-    // Get file id (insert or existing)
-    const fileRecord = this.db.prepare('SELECT id FROM files WHERE path = ?').get(normalizedPath) as { id: number }
-    const fileId = fileRecord.id
+      // Get file id (insert or existing)
+      const fileRecord = this.db!.prepare('SELECT id FROM files WHERE path = ?').get(normalizedPath) as { id: number }
+      const fileId = fileRecord.id
 
-    // Update content chunks and FTS
-    this.updateContentChunks(fileId, normalizedPath, fileName, content)
+      // Update content chunks and FTS
+      this.updateContentChunks(fileId, normalizedPath, fileName, content)
+    })
+
+    tx()
 
     console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
   }
@@ -661,13 +665,13 @@ class IslaDatabase {
   /**
    * Search content using simple LIKE queries
    */
-  public searchContent(query: string, limit: number = 10): SearchResult[] {
+  public searchContent(query: string, limit: number = 10, dateRange: { start: Date; end: Date } | null = null): SearchResult[] {
     if (!this.db) throw new Error('Database not initialized')
 
     try {
       // Clean and split query into individual words
       const words = query.toLowerCase()
-        .replace(/['\"*?!@#$%^&()+={}[\\]|\\\\:\";'<>,.]/g, ' ')
+        .replace(/['\"*?!@#$%^&()+={}[]|\\:\";'<>,.]/g, ' ')
         .split(/\s+/)
         .filter(word => word.length > 2) // Only words longer than 2 chars
         .slice(0, 3) // Max 3 words to keep it simple
@@ -677,13 +681,16 @@ class IslaDatabase {
         return []
       }
 
-      console.log(`🔍 [Database] Search words: ${words.join(', ')}`)
-
-      // Simple approach: search for any word match
       const results: SearchResult[] = []
-      
+
+      const hasDate = !!dateRange
+      const noteStart = hasDate ? dateRange!.start.toISOString().slice(0,10) : undefined
+      const noteEnd   = hasDate ? dateRange!.end.toISOString().slice(0,10) : undefined
+      const mtimeStart = hasDate ? dateRange!.start.toISOString() : undefined
+      const mtimeEnd   = hasDate ? dateRange!.end.toISOString() : undefined
+
       for (const word of words) {
-        const stmt = this.db.prepare(`
+        const baseSql = `
           SELECT 
             c.id,
             c.file_id,
@@ -694,10 +701,16 @@ class IslaDatabase {
           FROM content_chunks c
           JOIN files f ON c.file_id = f.id
           WHERE LOWER(c.chunk_text) LIKE '%' || ? || '%'
-          LIMIT ?
-        `)
-        
-        const wordResults = stmt.all(word, Math.ceil(limit / words.length)) as SearchResult[]
+        `
+        const dateSql = hasDate ? ` AND ( (f.note_date BETWEEN ? AND ?) OR (f.file_mtime BETWEEN ? AND ?) )` : ''
+        const limSql = ` LIMIT ?`
+        const sql = baseSql + dateSql + limSql
+        const params = hasDate 
+          ? [word, noteStart, noteEnd, mtimeStart, mtimeEnd, Math.ceil(limit / words.length)]
+          : [word, Math.ceil(limit / words.length)]
+
+        const stmt = this.db!.prepare(sql)
+        const wordResults = stmt.all(...params) as SearchResult[]
         results.push(...wordResults)
       }
 
@@ -1279,12 +1292,12 @@ class IslaDatabase {
   public searchContentFTS(query: string, limit: number = 20, dateRange: { start: Date; end: Date } | null = null): SearchResult[] {
     if (!this.db) throw new Error('Database not initialized')
     if (!this.ftsReady) {
-      return this.searchContent(query, limit)
+      return this.searchContent(query, limit, dateRange)
     }
 
     try {
       // Basic FTS5 match string: quote the whole query for now
-      const match = query.replace(/['\"]+/g, ' ').trim()
+      const match = query.replace(/[\'\"]+/g, ' ').trim()
 
       const clauses: string[] = []
       const params: any[] = []
@@ -1293,10 +1306,12 @@ class IslaDatabase {
       params.push(match)
 
       if (dateRange) {
+        const noteStart = dateRange.start.toISOString().slice(0,10)
+        const noteEnd = dateRange.end.toISOString().slice(0,10)
+        const mtimeStart = dateRange.start.toISOString()
+        const mtimeEnd = dateRange.end.toISOString()
         clauses.push("(f.note_date BETWEEN ? AND ? OR f.file_mtime BETWEEN ? AND ?)")
-        const startIso = dateRange.start.toISOString()
-        const endIso = dateRange.end.toISOString()
-        params.push(startIso, endIso, startIso, endIso)
+        params.push(noteStart, noteEnd, mtimeStart, mtimeEnd)
       }
 
       const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
@@ -1317,7 +1332,7 @@ class IslaDatabase {
         LIMIT ?
       `
 
-      const rows = this.db.prepare(sql).all(...params, limit) as any[]
+      const rows = this.db!.prepare(sql).all(...params, limit) as any[]
       return rows.map(r => ({
         id: r.id,
         file_id: r.file_id,
@@ -1328,7 +1343,7 @@ class IslaDatabase {
       }))
     } catch (error) {
       console.error('⚠️ [Database] FTS search failed, falling back:', error)
-      return this.searchContent(query, limit)
+      return this.searchContent(query, limit, dateRange)
     }
   }
 
@@ -1402,6 +1417,29 @@ class IslaDatabase {
     } else {
       this.db.prepare('DELETE FROM embeddings').run()
     }
+  }
+
+  /** Load embeddings for specific chunk IDs and a model */
+  public getEmbeddingsForChunks(model: string, chunkIds: number[]): Array<{ chunk_id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; vector: number[] }> {
+    if (!this.db) throw new Error('Database not initialized')
+    if (!chunkIds || chunkIds.length === 0) return []
+    const placeholders = chunkIds.map(() => '?').join(',')
+    const sql = `
+      SELECT e.chunk_id, c.file_id, f.path as file_path, f.name as file_name, c.chunk_text, e.vector
+      FROM embeddings e
+      JOIN content_chunks c ON c.id = e.chunk_id
+      JOIN files f ON f.id = c.file_id
+      WHERE e.model = ? AND e.chunk_id IN (${placeholders})
+    `
+    const rows = this.db.prepare(sql).all(model, ...chunkIds) as any[]
+    return rows.map(r => ({
+      chunk_id: r.chunk_id,
+      file_id: r.file_id,
+      file_path: r.file_path,
+      file_name: r.file_name,
+      chunk_text: r.chunk_text,
+      vector: (() => { try { return JSON.parse(r.vector) } catch { return [] } })()
+    }))
   }
 }
 

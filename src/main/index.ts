@@ -163,10 +163,12 @@ function startVaultWatcher(rootDir: string) {
       if (!lower.endsWith('.md')) return true
       return false
     }
-    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    // Index existing files as they are discovered
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
     const onAddOrChange = async (filePath: string) => {
       try {
         if (!filePath.toLowerCase().endsWith('.md')) return
+        await database.ensureReady()
         const content = await readFile(filePath, 'utf-8')
         const name = path.basename(filePath)
         database.saveFile(filePath, name, content)
@@ -177,6 +179,7 @@ function startVaultWatcher(rootDir: string) {
     const onUnlink = async (filePath: string) => {
       try {
         if (!filePath.toLowerCase().endsWith('.md')) return
+        await database.ensureReady()
         database.deleteFileByPath(filePath)
       } catch (e) {
         console.error('Watcher unlink failed:', e)
@@ -762,6 +765,13 @@ ipcMain.handle('file:openDirectory', async () => {
     // Check if this is a root directory switch (not just subdirectory expansion)
     let shouldClearDatabase = false
     let isRootDirectoryChange = false
+
+    // helper to determine subpath
+    const isSubpath = (root: string, candidate: string) => {
+      const rel = path.relative(root, candidate)
+      return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+    }
+
     try {
       const currentSavedDirectory = await database.getSetting('selectedDirectory')
       
@@ -769,17 +779,14 @@ ipcMain.handle('file:openDirectory', async () => {
         // First time - this is a root directory selection
         console.log('📁 [First Time] No previous directory found, setting root directory')
         isRootDirectoryChange = true
-      } else if (currentSavedDirectory !== dirPath && !path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
-        // This is a genuine root directory change (not a subdirectory)
-        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', dirPath)
+      } else if (normalizedDirPath === currentSavedDirectory || isSubpath(currentSavedDirectory, normalizedDirPath)) {
+        // Same root or a subdirectory inside current root - do nothing special
+        console.log(isSubpath(currentSavedDirectory, normalizedDirPath) ? '📂 [Subdirectory Expansion]:' : '🔄 [Directory Refresh]:', normalizedDirPath)
+      } else {
+        // This is a genuine root directory change
+        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', normalizedDirPath)
         shouldClearDatabase = true
         isRootDirectoryChange = true
-      } else if (!path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
-        // This is just subdirectory expansion - don't change root directory or clear database
-        console.log('📂 [Subdirectory Expansion]:', dirPath)
-      } else if (currentSavedDirectory === dirPath) {
-        // Same directory - might be a refresh
-        console.log('🔄 [Directory Refresh]:', dirPath)
       }
     } catch (error) {
       console.log('📁 [First Time] No previous directory found, proceeding with indexing')
@@ -804,6 +811,12 @@ ipcMain.handle('file:openDirectory', async () => {
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
       // Start watcher
       startVaultWatcher(normalizedDirPath)
+      // Kick off an initial recursive index so content exists immediately
+      try {
+        await processDirectoryRecursively(normalizedDirPath)
+      } catch (e) {
+        console.error('⚠️ [Directory Switch] Initial recursive indexing failed:', e)
+      }
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }

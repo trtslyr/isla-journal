@@ -171,6 +171,8 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   useEffect(() => {
     if (rootPath) {
       loadDirectory(rootPath)
+      // Ensure root is expanded by default
+      setExpandedFolders(new Set([rootPath]))
     } else {
       setFiles([])
     }
@@ -835,21 +837,50 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             {/* Pinned section - only show when not searching */}
             {renderPinnedItems()}
             
-            {/* Files list */}
-            {loading ? (
-              <div className="file-tree-loading">
-                <p>Loading directory...</p>
-              </div>
-            ) : files.length === 0 ? (
-              <div className="file-tree-empty">
-                <p>No markdown files found</p>
-                <small>Add some .md files to this directory</small>
-              </div>
-            ) : (
-              <div className="file-tree-content">
-                {renderTreeItems(files)}
-              </div>
-            )}
+            {/* Root directory node and children */}
+            <div className="file-tree-content">
+              {rootPath && (
+                <>
+                  <div
+                    className={`tree-item directory ${expandedFolders.has(rootPath) ? 'expanded' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      // Create a pseudo item for root to toggle
+                      const rootItem: FileItem = {
+                        name: rootPath.split('/').pop() || rootPath,
+                        path: rootPath,
+                        type: 'directory',
+                        modified: new Date().toISOString(),
+                        size: 0,
+                        children: files,
+                        expanded: expandedFolders.has(rootPath)
+                      }
+                      toggleFolder(rootItem)
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setContextMenuPosition({ x: e.clientX, y: e.clientY })
+                      setShowContextMenu(rootPath)
+                    }}
+                    style={{ paddingLeft: `${12}px` }}
+                    title={rootPath}
+                  >
+                    <span className="tree-icon">{expandedFolders.has(rootPath) ? '▼' : '▶'}</span>
+                    <span className="tree-name">{rootPath.split('/').pop() || rootPath}</span>
+                  </div>
+                  {/* Render children when root expanded, else collapsed view */}
+                  {expandedFolders.has(rootPath) ? (
+                    <div className="tree-children">
+                      {renderTreeItems(files, 1)}
+                    </div>
+                  ) : (
+                    <div className="tree-children">
+                      {renderTreeItems(files, 1)}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </>
         )}
       </div>
