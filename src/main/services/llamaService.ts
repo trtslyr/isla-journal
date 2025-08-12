@@ -1,6 +1,9 @@
 import { Ollama } from 'ollama'
 import { BrowserWindow } from 'electron'
 import { DeviceDetectionService, ModelRecommendation } from './deviceDetection'
+import { Worker } from 'worker_threads'
+import path from 'path'
+import { v4 as uuidv4 } from 'uuid'
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -22,7 +25,8 @@ export class LlamaService {
   private currentModel: string | null = null
   private isInitialized = false
   private mainWindow: BrowserWindow | null = null
-  private embeddingModel: string = 'nomic-embed-text'
+  private embedWorker: Worker | null = null
+  private pendingEmbeds: Map<string, { resolve: (v:number[][])=>void; reject: (e:any)=>void }> = new Map()
 
   public static getInstance(): LlamaService {
     if (!LlamaService.instance) {
@@ -155,11 +159,6 @@ export class LlamaService {
       
       this.isInitialized = true
       this.safeLog('✅ [LlamaService] Initialization completed')
-      
-      // Best effort: ensure embedding model is available in background
-      try {
-        await this.ensureModelAvailable(this.embeddingModel)
-      } catch {}
       
     } catch (error) {
       this.safeLog(`❌ [LlamaService] Initialization failed: ${error}`, 'error')
@@ -314,10 +313,6 @@ export class LlamaService {
     return this.currentModel
   }
 
-  public getEmbeddingModel(): string {
-    return this.embeddingModel
-  }
-
   public async switchModel(modelName: string): Promise<void> {
     console.log(`🔄 [LlamaService] Switching to model: ${modelName}`)
     
@@ -339,16 +334,20 @@ export class LlamaService {
     return await this.deviceService.getRecommendedModel()
   }
 
+  // Ensure an embeddings model is downloaded and ready (separate from chat model)
+  public async ensureEmbeddingsModelAvailable(modelName: string, onProgress?: (progress: number, status: string) => void): Promise<void> {
+    // Reuse ensureModelAvailable since pulling is identical via Ollama
+    await this.ensureModelAvailable(modelName, onProgress)
+  }
+
   public async embedTexts(texts: string[], modelOverride?: string): Promise<number[][]> {
     if (!this.isInitialized) {
       throw new Error('LlamaService not initialized')
     }
-    const model = modelOverride || this.embeddingModel
+    const model = modelOverride || this.currentModel
     if (!model) throw new Error('No model available for embeddings')
 
     try {
-      // Ensure embedding model is available
-      await this.ensureModelAvailable(model)
       // Ollama embeddings endpoint supports single text per call; do sequential to avoid overload
       const vectors: number[][] = []
       for (const t of texts) {

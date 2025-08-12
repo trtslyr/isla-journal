@@ -23,6 +23,10 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange }) =
     insertLink: () => void
     insertList: (t: 'bullet'|'number'|'check') => void
     insertCodeBlock: () => void
+    insertHeading?: (level: 1|2|3|4|5|6) => void
+    insertQuote?: () => void
+    insertHorizontalRule?: () => void
+    toggleInlineCode?: () => void
   } | null>(null)
 
   if (!activeTab) {
@@ -30,27 +34,37 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange }) =
   }
 
   return (
-    <div className="panel editor-panel">
+    <div className="panel editor-panel" style={{ height: '100%', flex: 1 }}>
       <div className="panel-header">
-        <div className="tab-bar" />
+        <div className="tab-bar" style={{ gap: 8, padding: 4 }}>
+          <button className="search-btn" title="Heading 1" onClick={()=>editorApiRef.current?.insertHeading?.(1)}>H1</button>
+          <button className="search-btn" title="Heading 2" onClick={()=>editorApiRef.current?.insertHeading?.(2)}>H2</button>
+          <button className="search-btn" title="Heading 3" onClick={()=>editorApiRef.current?.insertHeading?.(3)}>H3</button>
+          <span style={{ width: 8 }} />
+          <button className="search-btn" title="Bold (Ctrl/Cmd+B)" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
+          <button className="search-btn" title="Italic (Ctrl/Cmd+I)" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
+          <button className="search-btn" title="Inline code" onClick={()=>editorApiRef.current?.toggleInlineCode?.()}>`</button>
+          <span style={{ width: 8 }} />
+          <button className="search-btn" title="Link" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
+          <button className="search-btn" title="Bulleted list" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
+          <button className="search-btn" title="Numbered list" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
+          <button className="search-btn" title="Task list" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
+          <span style={{ width: 8 }} />
+          <button className="search-btn" title="Block quote" onClick={()=>editorApiRef.current?.insertQuote?.()}>❝</button>
+          <button className="search-btn" title="Code block" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
+          <button className="search-btn" title="Horizontal rule" onClick={()=>editorApiRef.current?.insertHorizontalRule?.()}>―</button>
+        </div>
       </div>
       <div className="panel-content">
         <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
-          <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid var(--border-color)'}}>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
-            <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
-          </div>
           <div style={{flex:1}}>
             <MonacoEditor
               value={activeTab.content}
               onChange={onChange}
               language="markdown"
               theme={theme}
+              path={activeTab.path || activeTab.id}
+              key={activeTab.path || activeTab.id}
               onReady={(api)=>{editorApiRef.current=api}}
             />
           </div>

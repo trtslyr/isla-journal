@@ -9,9 +9,10 @@ interface SidebarProps {
   onOpenDirectory: () => void
   onFileSelect: (filePath: string, fileName: string) => void
   selectedFilePath: string | null
+  onToggleCollapse: () => void
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ rootDirectory, width, collapsed, onResizeStart, onOpenDirectory, onFileSelect, selectedFilePath }) => {
+const Sidebar: React.FC<SidebarProps> = ({ rootDirectory, width, collapsed, onResizeStart, onOpenDirectory, onFileSelect, selectedFilePath, onToggleCollapse }) => {
   return (
     <div 
       className={`panel file-tree-panel ${collapsed ? 'collapsed' : ''}`}

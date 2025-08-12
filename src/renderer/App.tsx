@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { MonacoEditor } from './components/Editor'
+import { MonacoEditor, MarkdownPreview } from './components/Editor'
 import EditorPane from './components/Layout/EditorPane'
 import Sidebar from './components/Layout/Sidebar'
 import { FileTree } from './components/FileTree'
@@ -7,6 +7,7 @@ import { FileTree } from './components/FileTree'
 import Settings from './components/Settings'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
+
 
 interface ChatMessage {
   id: string
@@ -60,6 +61,8 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState('')
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [showChatDropdown, setShowChatDropdown] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [currentModelName, setCurrentModelName] = useState<string | null>(null)
   
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false)
@@ -70,7 +73,6 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
-  // Preview removed; editor always in Markdown mode
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -138,7 +140,15 @@ const App: React.FC = () => {
     return () => { if (unsubscribe) unsubscribe() }
   }, [])
 
-  // Preview toggle removed
+  // Keyboard shortcut: toggle preview Ctrl/Cmd+Shift+V
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
+      // reserved for future shortcuts
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Get current active tab
   const activeTab = tabs.find(tab => tab.id === activeTabId)
@@ -207,7 +217,7 @@ const App: React.FC = () => {
         }
       })
     })
-    const offDone = window.electronAPI.onContentStreamDone?.(({ answer, sources }) => {
+    const offDone = window.electronAPI.onContentStreamDone?.(async ({ answer, sources }) => {
       setChatMessages(prev => {
         const last = prev[prev.length-1]
         if (last && last.role === 'assistant') {
@@ -217,6 +227,21 @@ const App: React.FC = () => {
         return prev
       })
       setIsAiThinking(false)
+      // Refresh from DB to ensure persistence reflected in UI (optional but safe)
+      try {
+        if (activeChat?.id) {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        }
+      } catch (e) {
+        console.error('❌ [App] Failed to refresh messages after stream:', e)
+      }
     })
 
     return () => {
@@ -311,6 +336,10 @@ const App: React.FC = () => {
         // Get app info
         const versionInfo = await window.electronAPI.getVersion()
         setVersion(versionInfo)
+        try {
+          const plat = await window.electronAPI.getPlatform()
+          setPlatform(plat)
+        } catch {}
 
         // Load saved directory from settings
         try {
@@ -331,6 +360,16 @@ const App: React.FC = () => {
         const chats = await window.electronAPI.chatGetAll()
         setAllChats(chats)
 
+        // Load LLM models and current model
+        try {
+          const models = await window.electronAPI.llmGetAvailableModels?.()
+          if (Array.isArray(models)) setAvailableModels(models)
+          const cm = await window.electronAPI.llmGetCurrentModel?.()
+          setCurrentModelName(cm || null)
+        } catch (e) {
+          console.warn('LLM model info load failed:', e)
+        }
+
         // Load active chat and its messages (if any exist)
         const activeChat = await window.electronAPI.chatGetActive()
         if (activeChat) {
@@ -340,7 +379,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         }
         // No automatic chat creation - user can create chats when needed
@@ -488,6 +528,17 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
+        // Refresh to ensure persistence reflected
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        } catch {}
       }
 
     } catch (error) {
@@ -509,7 +560,16 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
-        
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+          })))
+        } catch {}
       } catch (fallbackError) {
         console.error('❌ [App] Even fallback LLM failed:', fallbackError)
         alert('Failed to get AI response. Please check your connection and try again.')
@@ -580,7 +640,8 @@ const App: React.FC = () => {
           id: msg.id.toString(),
           content: msg.content,
           role: msg.role as 'user' | 'assistant',
-          timestamp: new Date(msg.created_at)
+          timestamp: new Date(msg.created_at),
+          sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
         })))
         console.log('📚 [App] Loaded', messages.length, 'messages for chat')
       } else {
@@ -760,12 +821,17 @@ const App: React.FC = () => {
           selectedFilePath={activeTab?.path || null}
         />
  
-        {/* Center Panel - Editor (Markdown only) */}
-        <EditorPane
-          activeTab={activeTab || null}
-          theme={currentTheme}
-          onChange={handleEditorChange}
-        />
+        {/* Center Panel - Editor */}
+        <div style={{ display:'flex', flex:1, flexDirection:'column', minWidth:0 }}>
+          <EditorPane
+            activeTab={activeTab || null}
+            theme={currentTheme}
+            onChange={handleEditorChange}
+            leftPanelWidth={leftPanelCollapsed ? 40 : leftPanelWidth}
+            rightPanelWidth={rightPanelCollapsed ? 40 : rightPanelWidth}
+          />
+
+        </div>
 
         {/* Right Panel - AI Chat */}
         <div 
@@ -782,11 +848,7 @@ const App: React.FC = () => {
               document.body.style.userSelect = 'none'
             }}
           />
-          <div className="panel-header">
-            <div className="chat-title">
-              <span>AI Journal Assistant</span>
-            </div>
-          </div>
+
           
           {!rightPanelCollapsed && (
             <div className="panel-content">
@@ -883,38 +945,53 @@ const App: React.FC = () => {
                           <span className="message-icon">
                             {message.role === 'user' ? '>' : '<'}
                           </span>
-                          <span className="message-text">{message.content}</span>
+                          <span className="message-text">
+                            {message.role === 'assistant' ? (
+                              <MarkdownPreview markdown={message.content} />
+                            ) : (
+                              message.content
+                            )}
+                          </span>
                         </div>
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
-                          <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>
-                            {message.sources.slice(0,8).map((src, idx) => (
-                              <button
-                                key={idx}
-                                className="search-btn"
-                                title={src.snippet}
-                                onClick={async ()=>{
-                                  try {
-                                    const content = await window.electronAPI.readFile(src.file_path)
-                                    const cleanFileName = src.file_name
-                                    if (activeTab) {
-                                      setTabs(prev => prev.map(tab => 
-                                        tab.id === activeTab.id 
-                                          ? { ...tab, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges: false }
-                                          : tab
-                                      ))
-                                    } else {
-                                      const newTab = { id: `file-${Date.now()}`, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges:false }
-                                      setTabs(prev => [...prev, newTab as any])
-                                      setActiveTabId((newTab as any).id)
+                          <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:8, padding:'8px 0', borderTop:'1px solid var(--border-light)' }}>
+                            <div style={{ fontSize:'12px', color:'var(--text-secondary)', fontWeight:500 }}>Sources:</div>
+                            {message.sources.slice(0,6).map((src, idx) => {
+                              // Clean filename by removing hash IDs
+                              const cleanFileName = src.file_name
+                                .replace(/\s+[a-f0-9]{32,}\.md$/i, '')
+                                .replace(/\.md$/i, '')
+                                .replace(/^\d+\s+/, '')
+                                .trim()
+                              
+                              return (
+                                <button
+                                  key={idx}
+                                  className="source-citation"
+                                  title={src.snippet}
+                                  onClick={async ()=>{
+                                    try {
+                                      const content = await window.electronAPI.readFile(src.file_path)
+                                      if (activeTab) {
+                                        setTabs(prev => prev.map(tab => 
+                                          tab.id === activeTab.id 
+                                            ? { ...tab, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges: false }
+                                            : tab
+                                        ))
+                                      } else {
+                                        const newTab = { id: `file-${Date.now()}`, name: cleanFileName, path: src.file_path, content, hasUnsavedChanges:false }
+                                        setTabs(prev => [...prev, newTab as any])
+                                        setActiveTabId((newTab as any).id)
+                                      }
+                                    } catch (e) {
+                                      console.error('Failed to open source file:', e)
                                     }
-                                  } catch (e) {
-                                    console.error('Failed to open source file:', e)
-                                  }
-                                }}
-                              >
-                                {src.file_name}
-                              </button>
-                            ))}
+                                  }}
+                                >
+                                  📄 {cleanFileName}
+                                </button>
+                              )
+                            })}
                           </div>
                         )}
                       </div>

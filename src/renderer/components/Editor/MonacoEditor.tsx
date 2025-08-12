@@ -8,6 +8,7 @@ interface MonacoEditorProps {
   language?: string
   readOnly?: boolean
   theme?: string // Add theme prop
+  path?: string
   onReady?: (api: {
     wrapSelection: (prefix: string, suffix?: string) => void
     toggleBold: () => void
@@ -24,6 +25,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
   language = 'markdown',
   readOnly = false,
   theme = 'dark', // Default to dark theme
+  path,
   onReady
 }) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -45,6 +47,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
 
     const toggleBold = () => wrapSelection('**')
     const toggleItalic = () => wrapSelection('*')
+    const toggleInlineCode = () => wrapSelection('`')
 
     const insertLink = () => {
       const model = editor.getModel(); if (!model) return
@@ -73,7 +76,38 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       editor.focus()
     }
 
-    onReady({ wrapSelection, toggleBold, toggleItalic, insertLink, insertList, insertCodeBlock })
+    const insertHeading = (level: 1|2|3|4|5|6) => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel) || 'Heading'
+      const hashes = '#'.repeat(Math.max(1, Math.min(6, level)))
+      const md = `${hashes} ${text}`
+      editor.executeEdits('heading', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertQuote = () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const md = text.split('\n').map(line => `> ${line || ''}`).join('\n')
+      editor.executeEdits('quote', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertHorizontalRule = () => {
+      const model = editor.getModel(); if (!model) return
+      const pos = editor.getPosition(); if (!pos) return
+      const md = `\n\n---\n\n`
+      editor.executeEdits('hr', [{
+        range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+        text: md,
+        forceMoveMarkers: true
+      }])
+      editor.focus()
+    }
+
+    onReady({ wrapSelection, toggleBold, toggleItalic, insertLink, insertList, insertCodeBlock, insertHeading, insertQuote, insertHorizontalRule, toggleInlineCode })
   }
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
@@ -98,46 +132,106 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       automaticLayout: true,
     })
 
-    // Paste image handler using DOM event (editor.onPaste is not available)
-    const domNode = editor.getDomNode()
-    if (domNode) {
-      const handlePaste = async (evt: ClipboardEvent) => {
-        try {
-          const dt = evt.clipboardData
-          if (!dt) return
-          const items = Array.from(dt.items)
-          const imgItem = items.find(it => it.type.startsWith('image/'))
-          if (!imgItem) return
+    // Update status bar on cursor/selection
+    editor.onDidChangeCursorSelection(() => {
+      const pos = editor.getPosition()
+      const sel = editor.getSelection()
+      const model = editor.getModel()
+      const text = (model && sel) ? model.getValueInRange(sel) : ''
+      window.dispatchEvent(new CustomEvent('isla:cursor', { detail: { lineNumber: pos?.lineNumber, column: pos?.column, selectionText: text } }))
+    })
 
-          const blob = imgItem.getAsFile()
-          if (!blob) return
-          const arrayBuffer = await blob.arrayBuffer()
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
+    // Listen for external editor option changes (e.g., word wrap)
+    const optionListener = (e: any) => {
+      try {
+        const detail = e.detail || {}
+        editor.updateOptions(detail)
+      } catch {}
+    }
+    window.addEventListener('isla:editorOption', optionListener as any)
 
-          const api = (window as any).electronAPI
-          if (!api?.settingsGet || !api?.saveImage) return
-          const rootDir = await api.settingsGet('selectedDirectory')
-          if (!rootDir) return
-
-          const ext = (blob.type.split('/')[1] || 'png').toLowerCase()
-          const savedPath = await api.saveImage(rootDir, 'image', base64, ext)
-          if (!savedPath) return
-
-          const fileUri = `file://${savedPath.replace(/\\/g, '/')}`
-          const md = `![](${fileUri})`
-
-          const sel = editor.getSelection()
-          const range = sel || editor.getModel()!.getFullModelRange()
-          editor.executeEdits('paste-image', [{ range, text: md, forceMoveMarkers: true }])
-        } catch (err) {
-          console.error('Paste image failed:', err)
+    // Toggle markdown task list on click at line start
+    editor.onMouseDown((e) => {
+      try {
+        if (!e.target || !e.target.position) return
+        const pos = e.target.position
+        const model = editor.getModel(); if (!model) return
+        const line = model.getLineContent(pos.lineNumber)
+        const m = line.match(/^\s*- \[( |x|X)\](.*)$/)
+        if (!m) return
+        // Only toggle if clicking near the checkbox area (first few columns)
+        if (pos.column > (line.indexOf(']') + 2)) return
+        const checked = m[1].toLowerCase() === 'x'
+        const before = line
+        const after = line.replace(/^\s*- \[(?: |x|X)\]/, `- [${checked ? ' ' : 'x'}]`)
+        if (after !== before) {
+          const range = new monaco.Range(pos.lineNumber, 1, pos.lineNumber, line.length + 1)
+          editor.executeEdits('toggle-task', [{ range, text: after, forceMoveMarkers: true }])
         }
-      }
+      } catch {}
+    })
 
-      domNode.addEventListener('paste', handlePaste)
-      editor.onDidDispose(() => {
-        try { domNode.removeEventListener('paste', handlePaste) } catch {}
-      })
+    // Keyboard shortcuts for bold/italic
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const after = `**${text}**`
+      editor.executeEdits('kb-bold', [{ range: sel, text: after, forceMoveMarkers: true }])
+    })
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const after = `*${text}*`
+      editor.executeEdits('kb-italic', [{ range: sel, text: after, forceMoveMarkers: true }])
+    })
+
+    // Paste image handler
+    const handlePaste = async (e: any) => {
+      try {
+        const nativeEvent: ClipboardEvent | null = (e && e.event && 'clipboardData' in e.event) ? e.event as ClipboardEvent : null
+        const dt = nativeEvent?.clipboardData
+        if (!dt) return
+        const items = Array.from(dt.items)
+        const imgItem = items.find(it => it.type.startsWith('image/'))
+        if (!imgItem) return
+
+        const blob = imgItem.getAsFile()
+        if (!blob) return
+        const arrayBuffer = await blob.arrayBuffer()
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
+
+        // Determine save directory
+        const rootDir = await (window as any).electronAPI?.settingsGet?.('selectedDirectory')
+        if (!rootDir) return
+
+        const ext = blob.type.split('/')[1] || 'png'
+        const savedPath = await (window as any).electronAPI?.saveImage?.(rootDir, 'image', base64, ext)
+        if (!savedPath) return
+
+        const fileUri = `file://${savedPath.replace(/\\/g, '/')}`
+        const md = `![](${fileUri})`
+
+        const sel = editor.getSelection()
+        const range = sel || editor.getModel()!.getFullModelRange()
+        editor.executeEdits('paste-image', [{ range, text: md, forceMoveMarkers: true }])
+      } catch (err) {
+        console.error('Paste image failed:', err)
+      }
+    }
+
+    // Use onDidPaste if available; fallback to DOM paste on container
+    const anyEditor: any = editor as any
+    if (typeof anyEditor.onDidPaste === 'function') {
+      anyEditor.onDidPaste(handlePaste)
+    } else {
+      // Fallback: attach listener to editor DOM node
+      const domNode = editor.getDomNode()
+      if (domNode) {
+        const domHandler = (ev: ClipboardEvent) => handlePaste({ event: ev })
+        domNode.addEventListener('paste', domHandler)
+      }
     }
 
     exposeCommands()
@@ -294,7 +388,7 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
   const { fontFamily, fontSize } = getFontSettings()
 
   return (
-    <div style={{ height: '100%', width: '100%' }}>
+    <div style={{ height: '100%', width: '100%', background: 'var(--bg-primary)' }}>
       <Editor
         height="100%"
         defaultLanguage={language}
@@ -303,6 +397,8 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
         onMount={handleEditorDidMount}
         beforeMount={handleEditorWillMount}
         theme={getMonacoTheme()}
+        path={path}
+        key={path}
         options={{
           fontFamily: fontFamily,
           fontSize: fontSize,

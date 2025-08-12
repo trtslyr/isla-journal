@@ -163,24 +163,53 @@ function startVaultWatcher(rootDir: string) {
       if (!lower.endsWith('.md')) return true
       return false
     }
-    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
-    const onAddOrChange = async (filePath: string) => {
-      try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
-        const content = await readFile(filePath, 'utf-8')
-        const name = path.basename(filePath)
-        database.saveFile(filePath, name, content)
-      } catch (e) {
-        console.error('Watcher add/change failed:', e)
+
+    // Simple concurrency limiter
+    const createLimiter = (max: number) => {
+      let active = 0
+      const queue: Array<() => Promise<void>> = []
+      const runNext = () => {
+        if (active >= max) return
+        const task = queue.shift()
+        if (!task) return
+        active++
+        task().finally(() => {
+          active--
+          runNext()
+        })
+      }
+      return (fn: () => Promise<void>) => {
+        queue.push(fn)
+        runNext()
       }
     }
-    const onUnlink = async (filePath: string) => {
-      try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
-        database.deleteFileByPath(filePath)
-      } catch (e) {
-        console.error('Watcher unlink failed:', e)
-      }
+    const schedule = createLimiter(3)
+
+    // Index existing files as they are discovered
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    const onAddOrChange = (filePath: string) => {
+      schedule(async () => {
+        try {
+          if (!filePath.toLowerCase().endsWith('.md')) return
+          await database.ensureReady()
+          const content = await readFile(filePath, 'utf-8')
+          const name = path.basename(filePath)
+          database.saveFile(filePath, name, content)
+        } catch (e) {
+          console.error('Watcher add/change failed:', e)
+        }
+      })
+    }
+    const onUnlink = (filePath: string) => {
+      schedule(async () => {
+        try {
+          if (!filePath.toLowerCase().endsWith('.md')) return
+          await database.ensureReady()
+          database.deleteFileByPath(filePath)
+        } catch (e) {
+          console.error('Watcher unlink failed:', e)
+        }
+      })
     }
     vaultWatcher.on('add', onAddOrChange)
     vaultWatcher.on('change', onAddOrChange)
@@ -762,6 +791,13 @@ ipcMain.handle('file:openDirectory', async () => {
     // Check if this is a root directory switch (not just subdirectory expansion)
     let shouldClearDatabase = false
     let isRootDirectoryChange = false
+
+    // helper to determine subpath
+    const isSubpath = (root: string, candidate: string) => {
+      const rel = path.relative(root, candidate)
+      return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+    }
+
     try {
       const currentSavedDirectory = await database.getSetting('selectedDirectory')
       
@@ -769,17 +805,14 @@ ipcMain.handle('file:openDirectory', async () => {
         // First time - this is a root directory selection
         console.log('📁 [First Time] No previous directory found, setting root directory')
         isRootDirectoryChange = true
-      } else if (currentSavedDirectory !== dirPath && !path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
-        // This is a genuine root directory change (not a subdirectory)
-        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', dirPath)
+      } else if (normalizedDirPath === currentSavedDirectory || isSubpath(currentSavedDirectory, normalizedDirPath)) {
+        // Same root or a subdirectory inside current root - do nothing special
+        console.log(isSubpath(currentSavedDirectory, normalizedDirPath) ? '📂 [Subdirectory Expansion]:' : '🔄 [Directory Refresh]:', normalizedDirPath)
+      } else {
+        // This is a genuine root directory change
+        console.log('🔄 [Root Directory Switch] From:', currentSavedDirectory, 'To:', normalizedDirPath)
         shouldClearDatabase = true
         isRootDirectoryChange = true
-      } else if (!path.relative(currentSavedDirectory, dirPath).startsWith('..')) {
-        // This is just subdirectory expansion - don't change root directory or clear database
-        console.log('📂 [Subdirectory Expansion]:', dirPath)
-      } else if (currentSavedDirectory === dirPath) {
-        // Same directory - might be a refresh
-        console.log('🔄 [Directory Refresh]:', dirPath)
       }
     } catch (error) {
       console.log('📁 [First Time] No previous directory found, proceeding with indexing')
@@ -837,30 +870,6 @@ ipcMain.handle('file:openDirectory', async () => {
         modified: stats.mtime.toISOString(), // FIX: Convert Date to ISO string
         size: stats.size
       }
-      
-      // ✅ SMART INCREMENTAL RAG PROCESSING - Only process new/changed files
-      if (entry.isFile() && entry.name.endsWith('.md')) {
-        try {
-          const needsProcessing = database.needsProcessing(fullPath, stats.mtime)
-          
-          if (needsProcessing) {
-            console.log('📖 [Incremental] Processing new/modified file:', entry.name)
-            const content = await readFile(fullPath, 'utf-8')
-            
-            // Save to database with RAG chunking and FTS indexing
-            database.saveFile(fullPath, entry.name, content)
-            console.log('🧠 [Incremental] RAG processed:', entry.name)
-          } else {
-            console.log('⏭️ [Incremental] Skipping unchanged file:', entry.name)
-          }
-        } catch (contentError) {
-          console.error('⚠️ Failed to process content for', entry.name, ':', contentError)
-          // Continue with metadata-only entry
-        }
-      }
-      
-      // 🚫 RECURSIVE PROCESSING COMPLETELY DISABLED 
-      // (This was causing the massive file processing on startup)
       
       files.push(fileItem)
       console.log('✅ Added:', entry.name, entry.isDirectory() ? 'directory' : 'file')
@@ -1044,6 +1053,17 @@ ipcMain.handle('db:getStats', async () => {
   }
 })
 
+ipcMain.handle('db:updateNoteDates', async () => {
+  try {
+    await database.ensureReady()
+    console.log('📅 [IPC] Updating note dates from file content...')
+    return (database as any).updateAllNoteDates()
+  } catch (error) {
+    console.error('❌ [IPC] Error updating note dates:', error)
+    throw error
+  }
+})
+
 ipcMain.handle('db:reindexAll', async () => {
   try {
     await database.ensureReady()
@@ -1093,23 +1113,19 @@ ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getEmbeddingModel()
+    const model = modelName || llama.getCurrentModel()
     if (!model) throw new Error('No model selected for embeddings')
 
     // Process in small batches to avoid blocking too much
     let totalEmbedded = 0
     for (;;) {
-      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || database.listChunksNeedingEmbeddings(50) || []
+      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
       if (!batch.length) break
 
       const texts = batch.map((b: any) => b.chunk_text)
       const vectors = await llama.embedTexts(texts, model)
       for (let i = 0; i < batch.length; i++) {
-        if ((database as any).upsertEmbeddingCompat) {
-          (database as any).upsertEmbeddingCompat(batch[i].id, vectors[i], model)
-        } else {
-          database.upsertEmbedding(batch[i].id, vectors[i], vectors[i]?.length || 0, model)
-        }
+        ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
       }
       totalEmbedded += batch.length
     }
@@ -1345,14 +1361,17 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    // Build conversation history if chatId provided
+    
+    // Get recent conversation history if chatId provided
     let conversationHistory: Array<{role: string, content: string}> = []
     if (chatId) {
-      try {
-        const recentMessages = database.getChatMessages(chatId, 8)
-        conversationHistory = recentMessages.map(msg => ({ role: msg.role, content: msg.content }))
-      } catch {}
+      const recentMessages = database.getChatMessages(chatId, 8) // Get last 8 messages
+      conversationHistory = recentMessages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
     }
+    
     const { prompt, sources } = await contentService.preparePrompt(query, conversationHistory)
     let full = ''
     // Stream via LlamaService
@@ -1427,8 +1446,8 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
 
 ipcMain.handle('settings:getAll', async () => {
   try {
-    // For now, return empty object since getAllSettings doesn't exist
-    return {}
+    await database.ensureReady()
+    return database.getAllSettings()
   } catch (error) {
     console.error('❌ [IPC] Error getting all settings:', error)
     throw error
@@ -1589,5 +1608,22 @@ ipcMain.handle('system:openExternal', async (_, url: string) => {
   } catch (error) {
     console.error('❌ [IPC] Error opening external URL:', error)
     throw error
+  }
+}) 
+
+ipcMain.handle('db:healthCheck', async () => {
+  try {
+    await database.ensureReady()
+    const token = `ISLA_HEALTH_TOKEN_${Date.now()}`
+    const fakePath = path.join(app.getPath('userData'), `${token}.md`)
+    const fakeName = `${token}.md`
+    database.saveFile(fakePath, fakeName, `health ${token}`)
+    const hits = (database as any).searchContentFTS?.(token, 1) || database.searchContent(token, 1)
+    database.deleteFileByPath(fakePath)
+    const ok = Array.isArray(hits) && hits.length > 0
+    return { ok }
+  } catch (error) {
+    console.error('❌ [IPC] DB health check failed:', error)
+    return { ok: false, error: String(error?.message || error) }
   }
 }) 
