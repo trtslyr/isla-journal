@@ -669,15 +669,15 @@ class IslaDatabase {
     if (!this.db) throw new Error('Database not initialized')
 
     try {
-      // Clean and split query into individual words
-      const words = query.toLowerCase()
-        .replace(/['\"*?!@#$%^&()+={}[]|\\:\";'<>,.]/g, ' ')
+      // Unicode-safe tokenization
+      const words = query
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
         .split(/\s+/)
-        .filter(word => word.length > 2) // Only words longer than 2 chars
-        .slice(0, 3) // Max 3 words to keep it simple
+        .filter(word => word.length > 2)
+        .slice(0, 3)
 
       if (words.length === 0) {
-        console.log('🔍 [Database] No valid search words found')
         return []
       }
 
@@ -714,12 +714,10 @@ class IslaDatabase {
         results.push(...wordResults)
       }
 
-      // Remove duplicates and limit results
       const uniqueResults = results.filter((result, index, self) => 
         index === self.findIndex(r => r.id === result.id)
       ).slice(0, limit)
 
-      console.log(`🔍 [Database] Found ${uniqueResults.length} results for: ${query}`)
       return uniqueResults
       
     } catch (error) {
@@ -1296,8 +1294,15 @@ class IslaDatabase {
     }
 
     try {
-      // Basic FTS5 match string: quote the whole query for now
-      const match = query.replace(/[\'\"]+/g, ' ').trim()
+      // Build safer FTS query: quoted tokens joined by AND
+      const tokens = query
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter(t => t.length > 2)
+        .slice(0, 5)
+      if (tokens.length === 0) return []
+      const match = tokens.map(t => `"${t.replace(/"/g, ' ')}"`).join(' AND ')
 
       const clauses: string[] = []
       const params: any[] = []

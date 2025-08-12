@@ -163,27 +163,53 @@ function startVaultWatcher(rootDir: string) {
       if (!lower.endsWith('.md')) return true
       return false
     }
-    // Index existing files as they are discovered
-    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
-    const onAddOrChange = async (filePath: string) => {
-      try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
-        await database.ensureReady()
-        const content = await readFile(filePath, 'utf-8')
-        const name = path.basename(filePath)
-        database.saveFile(filePath, name, content)
-      } catch (e) {
-        console.error('Watcher add/change failed:', e)
+
+    // Simple concurrency limiter
+    const createLimiter = (max: number) => {
+      let active = 0
+      const queue: Array<() => Promise<void>> = []
+      const runNext = () => {
+        if (active >= max) return
+        const task = queue.shift()
+        if (!task) return
+        active++
+        task().finally(() => {
+          active--
+          runNext()
+        })
+      }
+      return (fn: () => Promise<void>) => {
+        queue.push(fn)
+        runNext()
       }
     }
-    const onUnlink = async (filePath: string) => {
-      try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
-        await database.ensureReady()
-        database.deleteFileByPath(filePath)
-      } catch (e) {
-        console.error('Watcher unlink failed:', e)
-      }
+    const schedule = createLimiter(3)
+
+    // Index existing files as they are discovered
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    const onAddOrChange = (filePath: string) => {
+      schedule(async () => {
+        try {
+          if (!filePath.toLowerCase().endsWith('.md')) return
+          await database.ensureReady()
+          const content = await readFile(filePath, 'utf-8')
+          const name = path.basename(filePath)
+          database.saveFile(filePath, name, content)
+        } catch (e) {
+          console.error('Watcher add/change failed:', e)
+        }
+      })
+    }
+    const onUnlink = (filePath: string) => {
+      schedule(async () => {
+        try {
+          if (!filePath.toLowerCase().endsWith('.md')) return
+          await database.ensureReady()
+          database.deleteFileByPath(filePath)
+        } catch (e) {
+          console.error('Watcher unlink failed:', e)
+        }
+      })
     }
     vaultWatcher.on('add', onAddOrChange)
     vaultWatcher.on('change', onAddOrChange)
@@ -1560,5 +1586,22 @@ ipcMain.handle('system:openExternal', async (_, url: string) => {
   } catch (error) {
     console.error('❌ [IPC] Error opening external URL:', error)
     throw error
+  }
+}) 
+
+ipcMain.handle('db:healthCheck', async () => {
+  try {
+    await database.ensureReady()
+    const token = `ISLA_HEALTH_TOKEN_${Date.now()}`
+    const fakePath = path.join(app.getPath('userData'), `${token}.md`)
+    const fakeName = `${token}.md`
+    database.saveFile(fakePath, fakeName, `health ${token}`)
+    const hits = (database as any).searchContentFTS?.(token, 1) || database.searchContent(token, 1)
+    database.deleteFileByPath(fakePath)
+    const ok = Array.isArray(hits) && hits.length > 0
+    return { ok }
+  } catch (error) {
+    console.error('❌ [IPC] DB health check failed:', error)
+    return { ok: false, error: String(error?.message || error) }
   }
 }) 

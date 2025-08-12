@@ -231,6 +231,22 @@ class ContentService {
       }
 
       const results = hybridResults
+        .reduce((acc: any[], r: any) => acc.concat(r), [])
+        .slice(0, 100)
+
+      // Cap per-file hits to at most 2
+      const perFileCap = 2
+      const seenPerFile = new Map<string, number>()
+      const capped = [] as any[]
+      for (const r of results) {
+        const key = r.file_path
+        const count = seenPerFile.get(key) || 0
+        if (count < perFileCap) {
+          capped.push(r)
+          seenPerFile.set(key, count + 1)
+        }
+        if (capped.length >= 20) break
+      }
 
       // 3. Build context blocks
       const pinnedBlock = pinnedContent ? `Pinned notes:\n${pinnedContent}` : ''
