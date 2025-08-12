@@ -77,6 +77,7 @@ export interface SearchResult {
   file_name: string
   content_snippet: string
   rank: number
+  chunk_index?: number
 }
 
 export interface ContentChunk {
@@ -690,6 +691,7 @@ class IslaDatabase {
             f.path as file_path,
             f.name as file_name,
             substr(c.chunk_text, 1, 200) as content_snippet,
+            c.chunk_index as chunk_index,
             1 as rank
           FROM content_chunks c
           JOIN files f ON c.file_id = f.id
@@ -1307,6 +1309,7 @@ class IslaDatabase {
           c.file_id,
           f.path as file_path,
           f.name as file_name,
+          c.chunk_index as chunk_index,
           snippet(chunks_fts, 0, '<mark>', '</mark>', '...', 12) as content_snippet,
           bm25(chunks_fts, 1.0, 1.0) as rank
         FROM chunks_fts
@@ -1324,7 +1327,8 @@ class IslaDatabase {
         file_path: r.file_path,
         file_name: r.file_name,
         content_snippet: String(r.content_snippet || '').replace(/\u0000/g, ''),
-        rank: r.rank
+        rank: r.rank,
+        chunk_index: r.chunk_index
       }))
     } catch (error) {
       console.error('⚠️ [Database] FTS search failed, falling back:', error)
@@ -1402,6 +1406,20 @@ class IslaDatabase {
     } else {
       this.db.prepare('DELETE FROM embeddings').run()
     }
+  }
+
+  /** Fetch neighboring chunks around a given chunk index for a file */
+  public getNeighborChunks(fileId: number, centerChunkIndex: number, window: number = 1): Array<{ chunk_index: number; chunk_text: string }> {
+    if (!this.db) throw new Error('Database not initialized')
+    const start = Math.max(0, centerChunkIndex - window)
+    const end = centerChunkIndex + window
+    const sql = `
+      SELECT chunk_index, chunk_text
+      FROM content_chunks
+      WHERE file_id = ? AND chunk_index BETWEEN ? AND ?
+      ORDER BY chunk_index ASC
+    `
+    return this.db.prepare(sql).all(fileId, start, end) as Array<{ chunk_index: number; chunk_text: string }>
   }
 }
 
