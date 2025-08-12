@@ -8,6 +8,7 @@ interface MonacoEditorProps {
   language?: string
   readOnly?: boolean
   theme?: string // Add theme prop
+  externalCommand?: { type: string; payload?: any; nonce: number }
 }
 
 const MonacoEditor: React.FC<MonacoEditorProps> = ({
@@ -15,7 +16,8 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
   onChange,
   language = 'markdown',
   readOnly = false,
-  theme = 'dark' // Default to dark theme
+  theme = 'dark', // Default to dark theme
+  externalCommand
 }) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 
@@ -41,6 +43,76 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       automaticLayout: true,
     })
   }
+
+  // Execute external formatting commands
+  useEffect(() => {
+    if (!externalCommand || !editorRef.current) return
+    const editor = editorRef.current
+    const model = editor.getModel()
+    if (!model) return
+    const selections = editor.getSelections()
+    if (!selections || selections.length === 0) return
+    const sel = selections[0]
+    const selectedText = model.getValueInRange(sel)
+
+    const wrapSelection = (left: string, right: string = left) => {
+      const text = selectedText || ''
+      const newText = `${left}${text}${right}`
+      editor.executeEdits('formatting', [{ range: sel, text: newText, forceMoveMarkers: true }])
+      const endPos = sel.getStartPosition()
+      editor.setPosition({ lineNumber: endPos.lineNumber, column: endPos.column + left.length + (text ? text.length : 0) + right.length })
+      editor.focus()
+    }
+
+    const prefixLines = (prefix: string) => {
+      const startLine = sel.startLineNumber
+      const endLine = sel.endLineNumber
+      const ops: monaco.editor.IIdentifiedSingleEditOperation[] = []
+      for (let ln = startLine; ln <= endLine; ln++) {
+        const lineRange = new monaco.Range(ln, 1, ln, 1)
+        ops.push({ range: lineRange, text: prefix, forceMoveMarkers: true })
+      }
+      editor.executeEdits('formatting', ops)
+      editor.focus()
+    }
+
+    switch (externalCommand.type) {
+      case 'bold':
+        wrapSelection('**')
+        break
+      case 'italic':
+        wrapSelection('*')
+        break
+      case 'code':
+        wrapSelection('`')
+        break
+      case 'link': {
+        const text = selectedText || 'link text'
+        const url = externalCommand.payload?.url || 'https://'
+        const newText = `[${text}](${url})`
+        editor.executeEdits('formatting', [{ range: sel, text: newText, forceMoveMarkers: true }])
+        editor.focus()
+        break
+      }
+      case 'bulleted-list':
+        prefixLines('- ')
+        break
+      case 'checklist':
+        prefixLines('- [ ] ')
+        break
+      case 'heading-1':
+        prefixLines('# ')
+        break
+      case 'heading-2':
+        prefixLines('## ')
+        break
+      case 'heading-3':
+        prefixLines('### ')
+        break
+      default:
+        break
+    }
+  }, [externalCommand?.nonce])
 
   // Watch for font setting changes and update editor
   useEffect(() => {

@@ -67,6 +67,7 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
+  const [editorCommand, setEditorCommand] = useState<{ type: string; payload?: any; nonce: number } | undefined>(undefined)
 
   // Initialize theme on app load
   useEffect(() => {
@@ -354,6 +355,22 @@ const App: React.FC = () => {
       updateTabContent(activeTab.id, value)
     }
   }
+
+  // Keyboard shortcuts per UPGRADE_PLAN.md
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().includes('MAC')
+      const mod = isMac ? e.metaKey : e.ctrlKey
+      if (!mod) return
+      if (e.key.toLowerCase() === 'n') { e.preventDefault(); createNewTab(); }
+      if (e.key.toLowerCase() === 's') { e.preventDefault(); if (activeTab?.id) saveTab(activeTab.id) }
+      if (e.key.toLowerCase() === 'f') { e.preventDefault(); const q = prompt('Search notes'); if (q) window.electronAPI.searchContent(q, 20) }
+      if (e.key.toLowerCase() === 'k') { e.preventDefault(); setEditorCommand({ type: 'link', payload: { url: 'https://' }, nonce: Date.now() }) }
+      // Cmd/Ctrl+P: quick open not implemented yet (Phase 4 later)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [activeTab])
 
   const handleFileSelect = async (filePath: string, fileName: string) => {
     try {
@@ -824,12 +841,26 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="panel-content">
+            {/* Editor Toolbar */}
+            <div className="editor-toolbar prose" style={{display:'flex', gap:8, padding:'8px 12px'}}>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'bold', nonce: Date.now() })}><b>B</b></button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'italic', nonce: Date.now() })}><i>I</i></button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'code', nonce: Date.now() })}><code>{"</>"}</code></button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'bulleted-list', nonce: Date.now() })}>• List</button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'checklist', nonce: Date.now() })}>[ ]</button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'heading-1', nonce: Date.now() })}>H1</button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'heading-2', nonce: Date.now() })}>H2</button>
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'heading-3', nonce: Date.now() })}>H3</button>
+              <span style={{flex:1}} />
+              <button className="ghost-btn" onClick={() => setEditorCommand({ type: 'link', payload: { url: 'https://' }, nonce: Date.now() })}>Link</button>
+            </div>
             {activeTab && (
               <MonacoEditor
                 value={activeTab.content}
                 onChange={handleEditorChange}
                 language="markdown"
                 theme={currentTheme}
+                externalCommand={editorCommand}
               />
             )}
           </div>
