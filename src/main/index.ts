@@ -121,15 +121,14 @@ const createWindow = (): void => {
       contextIsolation: true,
       preload: join(__dirname, '../preload/index.js'),
       // Fixed platform and environment-specific settings
-      ...(isDev && {
-        webSecurity: true, // Enable web security in dev
+      ...(isDev ? {
+        webSecurity: true,
         allowRunningInsecureContent: false
-      }),
-      ...(!isDev && {
-        webSecurity: false, // Disable web security for packaged apps (all platforms)
-        allowRunningInsecureContent: true, // Allow local file loading
-        enableRemoteModule: false, // Security: disable remote module
-        nodeIntegrationInWorker: false // Security: disable node in workers
+      } : {
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        enableRemoteModule: false,
+        nodeIntegrationInWorker: false
       })
     }
   })
@@ -307,8 +306,9 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    if (isDev || process.env.DEBUG === 'true') {
+      mainWindow?.webContents.openDevTools()
+    }
   })
 
   // Handle external links
@@ -349,6 +349,40 @@ app.whenReady().then(async () => {
     
     // Log cross-platform information
     logPlatformInfo()
+    
+    // Setup production file logging with rotation and DEBUG gating
+    try {
+      if (!isDev) {
+        const DEBUG_LOG = process.env.DEBUG === 'true'
+        const logsDir = require('path').join(app.getPath('userData'), 'logs')
+        const fs = require('fs')
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true })
+        }
+        const logFile = require('path').join(logsDir, 'main.log')
+        if (fs.existsSync(logFile)) {
+          const stats = fs.statSync(logFile)
+          if (stats.size > 5 * 1024 * 1024) {
+            const rotated = logFile + '.1'
+            if (fs.existsSync(rotated)) fs.unlinkSync(rotated)
+            fs.renameSync(logFile, rotated)
+          }
+        }
+        const stream = fs.createWriteStream(logFile, { flags: 'a' })
+        const original = { ...console }
+        const write = (level: string, args: any[]) => {
+          const msg = args.map((a: any) => {
+            try { return typeof a === 'string' ? a : JSON.stringify(a) } catch { return String(a) }
+          }).join(' ')
+          stream.write(`[${new Date().toISOString()}] [${level}] ${msg}\n`)
+        }
+        console.log = (...args: any[]) => { if (DEBUG_LOG) original.log(...args); write('INFO', args) }
+        console.warn = (...args: any[]) => { if (DEBUG_LOG) original.warn(...args); write('WARN', args) }
+        console.error = (...args: any[]) => { original.error(...args); write('ERROR', args) }
+      }
+    } catch (e) {
+      console.warn('⚠️ Failed to setup file logging:', e)
+    }
     
     // BULLETPROOF database initialization with comprehensive error handling
     console.log('🗄️ [Main] ========== DATABASE INITIALIZATION ==========')
@@ -856,7 +890,7 @@ ipcMain.handle('file:writeFile', async (_, filePath: string, content: string) =>
   }
 })
 
-ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string) => {
+ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string, content?: string) => {
   try {
     // Ensure .md extension
     if (!fileName.endsWith('.md')) {
@@ -865,7 +899,7 @@ ipcMain.handle('file:createFile', async (_, dirPath: string, fileName: string) =
     
     const normalizedDirPath = normalizePath(dirPath)
     const filePath = normalizePath(join(normalizedDirPath, fileName))
-    const initialContent = `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
+    const initialContent = typeof content === 'string' ? content : `# ${fileName.replace('.md', '')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
     
     console.log('📝 [File] Creating new file:', filePath)
     await writeFile(filePath, initialContent, 'utf-8')
@@ -1155,6 +1189,18 @@ ipcMain.handle('chat:rename', async (_, chatId: number, newTitle: string) => {
   }
 })
 
+// Implement chat:clearMessages to align with preload API
+ipcMain.handle('chat:clearMessages', async (_, chatId: number) => {
+  try {
+    await database.ensureReady()
+    database.clearChatMessages(chatId)
+    return true
+  } catch (error) {
+    console.error('❌ [IPC] Error clearing chat messages:', error)
+    throw error
+  }
+})
+
 // RAG/Content Search IPC handlers
 ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
   try {
@@ -1267,8 +1313,13 @@ ipcMain.handle('file:delete', async (_, filePath: string) => {
       
       // Remove from database if it was a markdown file
       if (filePath.endsWith('.md')) {
-        // TODO: Add method to remove file from database
-        console.log('🗑️ [Database] Should remove from index:', filePath)
+        try {
+          await database.ensureReady()
+          database.deleteFileByPath(filePath)
+          console.log('🗑️ [Database] Removed from index:', filePath)
+        } catch (dbErr) {
+          console.error('⚠️ [Database] Failed to remove from index:', dbErr)
+        }
       }
     }
     
@@ -1304,13 +1355,10 @@ ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
     // Update database if it was a markdown file
     if (oldPath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
-        console.log('📝 [Database] Updated index for renamed file:', fileName)
+        await database.ensureReady()
+        database.updateFilePath(oldPath, newPath, fileName)
+        console.log('📝 [Database] Updated file path in index for renamed file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after rename:', dbError)
       }
@@ -1353,13 +1401,10 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     // Update database if it was a markdown file
     if (sourcePath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
-        console.log('📝 [Database] Updated index for moved file:', fileName)
+        await database.ensureReady()
+        database.updateFilePath(sourcePath, newPath, fileName)
+        console.log('📝 [Database] Updated file path in index for moved file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after move:', dbError)
       }

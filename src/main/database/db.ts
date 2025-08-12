@@ -387,7 +387,9 @@ class IslaDatabase {
         content TEXT NOT NULL DEFAULT '',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        size INTEGER DEFAULT 0
+        size INTEGER DEFAULT 0,
+        file_mtime DATETIME,
+        note_date DATE
       )
     `)
 
@@ -402,6 +404,36 @@ class IslaDatabase {
         FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
       )
     `)
+
+    // Create FTS5 virtual table for chunk text with external content table linkage
+    try {
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+          chunk_text,
+          file_id UNINDEXED,
+          content='content_chunks', content_rowid='id'
+        );
+      `)
+      // Triggers to keep FTS in sync with content_chunks
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS content_chunks_ai AFTER INSERT ON content_chunks BEGIN
+          INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES (new.id, new.chunk_text, new.file_id);
+        END;
+      `)
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS content_chunks_ad AFTER DELETE ON content_chunks BEGIN
+          INSERT INTO chunks_fts(chunks_fts, rowid, chunk_text, file_id) VALUES('delete', old.id, old.chunk_text, old.file_id);
+        END;
+      `)
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS content_chunks_au AFTER UPDATE ON content_chunks BEGIN
+          INSERT INTO chunks_fts(chunks_fts, rowid, chunk_text, file_id) VALUES('delete', old.id, old.chunk_text, old.file_id);
+          INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES (new.id, new.chunk_text, new.file_id);
+        END;
+      `)
+    } catch (e) {
+      console.warn('⚠️ [Database] FTS5 unavailable or failed to initialize. Falling back to LIKE search.', e)
+    }
 
     // FTS removed - using direct content_chunks search instead
 
@@ -453,6 +485,7 @@ class IslaDatabase {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_files_path ON files (path);
       CREATE INDEX IF NOT EXISTS idx_files_modified ON files (modified_at);
+      CREATE INDEX IF NOT EXISTS idx_files_note_date ON files (note_date);
       CREATE INDEX IF NOT EXISTS idx_search_word ON search_index (word);
       CREATE INDEX IF NOT EXISTS idx_search_file ON search_index (file_id);
       CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats (updated_at);
@@ -473,18 +506,43 @@ class IslaDatabase {
     // Normalize file path for consistent cross-platform storage
     const normalizedPath = this.normalizeFilePath(filePath)
 
+    // Derive mtime from filesystem when available
+    let fileMtime: string | null = null
+    try {
+      const { statSync } = require('fs')
+      const st = statSync(filePath)
+      fileMtime = new Date(st.mtime).toISOString()
+    } catch {}
+
+    // Derive note_date from filename or content
+    const noteDate = this.deriveNoteDate(fileName, content)
+
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO files (path, name, content, modified_at, size)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+      INSERT OR REPLACE INTO files (path, name, content, modified_at, size, file_mtime, note_date)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, COALESCE(?, file_mtime), COALESCE(?, note_date))
     `)
-    
-    const result = stmt.run(normalizedPath, fileName, content, content.length)
+    const result = stmt.run(normalizedPath, fileName, content, content.length, fileMtime, noteDate)
     const fileId = result.lastInsertRowid as number
 
     // Update content chunks for search
     this.updateContentChunks(fileId, normalizedPath, fileName, content)
     
     console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
+  }
+
+  private deriveNoteDate(fileName: string, content: string): string | null {
+    try {
+      // Try ISO date in filename: 2024-05-10 or 2024-05
+      const m1 = fileName.match(/(\d{4})-(\d{2})(?:-(\d{2}))?/)
+      if (m1) {
+        const y = +m1[1], m = +m1[2], d = m1[3] ? +m1[3] : 1
+        return new Date(Date.UTC(y, m - 1, d)).toISOString().slice(0, 10)
+      }
+      // Try first date-like heading in content
+      const m2 = content.match(/^(?:#|##|###)\s*(\d{4}-\d{2}-\d{2})/m)
+      if (m2) return m2[1]
+    } catch {}
+    return null
   }
 
   /**
@@ -530,6 +588,52 @@ class IslaDatabase {
     }
     
     return chunks.length > 0 ? chunks : [cleanContent]
+  }
+
+  /**
+   * Search content using FTS5 if available; falls back to LIKE
+   */
+  public searchContentFTS(query: string, limit: number = 20, dateRange?: { start: Date, end: Date }): SearchResult[] {
+    if (!this.db) throw new Error('Database not initialized')
+
+    try {
+      // If chunks_fts doesn't exist, fallback to LIKE search
+      const hasFts = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_fts'").get() as any
+      if (!hasFts) {
+        return this.searchContent(query, limit)
+      }
+
+      const params: any[] = []
+      let dateFilterSql = ''
+      if (dateRange) {
+        dateFilterSql = ' AND ( (f.note_date IS NOT NULL AND f.note_date >= ? AND f.note_date < ?) OR (f.note_date IS NULL AND f.file_mtime IS NOT NULL AND f.file_mtime >= ? AND f.file_mtime < ?) )'
+        const startIso = dateRange.start.toISOString().slice(0, 10)
+        const endIso = dateRange.end.toISOString().slice(0, 10)
+        params.push(startIso, endIso, dateRange.start.toISOString(), dateRange.end.toISOString())
+      }
+
+      const stmt = this.db.prepare(`
+        SELECT 
+          c.id as id,
+          c.file_id as file_id,
+          f.path as file_path,
+          f.name as file_name,
+          snippet(chunks_fts, 0, '<mark>', '</mark>', '…', 10) as content_snippet,
+          bm25(chunks_fts) as rank
+        FROM chunks_fts 
+        JOIN content_chunks c ON chunks_fts.rowid = c.id
+        JOIN files f ON c.file_id = f.id
+        WHERE chunks_fts MATCH ? ${dateFilterSql}
+        ORDER BY rank
+        LIMIT ?
+      `)
+
+      const results = stmt.all(query, ...params, limit) as SearchResult[]
+      return results
+    } catch (error) {
+      console.error('❌ [Database] FTS search error, falling back:', error)
+      return this.searchContent(query, limit)
+    }
   }
 
   /**
@@ -1065,6 +1169,47 @@ class IslaDatabase {
   }
 
   // fixDatabaseSchema method removed - no longer needed without FTS
+
+  /**
+   * Delete a file and its chunks by file path
+   */
+  public deleteFileByPath(filePath: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const normalizedPath = this.normalizeFilePath(filePath)
+    const tx = this.db.transaction((p: string) => {
+      const file = this.db!.prepare('SELECT id FROM files WHERE path = ?').get(p) as { id: number } | undefined
+      if (!file) return
+      this.db!.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(file.id)
+      this.db!.prepare('DELETE FROM search_index WHERE file_id = ?').run(file.id)
+      this.db!.prepare('DELETE FROM files WHERE id = ?').run(file.id)
+    })
+    tx(normalizedPath)
+  }
+
+  /**
+   * Update file path and name without re-saving content
+   */
+  public updateFilePath(oldPath: string, newPath: string, newName?: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const oldNorm = this.normalizeFilePath(oldPath)
+    const newNorm = this.normalizeFilePath(newPath)
+
+    const stmt = this.db.prepare('UPDATE files SET path = ?, name = COALESCE(?, name), modified_at = CURRENT_TIMESTAMP WHERE path = ?')
+    stmt.run(newNorm, newName || null, oldNorm)
+  }
+
+  /**
+   * Clear messages for a chat
+   */
+  public clearChatMessages(chatId: number): void {
+    if (!this.db) throw new Error('Database not initialized')
+    const del = this.db.prepare('DELETE FROM chat_messages WHERE chat_id = ?')
+    del.run(chatId)
+    const upd = this.db.prepare('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    upd.run(chatId)
+  }
 
   /**
    * Close database connection with Windows-specific cleanup
