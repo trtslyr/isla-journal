@@ -1535,6 +1535,26 @@ class IslaDatabase {
     `
     return this.db.prepare(sql).all(limit) as any
   }
+
+  /** Build a context window around a chunk (previous..next) and return combined snippet with file metadata */
+  public getChunkWindow(chunkId: number, window: number = 1): { id:number; file_id:number; file_path:string; file_name:string; content_snippet:string } | null {
+    if (!this.db) throw new Error('Database not initialized')
+    const row = this.db.prepare('SELECT id, file_id, chunk_index FROM content_chunks WHERE id = ?').get(chunkId) as { id:number; file_id:number; chunk_index:number } | undefined
+    if (!row) return null
+    const start = row.chunk_index - window
+    const end = row.chunk_index + window
+    const sql = `
+      SELECT c.chunk_text, c.chunk_index, f.path as file_path, f.name as file_name, c.file_id
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      WHERE c.file_id = ? AND c.chunk_index BETWEEN ? AND ?
+      ORDER BY c.chunk_index ASC
+    `
+    const parts = this.db.prepare(sql).all(row.file_id, start, end) as Array<{ chunk_text:string; chunk_index:number; file_path:string; file_name:string; file_id:number }>
+    if (!parts.length) return null
+    const snippet = parts.map(p => p.chunk_text).join(' ')
+    return { id: row.id, file_id: parts[0].file_id, file_path: parts[0].file_path, file_name: parts[0].file_name, content_snippet: snippet.slice(0, 600) }
+  }
 }
 
 // Export singleton instance

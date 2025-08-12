@@ -66,6 +66,49 @@ function trimContextByChars(lines: string[], maxChars: number): string[] {
   return out
 }
 
+function approxTokenCount(s: string): number {
+  // Rough: 4 chars per token
+  return Math.ceil(s.length / 4)
+}
+
+function mmrDiversify<T extends { id:number; content_snippet:string }>(items: T[], k: number, lambda: number = 0.7): T[] {
+  const selected: typeof items = []
+  const remaining = items.slice()
+  const sim = (a:string,b:string)=>{
+    // Jaccard over terms as a cheap proxy
+    const A = new Set(a.toLowerCase().split(/\W+/).filter(Boolean))
+    const B = new Set(b.toLowerCase().split(/\W+/).filter(Boolean))
+    const inter = [...A].filter(x=>B.has(x)).length
+    const union = new Set([...A, ...B]).size || 1
+    return inter / union
+  }
+  while (selected.length < k && remaining.length) {
+    let bestIdx = 0
+    let bestScore = -Infinity
+    for (let i = 0; i < remaining.length; i++) {
+      const cand = remaining[i]
+      const relevance = 1 // already ranked by RRF; treat as equal baseline
+      let diversityPenalty = 0
+      for (const s of selected) diversityPenalty = Math.max(diversityPenalty, sim(cand.content_snippet, s.content_snippet))
+      const score = lambda * relevance - (1 - lambda) * diversityPenalty
+      if (score > bestScore) { bestScore = score; bestIdx = i }
+    }
+    selected.push(remaining.splice(bestIdx,1)[0])
+  }
+  return selected
+}
+
+function applySimpleFilters(query: string): { cleaned: string; pathPrefix?: string; tag?: string } {
+  let cleaned = query
+  let pathPrefix: string | undefined
+  let tag: string | undefined
+  const pathMatch = query.match(/\bpath:([^\s]+)/)
+  if (pathMatch) { pathPrefix = pathMatch[1]; cleaned = cleaned.replace(pathMatch[0], '').trim() }
+  const tagMatch = query.match(/\btag:([^\s]+)/)
+  if (tagMatch) { tag = tagMatch[1]; cleaned = cleaned.replace(tagMatch[0], '').trim() }
+  return { cleaned, pathPrefix, tag }
+}
+
 class ContentService {
   /**
    * Prepare prompt and sources for RAG (without sending to LLM)
@@ -154,9 +197,10 @@ class ContentService {
     try {
       console.log(`🔍 [ContentService] Searching for: ${query}`)
 
-      const dateFilter = extractDateFilter(query)
+      const { cleaned, pathPrefix } = applySimpleFilters(query)
+      const dateFilter = extractDateFilter(cleaned)
 
-      // Conversation context: include last few exchanges as soft context
+      // Conversation context
       let conversationContext = ''
       if (conversationHistory && conversationHistory.length > 0) {
         const recentMessages = conversationHistory.slice(-6)
@@ -187,7 +231,10 @@ class ContentService {
 
       // Retrieval
       const hasFTS = typeof (database as any).searchContentFTS === 'function'
-      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 40, dateFilter) : database.searchContent(query, 40)
+      let ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(cleaned, 60, dateFilter) : database.searchContent(cleaned, 60)
+      if (pathPrefix) {
+        ftsResults = ftsResults.filter(r => String(r.file_path || '').includes(pathPrefix!))
+      }
 
       // Embeddings set
       let vecResults: any[] = []
@@ -196,21 +243,45 @@ class ContentService {
         const embeddingsModel = database.getSetting('embeddingsModel') || llama.getCurrentModel()
         if (embeddingsModel && typeof (database as any).getEmbeddingsForModel === 'function') {
           const allEmb = (database as any).getEmbeddingsForModel(embeddingsModel) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
-          const qVec = (await llama.embedTexts([query], embeddingsModel))[0] || []
+          const qVec = (await llama.embedTexts([cleaned], embeddingsModel))[0] || []
           const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
           scored.sort((a,b)=>b.sim-a.sim)
-          vecResults = scored.slice(0, 40)
+          vecResults = scored.slice(0, 60)
+          if (pathPrefix) vecResults = vecResults.filter(r => String(r.file_path || '').includes(pathPrefix!))
         }
       } catch {}
 
       let results: any[]
       if ((ftsResults?.length||0) === 0 && (vecResults?.length||0) === 0) {
-        // General query fallback: recent chunks
         results = (database as any).getRecentChunks?.(20) || []
       } else {
-        // RRF merge for robustness
-        results = rrfMerge(ftsResults, vecResults).slice(0, 20)
+        results = rrfMerge(ftsResults, vecResults)
       }
+
+      // Parent-child expansion: expand each top result with neighboring chunks
+      const expandWindow = 1
+      const expanded: any[] = []
+      for (const r of results.slice(0, 20)) {
+        const win = (database as any).getChunkWindow?.(r.id, expandWindow)
+        if (win) expanded.push(win)
+        else expanded.push(r)
+      }
+
+      // MMR diversify top-N
+      const diversified = mmrDiversify(expanded, 12, 0.7)
+
+      // Token-ish cap
+      const maxTokens = 1200
+      const lines: string[] = []
+      let tokens = 0
+      for (const r of diversified) {
+        const line = `${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`
+        const t = approxTokenCount(line)
+        if (tokens + t > maxTokens) break
+        lines.push(line)
+        tokens += t
+      }
+      const retrievedBlock = lines.map((t,i)=>`(${i+1}) ${t}`).join('\n')
 
       const dateBlock = (()=>{
         if (!dateFilter) return ''
@@ -219,33 +290,17 @@ class ContentService {
         return `Date range: ${start} → ${end}`
       })()
 
-      let retrievedLines = results.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`)
-      retrievedLines = trimContextByChars(retrievedLines, 4000)
-      const retrievedBlock = retrievedLines.join('\n')
-
-      if (results.length === 0 && !pinnedContent) {
-        return {
-          answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).",
-          sources: []
-        }
+      if (lines.length === 0 && !pinnedContent) {
+        return { answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).", sources: [] }
       }
 
       const today = new Date().toISOString()
       const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nConversation context (recent):\n${conversationContext}\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-      const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      
-
       const llamaService = LlamaService.getInstance()
-      const llmResponse = await llamaService.sendMessage([
-        { role: 'user', content: ragPrompt }
-      ])
+      const llmResponse = await llamaService.sendMessage([{ role: 'user', content: ragPrompt }])
 
-      const sources = results.map((r: any) => ({
-        file_name: r.file_name,
-        file_path: r.file_path,
-        snippet: String(r.content_snippet || '').replace(/<\/?mark>/g, '')
-      }))
+      const sources = diversified.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
       if (pinnedContent) {
         try {
           const pinnedItemsJson = database.getSetting('pinnedItems')
@@ -255,6 +310,7 @@ class ContentService {
           }
         } catch {}
       }
+
       return { answer: llmResponse, sources }
     } catch (error) {
       console.error('❌ [ContentService] RAG search failed:', error)
