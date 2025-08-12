@@ -460,6 +460,7 @@ class IslaDatabase {
       CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages (chat_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at);
       CREATE INDEX IF NOT EXISTS idx_settings_key ON app_settings (key);
+      CREATE INDEX IF NOT EXISTS idx_chunks_file ON content_chunks (file_id, chunk_index);
     `)
 
     console.log('📋 [Database] Tables and indexes created')
@@ -1455,6 +1456,32 @@ class IslaDatabase {
     } catch (e) {
       console.warn('⚠️ [Database] Embeddings schema migration skipped/failed:', e)
     }
+  }
+
+  /** Return most recent files by file_mtime or modified_at */
+  public getRecentFiles(limit: number = 10): Array<{ id: number; path: string; name: string; content: string; file_mtime: string | null }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT id, path, name, content, COALESCE(file_mtime, modified_at) as file_mtime
+      FROM files
+      ORDER BY datetime(COALESCE(file_mtime, modified_at)) DESC
+      LIMIT ?
+    `
+    return this.db.prepare(sql).all(limit) as any
+  }
+
+  /** Return recent chunks joined with file metadata (for general query fallback) */
+  public getRecentChunks(limit: number = 20): Array<{ id:number; file_id:number; file_path:string; file_name:string; content_snippet:string }>{
+    if (!this.db) throw new Error('Database not initialized')
+    const sql = `
+      SELECT c.id, c.file_id, f.path as file_path, f.name as file_name,
+             substr(c.chunk_text, 1, 200) as content_snippet
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      ORDER BY datetime(COALESCE(f.file_mtime, f.modified_at)) DESC, c.chunk_index ASC
+      LIMIT ?
+    `
+    return this.db.prepare(sql).all(limit) as any
   }
 }
 
