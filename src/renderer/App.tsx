@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { MonacoEditor, MarkdownPreview } from './components/Editor'
+import { MonacoEditor } from './components/Editor'
 import EditorPane from './components/Layout/EditorPane'
 import Sidebar from './components/Layout/Sidebar'
 import { FileTree } from './components/FileTree'
@@ -70,7 +70,7 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
-  const [showPreview, setShowPreview] = useState(false)
+  // Preview removed; editor always in Markdown mode
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -138,18 +138,7 @@ const App: React.FC = () => {
     return () => { if (unsubscribe) unsubscribe() }
   }, [])
 
-  // Keyboard shortcut: toggle preview Ctrl/Cmd+Shift+V
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
-      if (isCmd && e.shiftKey && e.key.toLowerCase() === 'v') {
-        e.preventDefault()
-        setShowPreview(p => !p)
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
+  // Preview toggle removed
 
   // Get current active tab
   const activeTab = tabs.find(tab => tab.id === activeTabId)
@@ -771,12 +760,10 @@ const App: React.FC = () => {
           selectedFilePath={activeTab?.path || null}
         />
  
-        {/* Center Panel - Editor */}
+        {/* Center Panel - Editor (Markdown only) */}
         <EditorPane
           activeTab={activeTab || null}
           theme={currentTheme}
-          showPreview={showPreview}
-          onTogglePreview={() => setShowPreview(p => !p)}
           onChange={handleEditorChange}
         />
 

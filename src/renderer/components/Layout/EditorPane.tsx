@@ -1,5 +1,5 @@
 import React, { useRef } from 'react'
-import { MonacoEditor, MarkdownPreview } from '../Editor'
+import { MonacoEditor } from '../Editor'
 
 export interface EditorTabModel {
   id: string
@@ -12,12 +12,10 @@ export interface EditorTabModel {
 interface EditorPaneProps {
   activeTab: EditorTabModel | null
   theme: string
-  showPreview: boolean
-  onTogglePreview: () => void
   onChange: (value: string | undefined) => void
 }
 
-const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, showPreview, onTogglePreview, onChange }) => {
+const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange }) => {
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -34,41 +32,29 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, showPreview, 
   return (
     <div className="panel editor-panel">
       <div className="panel-header">
-        <div className="tab-bar">
-          <button
-            className="new-tab-btn"
-            onClick={onTogglePreview}
-            title="Toggle preview (Cmd/Ctrl+Shift+V)"
-          >
-            {showPreview ? 'md' : '👁'}
-          </button>
-        </div>
+        <div className="tab-bar" />
       </div>
       <div className="panel-content">
-        {showPreview ? (
-          <MarkdownPreview markdown={activeTab.content} />
-        ) : (
-          <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
-            <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid var(--border-color)'}}>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
-              <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
-            </div>
-            <div style={{flex:1}}>
-              <MonacoEditor
-                value={activeTab.content}
-                onChange={onChange}
-                language="markdown"
-                theme={theme}
-                onReady={(api)=>{editorApiRef.current=api}}
-              />
-            </div>
+        <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
+          <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid var(--border-color)'}}>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
+            <button className="search-btn" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
           </div>
-        )}
+          <div style={{flex:1}}>
+            <MonacoEditor
+              value={activeTab.content}
+              onChange={onChange}
+              language="markdown"
+              theme={theme}
+              onReady={(api)=>{editorApiRef.current=api}}
+            />
+          </div>
+        </div>
       </div>
     </div>
   )
