@@ -148,6 +148,27 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
     }
     window.addEventListener('isla:editorOption', optionListener as any)
 
+    // Toggle markdown task list on click at line start
+    editor.onMouseDown((e) => {
+      try {
+        if (!e.target || !e.target.position) return
+        const pos = e.target.position
+        const model = editor.getModel(); if (!model) return
+        const line = model.getLineContent(pos.lineNumber)
+        const m = line.match(/^\s*- \[( |x|X)\](.*)$/)
+        if (!m) return
+        // Only toggle if clicking near the checkbox area (first few columns)
+        if (pos.column > (line.indexOf(']') + 2)) return
+        const checked = m[1].toLowerCase() === 'x'
+        const before = line
+        const after = line.replace(/^\s*- \[(?: |x|X)\]/, `- [${checked ? ' ' : 'x'}]`)
+        if (after !== before) {
+          const range = new monaco.Range(pos.lineNumber, 1, pos.lineNumber, line.length + 1)
+          editor.executeEdits('toggle-task', [{ range, text: after, forceMoveMarkers: true }])
+        }
+      } catch {}
+    })
+
     // Keyboard shortcuts for bold/italic
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
       const model = editor.getModel(); if (!model) return

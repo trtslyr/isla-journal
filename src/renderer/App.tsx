@@ -61,6 +61,8 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState('')
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [showChatDropdown, setShowChatDropdown] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [currentModelName, setCurrentModelName] = useState<string | null>(null)
   
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false)
@@ -357,6 +359,16 @@ const App: React.FC = () => {
         // Load chats
         const chats = await window.electronAPI.chatGetAll()
         setAllChats(chats)
+
+        // Load LLM models and current model
+        try {
+          const models = await window.electronAPI.llmGetAvailableModels?.()
+          if (Array.isArray(models)) setAvailableModels(models)
+          const cm = await window.electronAPI.llmGetCurrentModel?.()
+          setCurrentModelName(cm || null)
+        } catch (e) {
+          console.warn('LLM model info load failed:', e)
+        }
 
         // Load active chat and its messages (if any exist)
         const activeChat = await window.electronAPI.chatGetActive()
@@ -841,6 +853,25 @@ const App: React.FC = () => {
           <div className="panel-header">
             <div className="chat-title">
               <span>AI Journal Assistant</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                <select
+                  style={{ background:'var(--bg-tertiary)', color:'var(--text-primary)', border:'1px solid var(--border-color)', borderRadius:4, padding:'2px 6px' }}
+                  onChange={async (e)=>{
+                    const next = e.target.value
+                    try { 
+                      await window.electronAPI.llmSwitchModel(next)
+                      setCurrentModelName(next)
+                    } catch (err) { console.error('Switch model failed', err) }
+                  }}
+                  onClick={(e)=>e.stopPropagation()}
+                  value={currentModelName || ''}
+                >
+                  {currentModelName == null && <option value="" disabled>Switch model…</option>}
+                  {availableModels.map((m)=> (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </span>
             </div>
           </div>
           
