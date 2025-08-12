@@ -70,7 +70,6 @@ const App: React.FC = () => {
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
-  const [showPreview, setShowPreview] = useState(false)
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -142,10 +141,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isCmd = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey
-      if (isCmd && e.shiftKey && e.key.toLowerCase() === 'v') {
-        e.preventDefault()
-        setShowPreview(p => !p)
-      }
+      // reserved for future shortcuts
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -793,8 +789,6 @@ const App: React.FC = () => {
         <EditorPane
           activeTab={activeTab || null}
           theme={currentTheme}
-          showPreview={showPreview}
-          onTogglePreview={() => setShowPreview(p => !p)}
           onChange={handleEditorChange}
         />
 
