@@ -514,6 +514,16 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
+        // Refresh to ensure persistence reflected
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at)
+          })))
+        } catch {}
       }
 
     } catch (error) {
@@ -535,7 +545,15 @@ const App: React.FC = () => {
           timestamp: new Date()
         }
         setChatMessages(prev => [...prev, assistantMessage])
-        
+        try {
+          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
+          setChatMessages(messages.map(msg => ({
+            id: msg.id.toString(),
+            content: msg.content,
+            role: msg.role as 'user' | 'assistant',
+            timestamp: new Date(msg.created_at)
+          })))
+        } catch {}
       } catch (fallbackError) {
         console.error('❌ [App] Even fallback LLM failed:', fallbackError)
         alert('Failed to get AI response. Please check your connection and try again.')

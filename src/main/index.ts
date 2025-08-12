@@ -1329,7 +1329,21 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
       }))
     }
     
-    return await contentService.searchAndAnswer(query, conversationHistory)
+    const result = await contentService.searchAndAnswer(query, conversationHistory)
+
+    // Persist assistant message with sources if chatId present
+    if (chatId && typeof database.addChatMessage === 'function') {
+      try {
+        const sourcesText = result.sources && result.sources.length
+          ? `\n\nSources:\n${result.sources.map((s, i)=>`(${i+1}) ${s.file_name}`).join('\n')}`
+          : ''
+        database.addChatMessage(chatId, 'assistant', `${result.answer}${sourcesText}`)
+      } catch (e) {
+        console.error('⚠️ [IPC] Failed to persist assistant message (non-stream):', e)
+      }
+    }
+
+    return result
   } catch (error) {
     console.error('❌ [IPC] Error in RAG search:', error)
     throw error
