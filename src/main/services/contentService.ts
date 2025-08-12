@@ -33,6 +33,8 @@ function cleanFileName(fileName: string): string {
 
 function extractDateFilter(qIn: string, now = new Date()): DateFilter {
   const q = qIn.toLowerCase()
+  
+  // ISO format: 2025-08-12 or 2025-08
   const iso = q.match(/\b(\d{4})-(\d{2})(?:-(\d{2}))?\b/)
   if (iso) {
     const y = +iso[1], m = +iso[2]-1, d = iso[3] ? +iso[3] : 1
@@ -41,14 +43,48 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
     const end = iso[3] ? new Date(Date.UTC(y,m,d+1)) : new Date(Date.UTC(y,m+1,1))
     return { start, end }
   }
+  
+  // Year only: "2025" or "from 2025"
+  const yearMatch = q.match(/\b(202[0-9])\b/)
+  if (yearMatch) {
+    const year = +yearMatch[1]
+    console.log(`🗓️ [ContentService] Detected year filter: ${year}`)
+    return { 
+      start: new Date(Date.UTC(year, 0, 1)), 
+      end: new Date(Date.UTC(year + 1, 0, 1)) 
+    }
+  }
+  
   // UTC midnight helpers
   const toUtcStartOfDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
   const todayUtc = toUtcStartOfDay(new Date(now.toISOString()))
+  
+  // Time-based filters
   if (q.includes('today')) return { start: todayUtc, end: new Date(+todayUtc + 86400000) }
   if (q.includes('yesterday')) { const y = new Date(+todayUtc - 86400000); return { start: y, end: todayUtc } }
-  if (q.includes('last week')) return { start: new Date(+todayUtc - 7*86400000), end: todayUtc }
-  const mRel = q.match(/last (\d+)\s*days?/)
-  if (mRel) { const n = Math.min(365, +mRel[1]||7); return { start: new Date(+todayUtc - n*86400000), end: todayUtc } }
+  if (q.includes('this week')) return { start: new Date(+todayUtc - 7*86400000), end: new Date(+todayUtc + 86400000) }
+  if (q.includes('last week')) return { start: new Date(+todayUtc - 14*86400000), end: new Date(+todayUtc - 7*86400000) }
+  if (q.includes('this month')) { 
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    return { start: startOfMonth, end: new Date(+todayUtc + 86400000) }
+  }
+  if (q.includes('recent') || q.includes('lately') || q.includes('recently')) {
+    console.log(`🗓️ [ContentService] Detected recency filter: last 30 days`)
+    return { start: new Date(+todayUtc - 30*86400000), end: new Date(+todayUtc + 86400000) }
+  }
+  
+  // "last N days/weeks/months"
+  const mRel = q.match(/last (\d+)\s*(days?|weeks?|months?)/)
+  if (mRel) { 
+    const n = Math.min(365, +mRel[1]||7)
+    const unit = mRel[2]
+    let multiplier = 1
+    if (unit.startsWith('week')) multiplier = 7
+    else if (unit.startsWith('month')) multiplier = 30
+    console.log(`🗓️ [ContentService] Detected relative filter: last ${n} ${unit}`)
+    return { start: new Date(+todayUtc - n*multiplier*86400000), end: todayUtc }
+  }
+  
   return null
 }
 
