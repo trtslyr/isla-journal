@@ -110,21 +110,7 @@ class IslaDatabase {
       // Resolve to absolute path and normalize
       const resolved = resolve(filePath)
       
-      // Windows-specific path handling
-      if (this.isWindows) {
-        // Handle long paths on Windows (>260 chars)
-        const longPathPrefix = '\\\\?\\'
-        let windowsPath = resolved
-        
-        if (resolved.length > 260 && !resolved.startsWith(longPathPrefix)) {
-          windowsPath = longPathPrefix + resolved
-        }
-        
-        // Convert to forward slashes for consistent storage
-        return windowsPath.replace(/\\/g, '/')
-      }
-      
-      // Convert Windows backslashes to forward slashes for consistent storage
+      // Normalize to forward slashes for consistent storage across platforms
       return resolved.replace(/\\/g, '/')
     } catch (error) {
       console.warn(`⚠️ [Database] Path normalization failed for ${filePath}:`, error)
@@ -407,15 +393,7 @@ class IslaDatabase {
     // FTS removed - using direct content_chunks search instead
 
     // Search index table - for full-text search
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS search_index (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_id INTEGER NOT NULL,
-        word TEXT NOT NULL,
-        position INTEGER NOT NULL,
-        FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
-      )
-    `)
+    // (Removed legacy search_index table)
 
     // Chat conversations table
     this.db.exec(`
@@ -454,8 +432,6 @@ class IslaDatabase {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_files_path ON files (path);
       CREATE INDEX IF NOT EXISTS idx_files_modified ON files (modified_at);
-      CREATE INDEX IF NOT EXISTS idx_search_word ON search_index (word);
-      CREATE INDEX IF NOT EXISTS idx_search_file ON search_index (file_id);
       CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats (updated_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages (chat_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at);
@@ -473,7 +449,7 @@ class IslaDatabase {
     if (!this.db) throw new Error('Database not initialized')
 
     // Add file_mtime and note_date columns if missing
-    const columns: Array<{name: string}> = this.db.prepare("PRAGMA table_info(files)").all() as any
+    const columns: Array<{name: string, pk?: number}> = this.db.prepare("PRAGMA table_info(files)").all() as any
     const hasMtime = columns.some(c => c.name === 'file_mtime')
     const hasNoteDate = columns.some(c => c.name === 'note_date')
 
@@ -501,6 +477,44 @@ class IslaDatabase {
     } catch (e) {
       console.warn('⚠️ [Database] Failed to create indexes for new columns:', e)
     }
+
+    // Embeddings primary key migration to (chunk_id, model)
+    try {
+      const embCols: Array<{name: string, pk: number}> = this.db.prepare("PRAGMA table_info(embeddings)").all() as any
+      const hasModelInPk = embCols.some(c => c.name === 'model' && c.pk > 0)
+      if (embCols.length > 0 && !hasModelInPk) {
+        console.log('🔄 [Database] Migrating embeddings table to composite PK (chunk_id, model)')
+        this.db.exec('BEGIN')
+        try {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS embeddings_new (
+              chunk_id INTEGER NOT NULL,
+              vector TEXT NOT NULL,
+              dim INTEGER NOT NULL,
+              model TEXT NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (chunk_id, model),
+              FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+            );
+          `)
+          // Copy existing rows (will dedupe by last write via INSERT OR REPLACE)
+          this.db.exec(`
+            INSERT OR REPLACE INTO embeddings_new (chunk_id, vector, dim, model, created_at)
+            SELECT chunk_id, vector, dim, model, created_at FROM embeddings;
+          `)
+          this.db.exec('DROP TABLE embeddings')
+          this.db.exec('ALTER TABLE embeddings_new RENAME TO embeddings')
+          this.db.exec('CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings (model)')
+          this.db.exec('COMMIT')
+          console.log('✅ [Database] Embeddings table migration complete')
+        } catch (e) {
+          this.db.exec('ROLLBACK')
+          console.warn('⚠️ [Database] Embeddings migration failed (safe to continue with single-model PK):', e)
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed checking embeddings schema:', e)
+    }
   }
 
   private setupFTS(): void {
@@ -517,6 +531,13 @@ class IslaDatabase {
       `)
       // Auxiliary index-like trigger not strictly necessary with manual sync
       this.ftsReady = true
+      // Smoke test the FTS table
+      try {
+        this.db.prepare('SELECT count(*) as c FROM chunks_fts').get()
+      } catch (smoke) {
+        console.warn('⚠️ [Database] FTS smoke test failed; disabling FTS:', smoke)
+        this.ftsReady = false
+      }
       console.log('✅ [Database] FTS5 ready')
     } catch (e) {
       console.warn('⚠️ [Database] FTS5 unavailable, falling back to LIKE search:', e)
@@ -527,11 +548,12 @@ class IslaDatabase {
     try {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS embeddings (
-          chunk_id INTEGER PRIMARY KEY,
+          chunk_id INTEGER NOT NULL,
           vector TEXT NOT NULL,
           dim INTEGER NOT NULL,
           model TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
           FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
         );
       `)
@@ -685,9 +707,9 @@ class IslaDatabase {
 
       const hasDate = !!dateRange
       const noteStart = hasDate ? dateRange!.start.toISOString().slice(0,10) : undefined
-      const noteEnd   = hasDate ? dateRange!.end.toISOString().slice(0,10) : undefined
+      const noteEndIncl = hasDate ? new Date(+dateRange!.end - 24*60*60*1000).toISOString().slice(0,10) : undefined
       const mtimeStart = hasDate ? dateRange!.start.toISOString() : undefined
-      const mtimeEnd   = hasDate ? dateRange!.end.toISOString() : undefined
+      const mtimeEndExclusive = hasDate ? dateRange!.end.toISOString() : undefined
 
       for (const word of words) {
         const baseSql = `
@@ -702,11 +724,11 @@ class IslaDatabase {
           JOIN files f ON c.file_id = f.id
           WHERE LOWER(c.chunk_text) LIKE '%' || ? || '%'
         `
-        const dateSql = hasDate ? ` AND ( (f.note_date BETWEEN ? AND ?) OR (f.file_mtime BETWEEN ? AND ?) )` : ''
+        const dateSql = hasDate ? ` AND ( (f.note_date BETWEEN ? AND ?) OR (f.file_mtime >= ? AND f.file_mtime < ?) )` : ''
         const limSql = ` LIMIT ?`
         const sql = baseSql + dateSql + limSql
         const params = hasDate 
-          ? [word, noteStart, noteEnd, mtimeStart, mtimeEnd, Math.ceil(limit / words.length)]
+          ? [word, noteStart, noteEndIncl, mtimeStart, mtimeEndExclusive, Math.ceil(limit / words.length)]
           : [word, Math.ceil(limit / words.length)]
 
         const stmt = this.db!.prepare(sql)
@@ -764,7 +786,6 @@ class IslaDatabase {
       const transaction = this.db.transaction(() => {
         // Clear backing tables
         this.db!.prepare('DELETE FROM content_chunks').run()
-        this.db!.prepare('DELETE FROM search_index').run()
         this.db!.prepare('DELETE FROM files').run()
       })
       
@@ -1312,11 +1333,11 @@ class IslaDatabase {
 
       if (dateRange) {
         const noteStart = dateRange.start.toISOString().slice(0,10)
-        const noteEnd = dateRange.end.toISOString().slice(0,10)
+        const noteEndIncl = new Date(+dateRange.end - 24*60*60*1000).toISOString().slice(0,10)
         const mtimeStart = dateRange.start.toISOString()
-        const mtimeEnd = dateRange.end.toISOString()
-        clauses.push("(f.note_date BETWEEN ? AND ? OR f.file_mtime BETWEEN ? AND ?)")
-        params.push(noteStart, noteEnd, mtimeStart, mtimeEnd)
+        const mtimeEndExclusive = dateRange.end.toISOString()
+        clauses.push("(f.note_date BETWEEN ? AND ? OR (f.file_mtime >= ? AND f.file_mtime < ?))")
+        params.push(noteStart, noteEndIncl, mtimeStart, mtimeEndExclusive)
       }
 
       const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
@@ -1376,7 +1397,7 @@ class IslaDatabase {
     const sql = `
       INSERT INTO embeddings (chunk_id, vector, dim, model)
       VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET
+      ON CONFLICT(chunk_id, model) DO UPDATE SET
         vector = excluded.vector,
         dim = excluded.dim,
         model = excluded.model,

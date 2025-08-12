@@ -77,12 +77,7 @@ class ContentService {
       const llama = LlamaService.getInstance()
       const model = llama.getCurrentModel()
       if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
-        let candidateIds = ftsResults.map(r => r.id).slice(0, 200)
-        // If no FTS results, fall back to scoring embeddings in small batches (optional)
-        if (candidateIds.length === 0 && typeof (database as any).getEmbeddingsForModel === 'function') {
-          const allEmbMeta = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
-          candidateIds = allEmbMeta.slice(0, 500).map(e => e.chunk_id)
-        }
+        const candidateIds = ftsResults.map(r => r.id).slice(0, 200)
         const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
         const qVec = (await llama.embedTexts([query], model))[0] || []
         const scored = embRows.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
@@ -108,13 +103,31 @@ class ContentService {
       return `Date range: ${start} → ${end}`
     })()
 
-    const retrievedBlock = results.length>0
-      ? results.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
+    // Cap per-file hits and overall count/size
+    const perFileCap = 2
+    const seenPerFile = new Map<string, number>()
+    const finalResults: any[] = []
+    let totalChars = 0
+    const charBudget = 2400
+    for (const r of results) {
+      const key = r.file_path
+      const count = seenPerFile.get(key) || 0
+      const snippet = String(r.content_snippet || '')
+      if (count < perFileCap && totalChars + snippet.length <= charBudget) {
+        finalResults.push(r)
+        seenPerFile.set(key, count + 1)
+        totalChars += snippet.length
+      }
+      if (finalResults.length >= 20 || totalChars >= charBudget) break
+    }
+
+    const retrievedBlock = finalResults.length>0
+      ? finalResults.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
       : ''
     const today = new Date().toISOString()
     const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-    const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
+    const sources: Array<{file_name:string; file_path:string; snippet:string}> = finalResults.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
     try {
       const pinnedItemsJson = database.getSetting('pinnedItems')
       if (pinnedItemsJson) {
@@ -259,11 +272,11 @@ class ContentService {
       }
 
       let retrievedBlock = ''
-      if (results.length > 0) {
-        retrievedBlock = results.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
+      if (capped.length > 0) {
+        retrievedBlock = capped.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
       }
 
-      if (results.length === 0 && !pinnedContent) {
+      if (capped.length === 0 && !pinnedContent) {
         return {
           answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).",
           sources: []
@@ -281,8 +294,8 @@ class ContentService {
       const today = new Date().toISOString()
       const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-      const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      
+      const totalSources = capped.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
+      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${capped.length} search + pinned files)`)      
 
       // 6. Get LLM response
       const llamaService = LlamaService.getInstance()
@@ -291,7 +304,7 @@ class ContentService {
       ])
 
       // 7. Sources list
-      const sources = results.map((r: any) => ({
+      const sources = capped.map((r: any) => ({
         file_name: r.file_name,
         file_path: r.file_path,
         snippet: String(r.content_snippet || '').replace(/<\/?mark>/g, '')
