@@ -71,7 +71,7 @@ class ContentService {
 
     // Retrieval (FTS/Hybrid)
     const hasFTS = typeof (database as any).searchContentFTS === 'function'
-    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 40, dateFilter) : database.searchContent(query, 40)
     let results: any[] = ftsResults
     try {
       const llama = LlamaService.getInstance()
@@ -81,7 +81,7 @@ class ContentService {
         const qVec = (await llama.embedTexts([query], model))[0] || []
         const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
-        const topE = scored.slice(0, 30)
+        const topE = scored.slice(0, 60)
         const merged = new Map<number, any>()
         for (const r of ftsResults) merged.set(r.id, { ...r, sim:0, score: 0.4 * (typeof r.rank==='number'? 1/(1+r.rank): 1) })
         for (const e of topE) {
@@ -91,7 +91,27 @@ class ContentService {
           if (existing) { existing.sim = Math.max(existing.sim||0, sim); existing.score = (existing.score||0)+eScore; merged.set(e.id, existing) }
           else merged.set(e.id, { ...e, rank:0, score: eScore })
         }
-        results = Array.from(merged.values()).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,20)
+        // Simple recency boost via file_mtime if present
+        try {
+          const byId = (id:number)=> (database as any).getFileByChunkId?.(id)
+          results = Array.from(merged.values()).map((r:any)=>{
+            const rec = byId ? byId(r.id) : null
+            const recency = rec?.file_mtime ? (Date.now() - new Date(rec.file_mtime).getTime()) : null
+            const recBoost = recency ? Math.max(0, 1 - Math.min(1, recency / (1000*60*60*24*90))) * 0.1 : 0 // up to +0.1 for <90 days
+            return { ...r, score: (r.score||0) + recBoost }
+          })
+        } catch {}
+        // Diversify by file (MMR-like): pick top by score but avoid too many from same file
+        const seenFiles = new Set<number>()
+        const diversified: any[] = []
+        for (const r of results.sort((a,b)=>(b.score||0)-(a.score||0))) {
+          if (!seenFiles.has(r.file_id) || diversified.length < 10) {
+            diversified.push(r)
+            seenFiles.add(r.file_id)
+          }
+          if (diversified.length >= 20) break
+        }
+        results = diversified
       }
     } catch {}
 
@@ -115,7 +135,7 @@ class ContentService {
     const today = new Date().toISOString()
     const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\n${conversationContext ? `Recent conversation:\n${conversationContext}\n\n` : ''}Context from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-    const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
+    const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:(r.heading ? `${r.heading} — ` : '') + String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
     try {
       const pinnedItemsJson = database.getSetting('pinnedItems')
       if (pinnedItemsJson) {
