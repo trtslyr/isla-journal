@@ -160,8 +160,8 @@ async function scheduleEmbeddingsBuild(reason: string) {
     try {
       await database.ensureReady()
       const llama = LlamaService.getInstance()
-      const model = llama.getCurrentModel()
-      if (!model) { try { console.log('⚠️ [Embeddings] No model loaded, skipping build') } catch {}; return }
+      const model = database.getSetting('embeddingsModel') || llama.getCurrentModel()
+      if (!model) { try { console.log('⚠️ [Embeddings] No embeddings model set, skipping build') } catch {}; return }
 
       let totalEmbedded = 0
       for (;;) {
@@ -531,6 +531,24 @@ app.whenReady().then(async () => {
     console.log('🗄️ [Main] ===============================================')
 
   createWindow()
+
+  // Ensure embeddings model setting and availability
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const existingEmbModel = database.getSetting('embeddingsModel')
+    const defaultEmbModel = 'nomic-embed-text'
+    const embModel = existingEmbModel || defaultEmbModel
+    if (!existingEmbModel) {
+      database.setSetting('embeddingsModel', embModel)
+      try { mainWindow?.webContents.send('settings:changed', { key: 'embeddingsModel', value: embModel }) } catch {}
+    }
+    try {
+      await llama.ensureEmbeddingsModelAvailable(embModel, (p, s)=>{ try{ mainWindow?.webContents.send('embeddings:downloadProgress', { model: embModel, progress: p, status: s }) } catch{} })
+    } catch (e) {
+      console.warn('⚠️ [Main] Failed to ensure embeddings model is available:', e)
+    }
+  } catch {}
 
   // BULLETPROOF LLM service initialization
   console.log('🤖 [Main] ========== LLM SERVICE INITIALIZATION ==========')
@@ -1154,8 +1172,8 @@ ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel()
-    if (!model) throw new Error('No model selected for embeddings')
+    const model = modelName || database.getSetting('embeddingsModel') || llama.getCurrentModel()
+    if (!model) throw new Error('No embeddings model selected')
 
     // Process in small batches to avoid blocking too much
     let totalEmbedded = 0
@@ -1181,7 +1199,7 @@ ipcMain.handle('embeddings:stats', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel() || 'unknown'
+    const model = modelName || database.getSetting('embeddingsModel') || llama.getCurrentModel() || 'unknown'
     const stats = (database as any).getEmbeddingsStats?.(model) || { embeddedCount: 0, chunkCount: 0 }
     return { model, ...stats }
   } catch (error) {

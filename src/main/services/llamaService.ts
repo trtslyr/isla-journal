@@ -329,6 +329,14 @@ export class LlamaService {
     return await this.deviceService.getRecommendedModel()
   }
 
+  public async ensureEmbeddingsModelAvailable(modelName: string, onProgress?: (progress: number, status: string) => void): Promise<void> {
+    await this.ensureModelAvailableInternal(modelName, onProgress)
+  }
+
+  private async ensureModelAvailableInternal(modelName: string, onProgress?: (progress: number, status: string) => void): Promise<void> {
+    await this.ensureModelAvailable(modelName, onProgress)
+  }
+
   public async embedTexts(texts: string[], modelOverride?: string): Promise<number[][]> {
     if (!this.isInitialized) {
       throw new Error('LlamaService not initialized')
