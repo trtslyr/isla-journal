@@ -69,6 +69,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   // Font settings state
   const [currentFontFamily, setCurrentFontFamily] = useState('jetbrains-mono')
   const [currentFontSize, setCurrentFontSize] = useState(14)
+  // FTS settings
+  const [ftsMaxResults, setFtsMaxResults] = useState<number>(20)
+  const [ftsPerFileCap, setFtsPerFileCap] = useState<number>(2)
+  const [ftsCharBudget, setFtsCharBudget] = useState<number>(2400)
+  const [ftsOperator, setFtsOperator] = useState<'AND' | 'OR'>('AND')
 
   // Clear validation message and load database stats when modal opens
   useEffect(() => {
@@ -102,6 +107,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
     if (isOpen) {
       loadCurrentTheme()
       loadCurrentFontSettings()
+      loadFtsSettings()
     }
   }, [isOpen])
 
@@ -354,6 +360,21 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
     const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']
     document.documentElement.style.setProperty('--app-font-family', fontStackValue)
     document.documentElement.style.setProperty('--app-font-size', `${fontSize}px`)
+  }
+
+  const loadFtsSettings = async () => {
+    try {
+      const maxResults = parseInt((await window.electronAPI.settingsGet('ftsMaxResults')) || '20')
+      const perFile = parseInt((await window.electronAPI.settingsGet('ftsPerFileCap')) || '2')
+      const charBudget = parseInt((await window.electronAPI.settingsGet('ftsCharBudget')) || '2400')
+      const op = ((await window.electronAPI.settingsGet('ftsOperator')) || 'AND').toUpperCase()
+      setFtsMaxResults(Number.isFinite(maxResults) ? maxResults : 20)
+      setFtsPerFileCap(Number.isFinite(perFile) ? perFile : 2)
+      setFtsCharBudget(Number.isFinite(charBudget) ? charBudget : 2400)
+      setFtsOperator(op === 'OR' ? 'OR' : 'AND')
+    } catch (e) {
+      console.error('Failed to load FTS settings:', e)
+    }
   }
 
   const handleFontFamilyChange = async (newFontFamily: string) => {
@@ -690,6 +711,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
               </div>
             </div>
           </div>
+
+          {/* Search settings removed for simplicity; using smart defaults */}
 
           {/* Version Section */}
           <div className="settings-section">

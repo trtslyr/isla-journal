@@ -827,8 +827,15 @@ const App: React.FC = () => {
             activeTab={activeTab || null}
             theme={currentTheme}
             onChange={handleEditorChange}
-            leftPanelWidth={leftPanelCollapsed ? 40 : leftPanelWidth}
-            rightPanelWidth={rightPanelCollapsed ? 40 : rightPanelWidth}
+            onNewEditor={() => {
+              const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled.md', path: null, content: '# New Document\n\n', hasUnsavedChanges: false }
+              setTabs(prev => [...prev, newTab as any]); setActiveTabId((newTab as any).id)
+            }}
+            onRenameFile={(newName) => {
+              if (!activeTab) return
+              // Only update title; saving path rename is managed elsewhere
+              setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, name: newName, hasUnsavedChanges: true } : t))
+            }}
           />
 
         </div>

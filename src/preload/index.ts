@@ -38,6 +38,13 @@ const electronAPI = {
     ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
   contentStreamSearchAndAnswer: (query: string, chatId?: number) =>
     ipcRenderer.invoke('content:streamSearchAndAnswer', query, chatId),
+  // Embeddings
+  embeddingsRebuildAll: (model?: string) => ipcRenderer.invoke('embeddings:rebuildAll', model),
+  onEmbeddingsProgress: (cb: (payload: { total?: number; embedded?: number; model?: string; status?: string; error?: string }) => void) => {
+    const handler = (_: any, payload: any) => cb(payload)
+    ipcRenderer.on('embeddings:progress', handler)
+    return () => ipcRenderer.removeListener('embeddings:progress', handler)
+  },
   onContentStreamChunk: (cb: (payload: { chunk: string }) => void) => {
     const handler = (_: any, payload: any) => cb(payload)
     ipcRenderer.on('content:streamChunk', handler)
@@ -48,8 +55,8 @@ const electronAPI = {
     ipcRenderer.on('content:streamDone', handler)
     return () => ipcRenderer.removeListener('content:streamDone', handler)
   },
-    
-  // LLM operations
+  
+  // LLM operations (minimal status + messaging)
   llmSendMessage: (messages: Array<{role: string, content: string}>) => 
     ipcRenderer.invoke('llm:sendMessage', messages),
   llmGetStatus: () => ipcRenderer.invoke('llm:getStatus'),
@@ -58,10 +65,6 @@ const electronAPI = {
   llmGetRecommendedModel: () => ipcRenderer.invoke('llm:getRecommendedModel'),
   llmGetAvailableModels: () => ipcRenderer.invoke('llm:getAvailableModels'),
   llmSwitchModel: (modelName: string) => ipcRenderer.invoke('llm:switchModel', modelName),
-  
-  // Embeddings operations
-  embeddingsRebuild: (modelName?: string) => ipcRenderer.invoke('embeddings:rebuild', modelName),
-  embeddingsStats: (modelName?: string) => ipcRenderer.invoke('embeddings:stats', modelName),
   
   // LLM events
   onLLMDownloadProgress: (callback: (data: any) => void) => {

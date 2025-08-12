@@ -1456,7 +1456,12 @@ class IslaDatabase {
   }
 
   // Date-aware FTS search with fallback
-  public searchContentFTS(query: string, limit: number = 20, dateRange: { start: Date; end: Date } | null = null): SearchResult[] {
+  public searchContentFTS(
+    query: string,
+    limit: number = 20,
+    dateRange: { start: Date; end: Date } | null = null,
+    operator: 'AND' | 'OR' = 'AND'
+  ): SearchResult[] {
     if (!this.db) throw new Error('Database not initialized')
     if (!this.ftsReady) {
       return this.searchContent(query, limit)
@@ -1476,9 +1481,9 @@ class IslaDatabase {
         return []
       }
       
-      // Use OR to match any of the words, or AND for all words (you can experiment)
-      const match = words.join(' OR ') // This finds documents with ANY of the words
-      // Alternative: const match = words.join(' AND ') // This finds documents with ALL words
+      // Use operator to join words
+      const joiner = operator === 'OR' ? ' OR ' : ' AND '
+      const match = words.join(joiner)
 
       const clauses: string[] = []
       const params: any[] = []
@@ -1553,11 +1558,22 @@ class IslaDatabase {
     if (!this.db) throw new Error('Database not initialized')
     const dim = vector.length
     const vectorJson = JSON.stringify(vector)
-    const sql = `
-      INSERT OR REPLACE INTO embeddings (chunk_id, vector, dim, model)
-      VALUES (?, ?, ?, ?)
-    `
-    this.db.prepare(sql).run(chunkId, vectorJson, dim, model)
+    try {
+      // Ensure chunk still exists to avoid FOREIGN KEY failures if content was reindexed
+      const exists = this.db.prepare('SELECT 1 FROM content_chunks WHERE id = ? LIMIT 1').get(chunkId) as any
+      if (!exists) return
+      const sql = `
+        INSERT OR REPLACE INTO embeddings (chunk_id, vector, dim, model)
+        VALUES (?, ?, ?, ?)
+      `
+      this.db.prepare(sql).run(chunkId, vectorJson, dim, model)
+    } catch (e: any) {
+      // Ignore transient FK and other constraint errors during concurrent reindexing
+      if (String(e?.message || e).toLowerCase().includes('foreign key')) {
+        return
+      }
+      throw e
+    }
   }
 
   /** Count of embeddings for model and total chunk count */
@@ -1589,6 +1605,37 @@ class IslaDatabase {
     }))
   }
 
+  /** Load embeddings for specific chunk ids for a given model */
+  public getEmbeddingsForChunks(model: string, chunkIds: number[]): Array<{ chunk_id: number; vector: number[] }> {
+    if (!this.db) throw new Error('Database not initialized')
+    if (!chunkIds || chunkIds.length === 0) return []
+    const placeholders = chunkIds.map(() => '?').join(',')
+    const sql = `
+      SELECT e.chunk_id, e.vector
+      FROM embeddings e
+      WHERE e.model = ? AND e.chunk_id IN (${placeholders})
+    `
+    const rows = this.db.prepare(sql).all(model, ...chunkIds) as any[]
+    return rows.map(r => ({
+      chunk_id: r.chunk_id,
+      vector: (() => { try { return JSON.parse(r.vector) } catch { return [] } })()
+    }))
+  }
+
+  /** Fetch chunk rows (with file meta) by ids */
+  public getChunksByIds(ids: number[]): Array<{ id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; chunk_index: number; file_mtime?: string; note_date?: string }> {
+    if (!this.db) throw new Error('Database not initialized')
+    if (!ids || ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(',')
+    const sql = `
+      SELECT c.id, c.file_id, f.path as file_path, f.name as file_name, c.chunk_text, c.chunk_index, f.file_mtime, f.note_date
+      FROM content_chunks c
+      JOIN files f ON f.id = c.file_id
+      WHERE c.id IN (${placeholders})
+    `
+    return this.db.prepare(sql).all(...ids) as any
+  }
+
   /** Clear all embeddings (for rebuild) */
   public clearEmbeddings(model?: string): void {
     if (!this.db) throw new Error('Database not initialized')
@@ -1611,6 +1658,47 @@ class IslaDatabase {
     `
     const row = this.db.prepare(sql).get(chunkId) as any
     return row || null
+  }
+
+  /** Search by file name as a fallback or to boost title matches */
+  public searchFilesByName(query: string, limit: number = 20): SearchResult[] {
+    if (!this.db) throw new Error('Database not initialized')
+    const words = query
+      .toLowerCase()
+      .replace(/[\p{P}\p{S}]+/gu, ' ') // remove punctuation/symbols
+      .split(/\s+/)
+      .filter(w => w.length > 1)
+      .slice(0, 6)
+    if (words.length === 0) return []
+    // Build OR conditions
+    const clauses: string[] = []
+    const params: any[] = []
+    for (const w of words) {
+      clauses.push('LOWER(f.name) LIKE ?')
+      params.push(`%${w}%`)
+    }
+    const where = clauses.length ? 'WHERE ' + clauses.join(' OR ') : ''
+    const sql = `
+      SELECT c.id, c.file_id, f.path as file_path, f.name as file_name,
+             substr(c.chunk_text, 1, 200) as content_snippet,
+             c.chunk_index as chunk_index,
+             0.0 as rank
+      FROM files f
+      JOIN content_chunks c ON c.file_id = f.id
+      ${where}
+      ORDER BY f.file_mtime DESC
+      LIMIT ?
+    `
+    const rows = this.db.prepare(sql).all(...params, limit) as any[]
+    return rows.map(r => ({
+      id: r.id,
+      file_id: r.file_id,
+      file_path: r.file_path,
+      file_name: r.file_name,
+      content_snippet: String(r.content_snippet || '').replace(/\u0000/g, ''),
+      rank: r.rank,
+      chunk_index: r.chunk_index
+    }))
   }
 
   /** Fetch neighboring chunks around a given chunk index for a file */

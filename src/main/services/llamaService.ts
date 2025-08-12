@@ -27,6 +27,7 @@ export class LlamaService {
   private mainWindow: BrowserWindow | null = null
   private embedWorker: Worker | null = null
   private pendingEmbeds: Map<string, { resolve: (v:number[][])=>void; reject: (e:any)=>void }> = new Map()
+  private currentHost: string
 
   public static getInstance(): LlamaService {
     if (!LlamaService.instance) {
@@ -36,8 +37,16 @@ export class LlamaService {
   }
 
   private constructor() {
-    this.ollama = new Ollama({ host: 'http://127.0.0.1:11434' })
+    const envHost = process.env.OLLAMA_HOST?.trim()
+    this.currentHost = envHost && /^(http|https):\/\//i.test(envHost) ? envHost : (envHost || 'http://127.0.0.1:11434')
+    this.ollama = new Ollama({ host: this.currentHost })
     this.deviceService = DeviceDetectionService.getInstance()
+  }
+
+  private setHost(host: string) {
+    this.currentHost = host
+    this.ollama = new Ollama({ host })
+    this.safeLog(`🔗 [LlamaService] Using Ollama host: ${host}`)
   }
 
   public setMainWindow(window: BrowserWindow): void {
@@ -169,29 +178,46 @@ export class LlamaService {
   }
 
   private async checkOllamaStatus(): Promise<void> {
-    try {
+    const tryList = async (): Promise<void> => {
       const models = await this.ollama.list()
+      if (!models) throw new Error('Ollama list returned no data')
+    }
+    try {
+      await tryList()
       this.safeLog('✅ [LlamaService] Ollama is running')
-    } catch (error) {
+      return
+    } catch (error: any) {
+      const msg = String(error?.message || error)
+      const isTlsWrongVersion = msg.includes('WRONG_VERSION_NUMBER') || msg.toLowerCase().includes('ssl')
+      // If HTTPS likely pointed at HTTP server, fallback to HTTP (also fallback on generic fetch failed)
+      if (this.currentHost.startsWith('https://')) {
+        const httpHost = this.currentHost.replace(/^https:/i, 'http:')
+        this.safeLog(`⚠️ [LlamaService] TLS error. Falling back to HTTP: ${httpHost}`)
+        this.setHost(httpHost)
+        await tryList()
+        this.safeLog('✅ [LlamaService] Ollama reachable over HTTP after TLS fallback')
+        return
+      }
+      // If explicit host fails with ECONNREFUSED, try the common default http endpoint
+      if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND')) {
+        const fallback = 'http://127.0.0.1:11434'
+        if (this.currentHost !== fallback) {
+          this.safeLog(`⚠️ [LlamaService] Connection refused. Trying fallback: ${fallback}`)
+          this.setHost(fallback)
+          await tryList()
+          this.safeLog('✅ [LlamaService] Ollama reachable on fallback host')
+          return
+        }
+      }
       const platform = process.platform
       let installInstructions = ''
-      
       switch (platform) {
-        case 'darwin':
-          installInstructions = 'Install Ollama for macOS from https://ollama.ai/download/mac'
-          break
-        case 'win32':
-          installInstructions = 'Install Ollama for Windows from https://ollama.ai/download/windows'
-          break
-        case 'linux':
-          installInstructions = 'Install Ollama for Linux: curl -fsSL https://ollama.ai/install.sh | sh'
-          break
-        default:
-          installInstructions = 'Install Ollama from https://ollama.ai for your platform'
-          break
+        case 'darwin': installInstructions = 'Install Ollama for macOS from https://ollama.ai/download/mac'; break
+        case 'win32': installInstructions = 'Install Ollama for Windows from https://ollama.ai/download/windows'; break
+        case 'linux': installInstructions = 'Install Ollama for Linux: curl -fsSL https://ollama.ai/install.sh | sh'; break
+        default: installInstructions = 'Install Ollama from https://ollama.ai for your platform'; break
       }
-      
-      this.safeLog(`❌ [LlamaService] Ollama not running on ${platform}. ${installInstructions}`, 'error')
+      this.safeLog(`❌ [LlamaService] Ollama not reachable on ${platform}. ${installInstructions}`, 'error')
       throw new Error(`Ollama is not running. ${installInstructions}`)
     }
   }
@@ -254,7 +280,12 @@ export class LlamaService {
     onProgress?: (chunk: string) => void
   ): Promise<string> {
     if (!this.isInitialized || !this.currentModel) {
-      throw new Error('LlamaService not initialized')
+      try {
+        await this.initialize()
+      } catch {
+        throw new Error('LlamaService not initialized')
+      }
+      if (!this.currentModel) throw new Error('LlamaService not initialized')
     }
 
     try {

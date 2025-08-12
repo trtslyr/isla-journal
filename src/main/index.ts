@@ -25,6 +25,19 @@ import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
 import chokidar from 'chokidar'
 
+// Global list of indexable text/code extensions for FTS-only indexing
+const INDEXABLE_EXTENSIONS = new Set([
+  '.md', '.mdx', '.txt', '.ts', '.tsx', '.js', '.jsx', '.json', '.yml', '.yaml',
+  '.py', '.go', '.rs', '.java', '.cs', '.cpp', '.c', '.h', '.rb', '.php', '.sh', '.toml'
+])
+const hasIndexableExt = (p: string): boolean => {
+  const lower = p.toLowerCase()
+  const i = lower.lastIndexOf('.')
+  if (i < 0) return false
+  const ext = lower.slice(i)
+  return INDEXABLE_EXTENSIONS.has(ext)
+}
+
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
 try {
@@ -145,7 +158,42 @@ process.on('unhandledRejection', (reason, promise) => {
   }
 })
 
+// Embeddings (re)build
+ipcMain.handle('embeddings:rebuildAll', async (_, modelOverride?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = require('./services/llamaService').LlamaService.getInstance()
+    await llama.initialize()
+    const model = modelOverride || llama.getCurrentModel() || 'llama3.1:latest'
+    const batchSize = 64
+    let batch: Array<{ id: number; file_id: number; chunk_text: string }>
+    let total = 0
+    let embedded = 0
+    const stats = database.getEmbeddingsStats(model)
+    total = stats.chunkCount
+    mainWindow?.webContents.send('embeddings:progress', { total, embedded: stats.embeddedCount, model, status: 'starting' })
+    while ((batch = database.getChunksNeedingEmbeddings(model, batchSize)).length > 0) {
+      const texts = batch.map(b => b.chunk_text)
+      const vectors = await llama.embedTexts(texts, model)
+      for (let i = 0; i < batch.length; i++) {
+        database.upsertEmbedding(batch[i].id, vectors[i] || [], model)
+      }
+      embedded += batch.length
+      const nowStats = database.getEmbeddingsStats(model)
+      mainWindow?.webContents.send('embeddings:progress', { total: nowStats.chunkCount, embedded: nowStats.embeddedCount, model, status: 'running' })
+    }
+    const finalStats = database.getEmbeddingsStats(model)
+    mainWindow?.webContents.send('embeddings:progress', { total: finalStats.chunkCount, embedded: finalStats.embeddedCount, model, status: 'done' })
+    return { ok: true, model, ...finalStats }
+  } catch (error) {
+    console.error('❌ [IPC] Error rebuilding embeddings:', error)
+    mainWindow?.webContents.send('embeddings:progress', { error: String(error?.message || error), status: 'error' })
+    throw error
+  }
+})
+
 let mainWindow: BrowserWindow | null = null
+let embeddingsBuilding = false
 let vaultWatcher: import('chokidar').FSWatcher | null = null
 
 function startVaultWatcher(rootDir: string) {
@@ -159,8 +207,10 @@ function startVaultWatcher(rootDir: string) {
       const lower = p.toLowerCase()
       if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
       if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
-      // Skip binaries and images for indexing
-      if (!lower.endsWith('.md')) return true
+      if (lower.includes('/dist/') || lower.includes('/build/')) return true
+      if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.pdf')) return true
+      // Index only known text/code extensions
+      if (!hasIndexableExt(lower)) return true
       return false
     }
 
@@ -190,7 +240,7 @@ function startVaultWatcher(rootDir: string) {
     const onAddOrChange = (filePath: string) => {
       schedule(async () => {
         try {
-          if (!filePath.toLowerCase().endsWith('.md')) return
+          if (!hasIndexableExt(filePath)) return
           await database.ensureReady()
           const content = await readFile(filePath, 'utf-8')
           const name = path.basename(filePath)
@@ -203,7 +253,7 @@ function startVaultWatcher(rootDir: string) {
     const onUnlink = (filePath: string) => {
       schedule(async () => {
         try {
-          if (!filePath.toLowerCase().endsWith('.md')) return
+          if (!hasIndexableExt(filePath)) return
           await database.ensureReady()
           database.deleteFileByPath(filePath)
         } catch (e) {
@@ -349,6 +399,49 @@ const createWindow = (): void => {
     
     mainWindow.webContents.on('did-finish-load', () => {
       console.log('✅ [Main] Renderer loaded successfully')
+      // Auto-trigger embeddings build if missing
+      ;(async () => {
+        try {
+          if (embeddingsBuilding) return
+          await database.ensureReady()
+          const llama = LlamaService.getInstance()
+          await llama.initialize()
+          const model = llama.getCurrentModel() || 'llama3.1:latest'
+          const { embeddedCount, chunkCount } = database.getEmbeddingsStats(model)
+          if (embeddedCount < chunkCount) {
+            embeddingsBuilding = true
+            mainWindow?.webContents.send('embeddings:progress', { total: chunkCount, embedded: embeddedCount, model, status: 'starting' })
+            const batchSize = 64
+            let stagnation = 0
+            let prevEmbedded = embeddedCount
+            while (true) {
+              const batch = database.getChunksNeedingEmbeddings(model, batchSize)
+              if (!batch.length) break
+              const texts = batch.map(b => b.chunk_text)
+              const vectors = await llama.embedTexts(texts, model)
+              for (let i = 0; i < batch.length; i++) {
+                database.upsertEmbedding(batch[i].id, vectors[i] || [], model)
+              }
+              const now = database.getEmbeddingsStats(model)
+              mainWindow?.webContents.send('embeddings:progress', { total: now.chunkCount, embedded: now.embeddedCount, model, status: 'running' })
+              // Break if progress stalls to avoid busy loops under concurrent reindex
+              if (now.embeddedCount <= prevEmbedded) {
+                if (++stagnation >= 3) break
+              } else {
+                stagnation = 0
+                prevEmbedded = now.embeddedCount
+              }
+            }
+            const fin = database.getEmbeddingsStats(model)
+            mainWindow?.webContents.send('embeddings:progress', { total: fin.chunkCount, embedded: fin.embeddedCount, model, status: 'done' })
+          }
+        } catch (e) {
+          console.error('⚠️ [Main] Auto embeddings build failed:', e)
+          try { mainWindow?.webContents.send('embeddings:progress', { status: 'error', error: String(e?.message || e) }) } catch {}
+        } finally {
+          embeddingsBuilding = false
+        }
+      })()
     })
     
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -518,42 +611,6 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  // BULLETPROOF LLM service initialization
-  console.log('🤖 [Main] ========== LLM SERVICE INITIALIZATION ==========')
-  let llamaReady = false
-  try {
-    const llamaService = LlamaService.getInstance()
-    llamaService.setMainWindow(mainWindow!)
-    console.log('🤖 [Main] Attempting LLM service initialization...')
-    
-    await llamaService.initialize()
-    llamaReady = true
-    console.log('✅ [Main] LLM service initialization completed successfully')
-    console.log('🤖 [Main] AI features are READY and FUNCTIONAL')
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error)
-    console.error('❌ [Main] LLM service initialization failed:', errorMsg)
-    console.error('🔍 [Main] LLM Error details:', {
-      message: errorMsg,
-      stack: error instanceof Error ? error.stack : 'No stack trace',
-      name: error instanceof Error ? error.name : 'Unknown error'
-    })
-    
-    if (errorMsg.includes('EBADF') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('ENOTFOUND')) {
-      console.error('🌐 [Main] Network connectivity issue - Ollama service unavailable')
-      console.error('🌐 [Main] This is expected if Ollama is not installed or running')
-      console.error('🌐 [Main] App will function normally without AI features')
-    } else if (errorMsg.includes('timeout')) {
-      console.error('⏱️ [Main] LLM service timeout - Ollama may be starting up')
-      console.error('⏱️ [Main] App will function normally without AI features')
-    } else {
-      console.error('⚠️ [Main] Unexpected LLM service error')
-      console.error('⚠️ [Main] App will function normally without AI features')
-    }
-  }
-  console.log(`🤖 [Main] LLM service status: ${llamaReady ? '✅ READY' : '❌ UNAVAILABLE'}`)
-  console.log('🤖 [Main] ===============================================')
-
   // Set app menu
   if (process.platform === 'darwin') {
     // macOS menu
@@ -669,7 +726,7 @@ app.whenReady().then(async () => {
     console.log('🎯 [Main] ========== INITIALIZATION COMPLETE ==========')
     console.log(`✅ [Main] Platform: ${process.platform}`)
     console.log(`✅ [Main] Database: ${databaseReady ? 'READY' : 'UNAVAILABLE'}`)
-    console.log(`✅ [Main] LLM Service: ${llamaReady ? 'READY' : 'UNAVAILABLE'}`)
+    // LLM status removed
     console.log(`✅ [Main] Main Window: CREATED`)
     console.log('🎯 [Main] Isla Journal is READY FOR USE!')
     console.log('🎯 [Main] ================================================')
@@ -855,8 +912,13 @@ ipcMain.handle('file:openDirectory', async () => {
         console.log('⏭️ Skipping hidden file:', entry.name)
         continue
       }
-      if (entry.isFile() && !entry.name.endsWith('.md')) {
-        console.log('⏭️ Skipping non-markdown file:', entry.name)
+      if (entry.isFile()) {
+        const full = join(normalizedDirPath, entry.name)
+        if (!hasIndexableExt(full)) {
+          console.log('⏭️ Skipping non-indexable file:', entry.name)
+          continue
+        }
+      } else if (!entry.isDirectory()) {
         continue
       }
       
@@ -908,14 +970,16 @@ async function processDirectoryRecursively(dirPath: string): Promise<void> {
       
       const fullPath = join(dirPath, entry.name)
       
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile()) {
+        const full = join(dirPath, entry.name)
+        if (!hasIndexableExt(full)) continue
         try {
-          console.log('📖 [Recursive] Reading content for RAG processing:', entry.name, 'in', dirPath)
+          console.log('📖 [Recursive] Reading content for indexing:', entry.name, 'in', dirPath)
           const content = await readFile(fullPath, 'utf-8')
           
-          // Save to database with RAG chunking and FTS indexing
+          // Save to database with chunking and FTS indexing
           database.saveFile(fullPath, entry.name, content)
-          console.log('🧠 [Recursive] RAG processed:', entry.name)
+          console.log('🧠 [Recursive] Indexed:', entry.name)
         } catch (contentError) {
           console.error('⚠️ [Recursive] Failed to process content for', entry.name, ':', contentError)
         }
@@ -1092,92 +1156,33 @@ ipcMain.handle('db:reindexAll', async () => {
 })
 
 // LLM IPC handlers
-ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, content: string}>) => {
-  try {
-    const llamaService = LlamaService.getInstance()
-    // Convert messages to proper ChatMessage format
-    const chatMessages = messages.map(msg => ({
-      role: msg.role as 'user' | 'assistant' | 'system',
-      content: msg.content,
-      timestamp: new Date()
-    }))
-    return await llamaService.sendMessage(chatMessages)
-  } catch (error) {
-    console.error('❌ [IPC] Error sending message to LLM:', error)
-    throw error
-  }
-})
+// Removed: llm:sendMessage
 
 // Embeddings IPC handlers (background-ish but simple)
-ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
-  try {
-    await database.ensureReady()
-    const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel()
-    if (!model) throw new Error('No model selected for embeddings')
+// Removed: embeddings:rebuild
 
-    // Process in small batches to avoid blocking too much
-    let totalEmbedded = 0
-    for (;;) {
-      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
-      if (!batch.length) break
-
-      const texts = batch.map((b: any) => b.chunk_text)
-      const vectors = await llama.embedTexts(texts, model)
-      for (let i = 0; i < batch.length; i++) {
-        ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
-      }
-      totalEmbedded += batch.length
-    }
-    return { success: true, model, totalEmbedded }
-  } catch (error) {
-    console.error('❌ [IPC] Error rebuilding embeddings:', error)
-    throw error
-  }
-})
-
-ipcMain.handle('embeddings:stats', async (_, modelName?: string) => {
-  try {
-    await database.ensureReady()
-    const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel() || 'unknown'
-    const stats = (database as any).getEmbeddingsStats?.(model) || { embeddedCount: 0, chunkCount: 0 }
-    return { model, ...stats }
-  } catch (error) {
-    console.error('❌ [IPC] Error getting embeddings stats:', error)
-    return { model: modelName || 'unknown', embeddedCount: 0, chunkCount: 0 }
-  }
-})
+// Removed: embeddings:stats
 
 ipcMain.handle('llm:getStatus', async () => {
   try {
     const llamaService = LlamaService.getInstance()
     const currentModel = llamaService.getCurrentModel()
-    const deviceService = DeviceDetectionService.getInstance()
-    const recommendation = await deviceService.getRecommendedModel()
-    
-    console.log('🔧 [IPC] LLM Status Check:')
-    console.log('🔧 [IPC] currentModel:', currentModel)
-    console.log('🔧 [IPC] isInitialized:', currentModel !== null)
-    
     return {
-      isInitialized: currentModel !== null,
-      currentModel,
-      recommendedModel: recommendation
+      isInitialized: !!currentModel,
+      currentModel
     }
   } catch (error) {
-    console.error('❌ [IPC] Error getting LLM status:', error)
-    throw error
+    return { isInitialized: false, currentModel: null }
   }
 })
 
 ipcMain.handle('llm:getDeviceSpecs', async () => {
   try {
-    const deviceService = DeviceDetectionService.getInstance()
-    return await deviceService.getDeviceSpecs()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting device specs:', error)
-    throw error
+    const deviceModule = require('./services/deviceDetection')
+    const deviceService = deviceModule?.DeviceDetectionService?.getInstance?.()
+    return deviceService ? await deviceService.getDeviceSpecs() : null
+  } catch {
+    return null
   }
 })
 
@@ -1186,9 +1191,8 @@ ipcMain.handle('llm:switchModel', async (_, modelName: string) => {
     const llamaService = LlamaService.getInstance()
     await llamaService.switchModel(modelName)
     return true
-  } catch (error) {
-    console.error('❌ [IPC] Error switching LLM model:', error)
-    throw error
+  } catch {
+    return false
   }
 })
 
@@ -1196,18 +1200,17 @@ ipcMain.handle('llm:getCurrentModel', async () => {
   try {
     const llamaService = LlamaService.getInstance()
     return llamaService.getCurrentModel()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting current model:', error)
+  } catch {
     return null
   }
 })
 
 ipcMain.handle('llm:getRecommendedModel', async () => {
   try {
-    const deviceService = DeviceDetectionService.getInstance()
-    return await deviceService.getRecommendedModel()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting recommended model:', error)
+    const deviceModule = require('./services/deviceDetection')
+    const deviceService = deviceModule?.DeviceDetectionService?.getInstance?.()
+    return deviceService ? await deviceService.getRecommendedModel() : null
+  } catch {
     return null
   }
 })
@@ -1216,8 +1219,7 @@ ipcMain.handle('llm:getAvailableModels', async () => {
   try {
     const llamaService = LlamaService.getInstance()
     return await llamaService.getAvailableModels()
-  } catch (error) {
-    console.error('❌ [IPC] Error getting available models:', error)
+  } catch {
     return []
   }
 })
@@ -1337,21 +1339,16 @@ ipcMain.handle('content:search', async (_, query: string, limit?: number) => {
 ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: number) => {
   try {
     await database.ensureReady()
-    console.log(`🧠 [IPC] RAG search and answer: ${query}`)
-    
-    // Get recent conversation history if chatId provided
-    let conversationHistory: Array<{role: string, content: string}> = []
+    console.log(`🧠 [IPC] FTS-backed searchAndAnswer: ${query}`)
+    // Optional: collect brief conversation history for future use (not injected now)
+    let conversationHistory: Array<{ role: string, content: string }> = []
     if (chatId) {
-      const recentMessages = database.getChatMessages(chatId, 8) // Get last 8 messages
-      conversationHistory = recentMessages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }))
+      const recentMessages = database.getChatMessages(chatId, 6)
+      conversationHistory = recentMessages.map(msg => ({ role: msg.role, content: msg.content }))
     }
-    
     return await contentService.searchAndAnswer(query, conversationHistory)
   } catch (error) {
-    console.error('❌ [IPC] Error in RAG search:', error)
+    console.error('❌ [IPC] Error in searchAndAnswer:', error)
     throw error
   }
 })
@@ -1360,29 +1357,27 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
 ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?: number) => {
   try {
     await database.ensureReady()
-    const llama = LlamaService.getInstance()
-    
-    // Get recent conversation history if chatId provided
-    let conversationHistory: Array<{role: string, content: string}> = []
+    console.log(`🧠 [IPC] FTS-backed streaming: ${query}`)
+
+    // Minimal streaming: build prompt from FTS, then stream from LLM
+    let conversationHistory: Array<{ role: string, content: string }> = []
     if (chatId) {
-      const recentMessages = database.getChatMessages(chatId, 8) // Get last 8 messages
-      conversationHistory = recentMessages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }))
+      const recent = database.getChatMessages(chatId, 6)
+      conversationHistory = recent.map(m => ({ role: m.role, content: m.content }))
     }
-    
-    const { prompt, sources } = await contentService.preparePrompt(query, conversationHistory)
+    const { prompt, sources } = await contentService["preparePromptWithHybrid"](query)
+    const llama = require('./services/llamaService').LlamaService.getInstance()
+    try { await llama.initialize() } catch {}
+
     let full = ''
-    // Stream via LlamaService
-    await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
+    await llama.sendMessage([{ role: 'user', content: prompt }], (chunk: string) => {
       full += chunk
       try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
     })
     try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
     return { started: true }
   } catch (error) {
-    console.error('❌ [IPC] Error in streaming RAG:', error)
+    console.error('❌ [IPC] Error in FTS-backed streaming:', error)
     throw error
   }
 })

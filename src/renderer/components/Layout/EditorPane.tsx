@@ -13,9 +13,11 @@ interface EditorPaneProps {
   activeTab: EditorTabModel | null
   theme: string
   onChange: (value: string | undefined) => void
+  onNewEditor?: () => void
+  onRenameFile?: (newName: string) => void
 }
 
-const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange }) => {
+const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onNewEditor, onRenameFile }) => {
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -30,13 +32,41 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange }) =
   } | null>(null)
 
   if (!activeTab) {
-    return <div style={{ padding: 16, color: 'var(--text-secondary)' }}>No file open</div>
+    return (
+      <div style={{ padding: 16, color: 'var(--text-secondary)', height:'100%', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+          <div style={{ fontWeight:600 }}>Editor</div>
+          <button className="search-btn" onClick={onNewEditor}>[+] New Editor</button>
+        </div>
+        <div>No file open</div>
+      </div>
+    )
   }
 
   return (
     <div className="panel editor-panel" style={{ height: '100%', flex: 1 }}>
-      <div className="panel-header">
-        <div className="tab-bar" style={{ gap: 8, padding: 4 }}>
+      {/* Slim top bar to spawn another editor pane */}
+      <div className="panel-header" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 8px' }}>
+        <button className="search-btn" onClick={onNewEditor}>[+] New Editor</button>
+        <div style={{opacity:0.6, fontSize:12}}>{activeTab.path || activeTab.name}</div>
+      </div>
+      {/* Title input and tool bar inside editor space */}
+      <div className="panel-header" style={{ padding:'4px 8px', borderTop:'1px solid var(--border-light)' }}>
+        <input
+          className="settings-input"
+          style={{
+            width:'100%',
+            fontSize: '20px',
+            fontWeight: 700,
+            background:'transparent',
+            border:'0',
+            outline:'none',
+            padding:'8px 6px'
+          }}
+          value={activeTab.name}
+          onChange={(e)=> onRenameFile?.(e.target.value)}
+        />
+        <div className="tab-bar" style={{ gap: 6, padding: 4 }}>
           <button className="search-btn" title="Heading 1" onClick={()=>editorApiRef.current?.insertHeading?.(1)}>H1</button>
           <button className="search-btn" title="Heading 2" onClick={()=>editorApiRef.current?.insertHeading?.(2)}>H2</button>
           <button className="search-btn" title="Heading 3" onClick={()=>editorApiRef.current?.insertHeading?.(3)}>H3</button>
