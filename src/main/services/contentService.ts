@@ -71,7 +71,8 @@ class ContentService {
 
     // Retrieval (FTS/Hybrid)
     const hasFTS = typeof (database as any).searchContentFTS === 'function'
-    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 100, dateFilter) : database.searchContent(query, 100)
+
     let results: any[] = ftsResults
     try {
       const llama = LlamaService.getInstance()
@@ -81,17 +82,38 @@ class ContentService {
         const qVec = (await llama.embedTexts([query], model))[0] || []
         const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
-        const topE = scored.slice(0, 30)
+        const topE = scored.slice(0, 100)
         const merged = new Map<number, any>()
-        for (const r of ftsResults) merged.set(r.id, { ...r, sim:0, score: 0.4 * (typeof r.rank==='number'? 1/(1+r.rank): 1) })
+        // Seed with FTS with normalized inverse rank
+        ftsResults.forEach((r, idx) => merged.set(r.id, { ...r, sim:0, score: 0.35 * (typeof r.rank==='number' ? 1/(1+r.rank) : 1/(1+idx)) }))
         for (const e of topE) {
           const existing = merged.get(e.id)
           const sim = Math.max(0, e.sim)
           const eScore = 0.6 * sim
-          if (existing) { existing.sim = Math.max(existing.sim||0, sim); existing.score = (existing.score||0)+eScore; merged.set(e.id, existing) }
-          else merged.set(e.id, { ...e, rank:0, score: eScore })
+          if (existing) {
+            existing.sim = Math.max(existing.sim||0, sim)
+            existing.score = (existing.score||0) + eScore
+            merged.set(e.id, existing)
+          } else {
+            merged.set(e.id, { ...e, rank:0, score: eScore })
+          }
         }
-        results = Array.from(merged.values()).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,20)
+        // Light recency boost if we have file_mtime in results (may be absent here)
+        const mergedArr = Array.from(merged.values())
+        // Cap per file to avoid single-file dominance
+        const perFileCap = 3
+        const byFile = new Map<string, number>()
+        const capped: any[] = []
+        for (const r of mergedArr.sort((a,b)=>(b.score||0)-(a.score||0))) {
+          const key = `${r.file_path}`
+          const count = byFile.get(key) || 0
+          if (count < perFileCap) {
+            capped.push(r)
+            byFile.set(key, count + 1)
+          }
+          if (capped.length >= 12) break
+        }
+        results = capped
       }
     } catch {}
 
@@ -166,7 +188,7 @@ class ContentService {
 
       // 2. Retrieval: FTS + embeddings hybrid if available
       const hasFTS = typeof (database as any).searchContentFTS === 'function'
-      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 100, dateFilter) : database.searchContent(query, 100)
 
       let hybridResults: any[] = ftsResults
       try {
@@ -176,7 +198,7 @@ class ContentService {
           const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
           // Build query vector
           const qVec = (await llama.embedTexts([query], model))[0] || []
-          // Score top-N embeddings
+          // Score ALL embeddings
           const scored = allEmb.map(e => ({
             id: e.chunk_id,
             file_id: e.file_id,
@@ -186,16 +208,16 @@ class ContentService {
             sim: cosineSimilarity(qVec, e.vector)
           }))
           scored.sort((a,b) => b.sim - a.sim)
-          const topE = scored.slice(0, 30)
+          const topE = scored.slice(0, 100)
 
-          // Merge with FTS: weighted score: 0.6*sim + 0.4*(normalized BM25 inverse)
+          // Merge with FTS: weighted score: 0.6*sim + 0.35*(normalized BM25 inverse)
           const ftsMap = new Map<number, any>()
           ftsResults.forEach((r, idx) => ftsMap.set(r.id, { ...r, ftsRank: 1/(1+idx) }))
 
           const merged = new Map<number, any>()
           // Seed with FTS
           for (const r of ftsResults) {
-            merged.set(r.id, { ...r, sim: 0, score: 0.4 * (typeof r.rank === 'number' ? 1/(1+r.rank) : r.ftsRank || 1) })
+            merged.set(r.id, { ...r, sim: 0, score: 0.35 * (typeof r.rank === 'number' ? 1/(1+r.rank) : r.ftsRank || 1) })
           }
           // Add embeddings
           for (const e of topE) {
@@ -204,16 +226,28 @@ class ContentService {
             const eScore = 0.6 * sim
             if (existing) {
               existing.sim = Math.max(existing.sim || 0, sim)
-              existing.score = Math.max(existing.score || 0, existing.score + eScore)
+              existing.score = Math.max(existing.score || 0, (existing.score || 0) + eScore)
               merged.set(e.id, existing)
             } else {
               merged.set(e.id, { ...e, rank: 0, ftsRank: 0, score: eScore })
             }
           }
 
-          hybridResults = Array.from(merged.values())
-          hybridResults.sort((a,b) => (b.score || 0) - (a.score || 0))
-          hybridResults = hybridResults.slice(0, 20)
+          // Sort and cap
+          const mergedArr = Array.from(merged.values()).sort((a,b) => (b.score || 0) - (a.score || 0))
+          const perFileCap = 3
+          const byFile = new Map<string, number>()
+          const capped: any[] = []
+          for (const r of mergedArr) {
+            const key = `${r.file_path}`
+            const count = byFile.get(key) || 0
+            if (count < perFileCap) {
+              capped.push(r)
+              byFile.set(key, count + 1)
+            }
+            if (capped.length >= 12) break
+          }
+          hybridResults = capped
         }
       } catch (e) {
         console.log('⚠️ [ContentService] Hybrid retrieval fallback:', e)

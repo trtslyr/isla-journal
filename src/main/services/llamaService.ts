@@ -342,7 +342,12 @@ export class LlamaService {
       for (const t of texts) {
         const res: any = await (this.ollama as any).embeddings({ model, prompt: t })
         const v: number[] = res?.embedding || res?.data?.[0]?.embedding || []
-        vectors.push(v)
+        // L2 normalize for stable cosine similarity
+        let norm = 0
+        for (let i = 0; i < v.length; i++) norm += v[i] * v[i]
+        norm = Math.sqrt(norm) || 1
+        const normalized = v.map(x => x / norm)
+        vectors.push(normalized)
       }
       return vectors
     } catch (error) {
