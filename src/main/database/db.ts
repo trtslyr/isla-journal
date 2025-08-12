@@ -1067,6 +1067,59 @@ class IslaDatabase {
   // fixDatabaseSchema method removed - no longer needed without FTS
 
   /**
+   * Delete a file and its related data by path
+   */
+  public deleteFileByPath(filePath: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const normalizedPath = this.normalizeFilePath(filePath)
+
+    const transaction = this.db.transaction(() => {
+      // Find file id first (for logging/debug)
+      const fileRecord = this.db!.prepare('SELECT id, name FROM files WHERE path = ?').get(normalizedPath) as { id: number; name: string } | undefined
+      if (!fileRecord) {
+        return
+      }
+      // Deleting from files cascades to content_chunks and search_index via FK
+      this.db!.prepare('DELETE FROM files WHERE id = ?').run(fileRecord.id)
+    })
+
+    transaction()
+  }
+
+  /**
+   * Update a file's path and optionally name without re-saving content
+   */
+  public updateFilePath(oldPath: string, newPath: string, newName?: string): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const normalizedOld = this.normalizeFilePath(oldPath)
+    const normalizedNew = this.normalizeFilePath(newPath)
+    const nameToSet = newName ?? path.basename(normalizedNew)
+
+    const stmt = this.db.prepare(
+      'UPDATE files SET path = ?, name = ?, modified_at = CURRENT_TIMESTAMP WHERE path = ?'
+    )
+    stmt.run(normalizedNew, nameToSet, normalizedOld)
+  }
+
+  /**
+   * Clear all messages for a chat without deleting the chat itself
+   */
+  public clearChatMessages(chatId: number): void {
+    if (!this.db) throw new Error('Database not initialized')
+
+    const stmt = this.db.prepare('DELETE FROM chat_messages WHERE chat_id = ?')
+    stmt.run(chatId)
+
+    // Update chat timestamp
+    const updateChat = this.db.prepare('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    updateChat.run(chatId)
+  }
+
+  // fixDatabaseSchema method removed - no longer needed without FTS
+
+  /**
    * Close database connection with Windows-specific cleanup
    */
   public close(): void {
