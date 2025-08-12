@@ -7,6 +7,7 @@ import { FileTree } from './components/FileTree'
 import Settings from './components/Settings'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
+import StatusBar from './components/Layout/StatusBar'
 
 interface ChatMessage {
   id: string
@@ -786,11 +787,18 @@ const App: React.FC = () => {
         />
  
         {/* Center Panel - Editor */}
-        <EditorPane
-          activeTab={activeTab || null}
-          theme={currentTheme}
-          onChange={handleEditorChange}
-        />
+        <div style={{ display:'flex', flex:1, flexDirection:'column', minWidth:0 }}>
+          <div style={{ flex:1, display:'flex', justifyContent:'center', overflow:'hidden' }}>
+            <div style={{ flex:1, maxWidth: 900 }}>
+              <EditorPane
+                activeTab={activeTab || null}
+                theme={currentTheme}
+                onChange={handleEditorChange}
+              />
+            </div>
+          </div>
+          <StatusBar activeFilePath={activeTab?.path || null} content={activeTab?.content || ''} />
+        </div>
 
         {/* Right Panel - AI Chat */}
         <div 
