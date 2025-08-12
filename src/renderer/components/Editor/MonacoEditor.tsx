@@ -8,6 +8,14 @@ interface MonacoEditorProps {
   language?: string
   readOnly?: boolean
   theme?: string // Add theme prop
+  onReady?: (api: {
+    wrapSelection: (prefix: string, suffix?: string) => void
+    toggleBold: () => void
+    toggleItalic: () => void
+    insertLink: () => void
+    insertList: (type: 'bullet' | 'number' | 'check') => void
+    insertCodeBlock: () => void
+  }) => void
 }
 
 const MonacoEditor: React.FC<MonacoEditorProps> = ({
@@ -15,9 +23,58 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
   onChange,
   language = 'markdown',
   readOnly = false,
-  theme = 'dark' // Default to dark theme
+  theme = 'dark', // Default to dark theme
+  onReady
 }) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+
+  const exposeCommands = () => {
+    if (!editorRef.current || !onReady) return
+    const editor = editorRef.current
+
+    const wrapSelection = (prefix: string, suffix?: string) => {
+      const model = editor.getModel()
+      if (!model) return
+      const sel = editor.getSelection()
+      if (!sel) return
+      const text = model.getValueInRange(sel)
+      const after = `${prefix}${text}${suffix ?? prefix}`
+      editor.executeEdits('wrap', [{ range: sel, text: after, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const toggleBold = () => wrapSelection('**')
+    const toggleItalic = () => wrapSelection('*')
+
+    const insertLink = () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel) || 'text'
+      const md = `[${text}](https://)`
+      editor.executeEdits('link', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertList = (type: 'bullet' | 'number' | 'check') => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const prefix = type === 'bullet' ? '- ' : type === 'number' ? '1. ' : '- [ ] '
+      const md = `${prefix}${model.getValueInRange(sel)}`
+      editor.executeEdits('list', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    const insertCodeBlock = () => {
+      const model = editor.getModel(); if (!model) return
+      const sel = editor.getSelection(); if (!sel) return
+      const text = model.getValueInRange(sel)
+      const md = '```\n' + (text || '') + '\n```\n'
+      editor.executeEdits('code', [{ range: sel, text: md, forceMoveMarkers: true }])
+      editor.focus()
+    }
+
+    onReady({ wrapSelection, toggleBold, toggleItalic, insertLink, insertList, insertCodeBlock })
+  }
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor
@@ -40,6 +97,42 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       selectOnLineNumbers: false,
       automaticLayout: true,
     })
+
+    // Paste image handler
+    editor.onPaste(async (e) => {
+      try {
+        const dt = (e.event as ClipboardEvent).clipboardData
+        if (!dt) return
+        const items = Array.from(dt.items)
+        const imgItem = items.find(it => it.type.startsWith('image/'))
+        if (!imgItem) return
+
+        const blob = imgItem.getAsFile()
+        if (!blob) return
+        const arrayBuffer = await blob.arrayBuffer()
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
+
+        // Determine save directory: try current file directory from parent context if exposed
+        // As a fallback, save next to selectedDirectory root
+        const rootDir = await (window as any).electronAPI?.settingsGet?.('selectedDirectory')
+        if (!rootDir) return
+
+        const ext = blob.type.split('/')[1] || 'png'
+        const savedPath = await (window as any).electronAPI?.saveImage?.(rootDir, 'image', base64, ext)
+        if (!savedPath) return
+
+        const fileUri = `file://${savedPath.replace(/\\/g, '/')}`
+        const md = `![](${fileUri})`
+
+        const sel = editor.getSelection()
+        const range = sel || editor.getModel()!.getFullModelRange()
+        editor.executeEdits('paste-image', [{ range, text: md, forceMoveMarkers: true }])
+      } catch (err) {
+        console.error('Paste image failed:', err)
+      }
+    })
+
+    exposeCommands()
   }
 
   // Watch for font setting changes and update editor

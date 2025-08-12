@@ -23,6 +23,7 @@ const isDev = process.env.NODE_ENV === 'development' && !app.isPackaged
 import { database } from './database'
 import { LlamaService } from './services/llamaService'
 import { contentService } from './services/contentService'
+import chokidar from 'chokidar'
 
 // Conditionally import DeviceDetectionService to prevent Wine crashes
 let DeviceDetectionService: any
@@ -47,6 +48,59 @@ try {
         })
       }
     }
+  }
+}
+
+// Simple file logger setup for production
+async function setupFileLogging(): Promise<void> {
+  if (isDev) return
+
+  const debugEnabled = !!process.env.DEBUG
+  try {
+    const { mkdir, appendFile, stat: fsStat, rename } = await import('fs/promises')
+    const { join } = await import('path')
+
+    const logsDir = join(app.getPath('userData'), 'logs')
+    await mkdir(logsDir, { recursive: true })
+    const logFilePath = join(logsDir, 'isla.log')
+
+    const writeLine = async (level: 'log' | 'warn' | 'error', msg: any[]) => {
+      try {
+        const timestamp = new Date().toISOString()
+        const text = msg.map(m => (typeof m === 'string' ? m : JSON.stringify(m))).join(' ')
+        const line = `${timestamp} [${level.toUpperCase()}] ${text}\n`
+
+        // Rotate if > 5MB
+        try {
+          const st = await fsStat(logFilePath).catch(() => null)
+          if (st && st.size > 5 * 1024 * 1024) {
+            const rotated = join(logsDir, 'isla.log.1')
+            await rename(logFilePath, rotated).catch(() => {})
+          }
+        } catch {}
+
+        await appendFile(logFilePath, line)
+      } catch {}
+    }
+
+    const originalLog = console.log
+    const originalWarn = console.warn
+    const originalError = console.error
+
+    console.log = (...args: any[]) => {
+      if (debugEnabled) writeLine('log', args)
+      try { originalLog.apply(console, args) } catch {}
+    }
+    console.warn = (...args: any[]) => {
+      writeLine('warn', args)
+      try { originalWarn.apply(console, args) } catch {}
+    }
+    console.error = (...args: any[]) => {
+      writeLine('error', args)
+      try { originalError.apply(console, args) } catch {}
+    }
+  } catch {
+    // Best-effort only
   }
 }
 
@@ -92,6 +146,50 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 let mainWindow: BrowserWindow | null = null
+let vaultWatcher: import('chokidar').FSWatcher | null = null
+
+function startVaultWatcher(rootDir: string) {
+  try {
+    // Close previous watcher
+    if (vaultWatcher) {
+      vaultWatcher.close().catch(() => {})
+      vaultWatcher = null
+    }
+    const ignored = (p: string) => {
+      const lower = p.toLowerCase()
+      if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
+      if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
+      // Skip binaries and images for indexing
+      if (!lower.endsWith('.md')) return true
+      return false
+    }
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    const onAddOrChange = async (filePath: string) => {
+      try {
+        if (!filePath.toLowerCase().endsWith('.md')) return
+        const content = await readFile(filePath, 'utf-8')
+        const name = path.basename(filePath)
+        database.saveFile(filePath, name, content)
+      } catch (e) {
+        console.error('Watcher add/change failed:', e)
+      }
+    }
+    const onUnlink = async (filePath: string) => {
+      try {
+        if (!filePath.toLowerCase().endsWith('.md')) return
+        database.deleteFileByPath(filePath)
+      } catch (e) {
+        console.error('Watcher unlink failed:', e)
+      }
+    }
+    vaultWatcher.on('add', onAddOrChange)
+    vaultWatcher.on('change', onAddOrChange)
+    vaultWatcher.on('unlink', onUnlink)
+    console.log('👀 [Watcher] Started for:', rootDir)
+  } catch (e) {
+    console.error('❌ [Watcher] Failed to start:', e)
+  }
+}
 
 const createWindow = (): void => {
   // Determine icon path
@@ -126,10 +224,10 @@ const createWindow = (): void => {
         allowRunningInsecureContent: false
       }),
       ...(!isDev && {
-        webSecurity: false, // Disable web security for packaged apps (all platforms)
-        allowRunningInsecureContent: true, // Allow local file loading
-        enableRemoteModule: false, // Security: disable remote module
-        nodeIntegrationInWorker: false // Security: disable node in workers
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        enableRemoteModule: false,
+        nodeIntegrationInWorker: false
       })
     }
   })
@@ -307,8 +405,10 @@ const createWindow = (): void => {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
     
-    // Force open dev tools for debugging Windows issues
-    mainWindow?.webContents.openDevTools()
+    // Do not auto-open DevTools in production
+    if (isDev) {
+      mainWindow?.webContents.openDevTools()
+    }
   })
 
   // Handle external links
@@ -321,6 +421,8 @@ const createWindow = (): void => {
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   try {
+    // Set up file logging in production and gate verbose logs
+    await setupFileLogging()
     // BULLETPROOF Windows diagnostics and error handling
     console.log('🚀 [Main] ========== ISLA JOURNAL WINDOWS INITIALIZATION ==========')
     console.log(`🪟 [Main] Platform: ${process.platform}`)
@@ -515,7 +617,7 @@ app.whenReady().then(async () => {
         submenu: [
           { role: 'reload' },
           { role: 'forceReload' },
-          { role: 'toggleDevTools' },
+          ...(isDev ? [{ role: 'toggleDevTools' } as const] : []),
           { type: 'separator' },
           { role: 'resetZoom' },
           { role: 'zoomIn' },
@@ -700,6 +802,10 @@ ipcMain.handle('file:openDirectory', async () => {
     if (isRootDirectoryChange) {
       database.setSetting('selectedDirectory', normalizedDirPath)
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
+      // Start watcher
+      startVaultWatcher(normalizedDirPath)
+      // Notify renderer of settings change
+      try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
     
     const entries = await readdir(normalizedDirPath, { withFileTypes: true })
@@ -982,6 +1088,47 @@ ipcMain.handle('llm:sendMessage', async (_, messages: Array<{role: string, conte
   }
 })
 
+// Embeddings IPC handlers (background-ish but simple)
+ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const model = modelName || llama.getCurrentModel()
+    if (!model) throw new Error('No model selected for embeddings')
+
+    // Process in small batches to avoid blocking too much
+    let totalEmbedded = 0
+    for (;;) {
+      const batch = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+      if (!batch.length) break
+
+      const texts = batch.map((b: any) => b.chunk_text)
+      const vectors = await llama.embedTexts(texts, model)
+      for (let i = 0; i < batch.length; i++) {
+        ;(database as any).upsertEmbedding?.(batch[i].id, vectors[i], model)
+      }
+      totalEmbedded += batch.length
+    }
+    return { success: true, model, totalEmbedded }
+  } catch (error) {
+    console.error('❌ [IPC] Error rebuilding embeddings:', error)
+    throw error
+  }
+})
+
+ipcMain.handle('embeddings:stats', async (_, modelName?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const model = modelName || llama.getCurrentModel() || 'unknown'
+    const stats = (database as any).getEmbeddingsStats?.(model) || { embeddedCount: 0, chunkCount: 0 }
+    return { model, ...stats }
+  } catch (error) {
+    console.error('❌ [IPC] Error getting embeddings stats:', error)
+    return { model: modelName || 'unknown', embeddedCount: 0, chunkCount: 0 }
+  }
+})
+
 ipcMain.handle('llm:getStatus', async () => {
   try {
     const llamaService = LlamaService.getInstance()
@@ -1189,6 +1336,26 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
   }
 })
 
+// Streaming RAG
+ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?: number) => {
+  try {
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    const { prompt, sources } = await contentService.preparePrompt(query, [])
+    let full = ''
+    // Stream via LlamaService
+    await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
+      full += chunk
+      try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
+    })
+    try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
+    return { started: true }
+  } catch (error) {
+    console.error('❌ [IPC] Error in streaming RAG:', error)
+    throw error
+  }
+})
+
 ipcMain.handle('content:getFile', async (_, fileId: number) => {
   try {
     await database.ensureReady()
@@ -1230,6 +1397,12 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
   try {
     await database.ensureReady()
     database.setSetting(key, value)
+    // Emit change event to renderer
+    try { mainWindow?.webContents.send('settings:changed', { key, value }) } catch {}
+    // If root directory changed via settings, (re)start watcher
+    if (key === 'selectedDirectory' && typeof value === 'string' && value) {
+      startVaultWatcher(value)
+    }
     return true
   } catch (error) {
     console.error('❌ [IPC] Error setting value:', error)
@@ -1250,34 +1423,34 @@ ipcMain.handle('settings:getAll', async () => {
   }
 })
 
-// File system operations - Delete
-ipcMain.handle('file:delete', async (_, filePath: string) => {
-  try {
-    const { unlink, rmdir } = await import('fs/promises')
-    const stats = await stat(filePath)
-    
-    if (stats.isDirectory()) {
-      // For directories, use recursive removal
-      await rmdir(filePath, { recursive: true })
-      console.log('🗑️ [IPC] Directory deleted:', filePath)
-    } else {
-      // For files
-      await unlink(filePath)
-      console.log('🗑️ [IPC] File deleted:', filePath)
+  // File system operations - Delete
+  ipcMain.handle('file:delete', async (_, filePath: string) => {
+    try {
+      const { unlink, rmdir } = await import('fs/promises')
+      const stats = await stat(filePath)
       
-      // Remove from database if it was a markdown file
-      if (filePath.endsWith('.md')) {
-        // TODO: Add method to remove file from database
-        console.log('🗑️ [Database] Should remove from index:', filePath)
+      if (stats.isDirectory()) {
+        // For directories, use recursive removal
+        await rmdir(filePath, { recursive: true })
+        console.log('🗑️ [IPC] Directory deleted:', filePath)
+      } else {
+        // For files
+        await unlink(filePath)
+        console.log('🗑️ [IPC] File deleted:', filePath)
+        
+        // Remove from database if it was a markdown file
+        if (filePath.endsWith('.md')) {
+          database.deleteFileByPath(filePath)
+          console.log('🗑️ [Database] Removed from index:', filePath)
+        }
       }
+      
+      return true
+    } catch (error) {
+      console.error('❌ [IPC] Error deleting file/directory:', error)
+      throw error
     }
-    
-    return true
-  } catch (error) {
-    console.error('❌ [IPC] Error deleting file/directory:', error)
-    throw error
-  }
-})
+  })
 
 // File system operations - Rename/Move
 ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
@@ -1304,12 +1477,8 @@ ipcMain.handle('file:rename', async (_, oldPath: string, newName: string) => {
     // Update database if it was a markdown file
     if (oldPath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
+        database.updateFilePath(oldPath, newPath, fileName)
         console.log('📝 [Database] Updated index for renamed file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after rename:', dbError)
@@ -1353,12 +1522,8 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     // Update database if it was a markdown file
     if (sourcePath.endsWith('.md') && newPath.endsWith('.md')) {
       try {
-        const content = await readFile(newPath, 'utf-8')
         const fileName = path.basename(newPath)
-        
-        // Remove old entry and add new one
-        // TODO: Add method to update file path in database
-        database.saveFile(newPath, fileName, content)
+        database.updateFilePath(sourcePath, newPath, fileName)
         console.log('📝 [Database] Updated index for moved file:', fileName)
       } catch (dbError) {
         console.error('⚠️ [Database] Failed to update index after move:', dbError)
@@ -1368,6 +1533,31 @@ ipcMain.handle('file:move', async (_, sourcePath: string, targetDirectoryPath: s
     return { success: true, newPath }
   } catch (error) {
     console.error('❌ [IPC] Error moving file/directory:', error)
+    throw error
+  }
+})
+
+// Image save helper
+ipcMain.handle('file:saveImage', async (_, dirPath: string, baseName: string, dataBase64: string, ext: string) => {
+  try {
+    const safeExt = (ext || 'png').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+    const fileName = `${baseName.replace(/[^a-zA-Z0-9-_]/g, '_')}_${Date.now()}.${safeExt}`
+    const fullDir = dirPath
+    const fullPath = join(fullDir, fileName)
+
+    // Ensure directory exists
+    try { await mkdir(fullDir, { recursive: true }) } catch {}
+
+    // Strip data URL prefix if provided
+    const commaIdx = dataBase64.indexOf(',')
+    const payload = commaIdx >= 0 ? dataBase64.slice(commaIdx + 1) : dataBase64
+    const buf = Buffer.from(payload, 'base64')
+
+    await writeFile(fullPath, buf)
+    console.log('🖼️ [IPC] Image saved:', fullPath)
+    return fullPath
+  } catch (error) {
+    console.error('❌ [IPC] Error saving image:', error)
     throw error
   }
 })
