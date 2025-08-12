@@ -11,7 +11,7 @@ const electronAPI = {
   readDirectory: (path: string) => ipcRenderer.invoke('file:readDirectory', path),
   readFile: (path: string) => ipcRenderer.invoke('file:readFile', path),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('file:writeFile', path, content),
-  createFile: (dirPath: string, fileName: string, content: string) => 
+  createFile: (dirPath: string, fileName: string, content?: string) => 
     ipcRenderer.invoke('file:createFile', dirPath, fileName, content),
   createDirectory: (dirPath: string, dirName: string) => 
     ipcRenderer.invoke('file:createDirectory', dirPath, dirName),
@@ -29,9 +29,9 @@ const electronAPI = {
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   
   // RAG/Content search
-  searchContent: (query: string) => ipcRenderer.invoke('content:search', query),
+  searchContent: (query: string, limit?: number) => ipcRenderer.invoke('content:search', query, limit),
   answerQuestion: (query: string, history?: Array<{role: string, content: string}>) => 
-    ipcRenderer.invoke('content:answer', query, history),
+    ipcRenderer.invoke('content:searchAndAnswer', query),
   contentSearchAndAnswer: (query: string, chatId?: number) => 
     ipcRenderer.invoke('content:searchAndAnswer', query, chatId),
     
