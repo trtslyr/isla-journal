@@ -151,6 +151,16 @@ let vaultWatcher: import('chokidar').FSWatcher | null = null
 // Embeddings background builder
 let embeddingsDebounceTimer: NodeJS.Timeout | null = null
 let embeddingsBuilding = false
+
+// Indexable file types
+const indexableExtensions = new Set(['.md', '.mdx', '.txt'])
+function isIndexableFile(name: string): boolean {
+  const i = name.lastIndexOf('.')
+  if (i < 0) return false
+  const ext = name.slice(i).toLowerCase()
+  return indexableExtensions.has(ext)
+}
+
 async function scheduleEmbeddingsBuild(reason: string) {
   try { console.log(`🧮 [Embeddings] Schedule build (${reason})`) } catch {}
   if (embeddingsDebounceTimer) clearTimeout(embeddingsDebounceTimer)
@@ -201,13 +211,13 @@ function startVaultWatcher(rootDir: string) {
       if (lower.includes('/.git/') || lower.endsWith('/.git')) return true
       if (lower.includes('/node_modules/') || lower.endsWith('/node_modules')) return true
       // Skip binaries and images for indexing
-      if (!lower.endsWith('.md')) return true
+      if (!isIndexableFile(lower)) return true
       return false
     }
     vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
     const onAddOrChange = async (filePath: string) => {
       try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
+        if (!isIndexableFile(filePath)) return
         const content = await readFile(filePath, 'utf-8')
         const name = path.basename(filePath)
         database.saveFile(filePath, name, content)
@@ -218,7 +228,7 @@ function startVaultWatcher(rootDir: string) {
     }
     const onUnlink = async (filePath: string) => {
       try {
-        if (!filePath.toLowerCase().endsWith('.md')) return
+        if (!isIndexableFile(filePath)) return
         database.deleteFileByPath(filePath)
         scheduleEmbeddingsBuild('watcher:unlink')
       } catch (e) {
@@ -878,6 +888,17 @@ ipcMain.handle('file:openDirectory', async () => {
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
       // Start watcher
       startVaultWatcher(normalizedDirPath)
+      // Kick off a background full recursive index (non-blocking)
+      ;(async ()=>{
+        try {
+          console.log('🔄 [Indexer] Starting background recursive indexing...')
+          await processDirectoryRecursively(normalizedDirPath)
+          console.log('✅ [Indexer] Background recursive indexing complete')
+          scheduleEmbeddingsBuild('initial-recursive-index')
+        } catch (e) {
+          console.error('❌ [Indexer] Background recursive indexing failed:', e)
+        }
+      })()
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
@@ -891,13 +912,13 @@ ipcMain.handle('file:openDirectory', async () => {
       
       console.log('🔍 Processing:', entry.name, 'Type:', entry.isDirectory() ? 'directory' : 'file')
       
-      // Skip hidden files and non-markdown files (except directories)
+      // Skip hidden files and non-indexable files (except directories)
       if (entry.name.startsWith('.')) {
         console.log('⏭️ Skipping hidden file:', entry.name)
         continue
       }
-      if (entry.isFile() && !entry.name.endsWith('.md')) {
-        console.log('⏭️ Skipping non-markdown file:', entry.name)
+      if (entry.isFile() && !isIndexableFile(entry.name)) {
+        console.log('⏭️ Skipping non-indexable file:', entry.name)
         continue
       }
       
@@ -913,7 +934,7 @@ ipcMain.handle('file:openDirectory', async () => {
       }
       
       // ✅ SMART INCREMENTAL RAG PROCESSING - Only process new/changed files
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile() && isIndexableFile(entry.name)) {
         try {
           const needsProcessing = database.needsProcessing(fullPath, stats.mtime)
           
@@ -975,7 +996,7 @@ async function processDirectoryRecursively(dirPath: string): Promise<void> {
       
       const fullPath = join(dirPath, entry.name)
       
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile() && isIndexableFile(entry.name)) {
         try {
           console.log('📖 [Recursive] Reading content for RAG processing:', entry.name, 'in', dirPath)
           const content = await readFile(fullPath, 'utf-8')
@@ -1481,6 +1502,16 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
     // If root directory changed via settings, (re)start watcher
     if (key === 'selectedDirectory' && typeof value === 'string' && value) {
       startVaultWatcher(value)
+    }
+    // If embeddingsModel changed, ensure available and rebuild
+    if (key === 'embeddingsModel' && typeof value === 'string' && value) {
+      try {
+        const llama = LlamaService.getInstance()
+        await llama.ensureEmbeddingsModelAvailable(value, (p, s)=>{ try{ mainWindow?.webContents.send('embeddings:downloadProgress', { model: value, progress: p, status: s }) } catch{} })
+      } catch (e) {
+        console.warn('⚠️ [IPC] Could not ensure embeddings model availability:', e)
+      }
+      scheduleEmbeddingsBuild('settings:embeddingsModelChanged')
     }
     return true
   } catch (error) {

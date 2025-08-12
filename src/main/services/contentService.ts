@@ -1,6 +1,5 @@
 import { database } from '../database'
 import { LlamaService } from './llamaService'
-import { readFile } from 'fs/promises'
 import { normalize, resolve } from 'path'
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -59,8 +58,9 @@ class ContentService {
           if (item.type === 'file' && item.path.endsWith('.md')) {
             try {
               const normalizedPath = normalize(resolve(item.path))
-              const content = await readFile(normalizedPath, 'utf-8')
-              const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
+                              const dbFile = database.getFile(normalizedPath)
+                const content = dbFile?.content || ''
+                const snippet = content.length > 300 ? content.substring(0, 300) + '...' : content
               pinnedSources.push(`[📌 Pinned: "${item.name}"]: ${snippet}`)
             } catch {}
           }
