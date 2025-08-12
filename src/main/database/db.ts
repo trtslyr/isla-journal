@@ -61,6 +61,7 @@ export interface ChatMessageRecord {
   role: 'user' | 'assistant' | 'system'
   content: string
   created_at: string
+  metadata?: string | null
 }
 
 export interface AppSettings {
@@ -436,6 +437,7 @@ class IslaDatabase {
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
         content TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        metadata TEXT,
         FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE
       )
     `)
@@ -490,6 +492,17 @@ class IslaDatabase {
       } catch (e) {
         console.warn('⚠️ [Database] Failed to add note_date:', e)
       }
+    }
+
+    // Add metadata to chat_messages if missing
+    try {
+      const chatCols: Array<{name: string}> = this.db.prepare("PRAGMA table_info(chat_messages)").all() as any
+      const hasMetadata = chatCols.some(c => c.name === 'metadata')
+      if (!hasMetadata) {
+        this.db.exec("ALTER TABLE chat_messages ADD COLUMN metadata TEXT")
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to ensure chat_messages.metadata:', e)
     }
 
     // Indexes for new columns
@@ -1062,16 +1075,17 @@ class IslaDatabase {
   /**
    * Add message to chat
    */
-  public addChatMessage(chatId: number, role: 'user' | 'assistant' | 'system', content: string): ChatMessageRecord {
+  public addChatMessage(chatId: number, role: 'user' | 'assistant' | 'system', content: string, metadata?: any): ChatMessageRecord {
     if (!this.db) throw new Error('Database not initialized')
 
     const transaction = this.db.transaction(() => {
       // Insert message
       const insertMessage = this.db!.prepare(`
-        INSERT INTO chat_messages (chat_id, role, content) 
-        VALUES (?, ?, ?)
+        INSERT INTO chat_messages (chat_id, role, content, metadata) 
+        VALUES (?, ?, ?, ?)
       `)
-      const result = insertMessage.run(chatId, role, content)
+      const metadataString = metadata == null ? null : JSON.stringify(metadata)
+      const result = insertMessage.run(chatId, role, content, metadataString)
 
       // Update chat timestamp
       const updateChat = this.db!.prepare('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -1094,7 +1108,7 @@ class IslaDatabase {
     if (limit) {
       // For conversation context - get recent messages in reverse chronological order
       const stmt = this.db.prepare(`
-        SELECT id, chat_id, role, content, created_at 
+        SELECT id, chat_id, role, content, created_at, metadata 
         FROM chat_messages 
         WHERE chat_id = ? 
         ORDER BY created_at DESC 
@@ -1107,7 +1121,7 @@ class IslaDatabase {
       return messages.reverse()
     } else {
       // Original functionality - get all messages in chronological order
-      const query = this.db.prepare('SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC')
+      const query = this.db.prepare('SELECT id, chat_id, role, content, created_at, metadata FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC')
       return query.all(chatId) as ChatMessageRecord[]
     }
   }

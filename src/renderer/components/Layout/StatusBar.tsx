@@ -10,6 +10,9 @@ const StatusBar: React.FC<Props> = ({ activeFilePath, content }) => {
   const [embStats, setEmbStats] = useState<{ embeddedCount: number; chunkCount: number } | null>(null)
   const [saving, setSaving] = useState<boolean>(false)
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
+  const [cursor, setCursor] = useState<{ line: number; column: number }>({ line: 1, column: 1 })
+  const [selection, setSelection] = useState<{ chars: number; words: number }>({ chars: 0, words: 0 })
+  const [wrap, setWrap] = useState<boolean>(true)
 
   // Document stats
   const stats = useMemo(() => {
@@ -48,6 +51,39 @@ const StatusBar: React.FC<Props> = ({ activeFilePath, content }) => {
     return () => clearTimeout(id)
   }, [content])
 
+  // Receive cursor and selection from editor (wired in Monaco onDidChangeCursorSelection emitting a custom event)
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      const { lineNumber, column, selectionText } = e.detail || {}
+      setCursor({ line: lineNumber || 1, column: column || 1 })
+      const chars = (selectionText || '').length
+      const words = (selectionText || '').trim() ? (selectionText.trim().match(/\b\w+\b/g) || []).length : 0
+      setSelection({ chars, words })
+    }
+    window.addEventListener('isla:cursor', handler as any)
+    return () => window.removeEventListener('isla:cursor', handler as any)
+  }, [])
+
+  // Load wrap from settings
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await window.electronAPI?.settingsGet?.('editorWordWrap')
+        if (raw != null) setWrap(raw === 'on')
+      } catch {}
+    })()
+  }, [])
+
+  const toggleWrap = async () => {
+    const next = !wrap
+    setWrap(next)
+    try {
+      await window.electronAPI?.settingsSet?.('editorWordWrap', next ? 'on' : 'off')
+      // Notify editor via custom event to update options
+      window.dispatchEvent(new CustomEvent('isla:editorOption', { detail: { wordWrap: next ? 'on' : 'off' } }))
+    } catch {}
+  }
+
   const coverage = embStats && embStats.chunkCount > 0
     ? Math.round((embStats.embeddedCount / embStats.chunkCount) * 100)
     : 0
@@ -72,9 +108,12 @@ const StatusBar: React.FC<Props> = ({ activeFilePath, content }) => {
 
       {/* Center */}
       <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        <span>Ln {cursor.line}, Col {cursor.column}</span>
+        {selection.chars > 0 && <span>Sel {selection.words}w/{selection.chars}c</span>}
         <span>{stats.words} words</span>
         <span>{stats.chars} chars</span>
         <span>{stats.minutes} min read</span>
+        <button className="search-btn" title="Toggle word wrap" onClick={toggleWrap}>{wrap ? 'Wrap: on' : 'Wrap: off'}</button>
       </div>
 
       {/* Right */}

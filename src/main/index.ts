@@ -1260,10 +1260,10 @@ ipcMain.handle('chat:setActive', async (_, chatId: number) => {
   }
 })
 
-ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string) => {
+ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string, metadata?: any) => {
   try {
     await database.ensureReady()
-    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content)
+    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content, metadata)
   } catch (error) {
     console.error('❌ [IPC] Error adding chat message:', error)
     throw error
@@ -1331,13 +1331,10 @@ ipcMain.handle('content:searchAndAnswer', async (_, query: string, chatId?: numb
     
     const result = await contentService.searchAndAnswer(query, conversationHistory)
 
-    // Persist assistant message with sources if chatId present
+    // Persist assistant message with structured sources if chatId present
     if (chatId && typeof database.addChatMessage === 'function') {
       try {
-        const sourcesText = result.sources && result.sources.length
-          ? `\n\nSources:\n${result.sources.map((s, i)=>`(${i+1}) ${s.file_name}`).join('\n')}`
-          : ''
-        database.addChatMessage(chatId, 'assistant', `${result.answer}${sourcesText}`)
+        database.addChatMessage(chatId, 'assistant', result.answer, { sources: result.sources })
       } catch (e) {
         console.error('⚠️ [IPC] Failed to persist assistant message (non-stream):', e)
       }
@@ -1377,13 +1374,10 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
     // Emit completion to renderer
     try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
 
-    // Persist assistant message with sources if chatId present
+    // Persist assistant message with structured sources if chatId present
     if (chatId && typeof database.addChatMessage === 'function') {
       try {
-        const sourcesText = sources && sources.length
-          ? `\n\nSources:\n${sources.map((s, i)=>`(${i+1}) ${s.file_name}`).join('\n')}`
-          : ''
-        database.addChatMessage(chatId, 'assistant', `${full}${sourcesText}`)
+        database.addChatMessage(chatId, 'assistant', full, { sources })
       } catch (e) {
         console.error('⚠️ [IPC] Failed to persist streamed assistant message:', e)
       }

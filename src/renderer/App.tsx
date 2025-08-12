@@ -233,7 +233,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         }
       } catch (e) {
@@ -366,7 +367,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         }
         // No automatic chat creation - user can create chats when needed
@@ -521,7 +523,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         } catch {}
       }
@@ -551,7 +554,8 @@ const App: React.FC = () => {
             id: msg.id.toString(),
             content: msg.content,
             role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
           })))
         } catch {}
       } catch (fallbackError) {
@@ -624,7 +628,8 @@ const App: React.FC = () => {
           id: msg.id.toString(),
           content: msg.content,
           role: msg.role as 'user' | 'assistant',
-          timestamp: new Date(msg.created_at)
+          timestamp: new Date(msg.created_at),
+          sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
         })))
         console.log('📚 [App] Loaded', messages.length, 'messages for chat')
       } else {
@@ -934,7 +939,13 @@ const App: React.FC = () => {
                           <span className="message-icon">
                             {message.role === 'user' ? '>' : '<'}
                           </span>
-                          <span className="message-text">{message.content}</span>
+                          <span className="message-text">
+                            {message.role === 'assistant' ? (
+                              <MarkdownPreview markdown={message.content} />
+                            ) : (
+                              message.content
+                            )}
+                          </span>
                         </div>
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                           <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>

@@ -130,6 +130,24 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
       automaticLayout: true,
     })
 
+    // Update status bar on cursor/selection
+    editor.onDidChangeCursorSelection(() => {
+      const pos = editor.getPosition()
+      const sel = editor.getSelection()
+      const model = editor.getModel()
+      const text = (model && sel) ? model.getValueInRange(sel) : ''
+      window.dispatchEvent(new CustomEvent('isla:cursor', { detail: { lineNumber: pos?.lineNumber, column: pos?.column, selectionText: text } }))
+    })
+
+    // Listen for external editor option changes (e.g., word wrap)
+    const optionListener = (e: any) => {
+      try {
+        const detail = e.detail || {}
+        editor.updateOptions(detail)
+      } catch {}
+    }
+    window.addEventListener('isla:editorOption', optionListener as any)
+
     // Keyboard shortcuts for bold/italic
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
       const model = editor.getModel(); if (!model) return
