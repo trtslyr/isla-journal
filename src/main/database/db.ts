@@ -611,24 +611,24 @@ class IslaDatabase {
   private updateContentChunks(fileId: number, filePath: string, fileName: string, content: string): void {
     if (!this.db) throw new Error('Database not initialized')
 
-    // Clear existing chunks and FTS rows for this file
-    this.db.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
-    if (this.ftsReady) {
-      this.db.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
-    }
-
     const chunks = this.chunkContent(content)
 
-    const insertChunk = this.db.prepare(`
-      INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
-      VALUES (?, ?, ?)
-    `)
-
-    const insertFts = this.ftsReady
-      ? this.db.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
-      : null
-
     const tx = this.db.transaction(() => {
+      // Clear existing chunks and FTS rows for this file
+      this.db!.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
+      if (this.ftsReady) {
+        this.db!.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
+      }
+
+      const insertChunk = this.db!.prepare(`
+        INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
+        VALUES (?, ?, ?)
+      `)
+
+      const insertFts = this.ftsReady
+        ? this.db!.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
+        : null
+
       chunks.forEach((chunk, index) => {
         const res = insertChunk.run(fileId, chunk, index)
         const chunkId = Number(res.lastInsertRowid)
@@ -1173,14 +1173,14 @@ class IslaDatabase {
 
     try {
       const normalizedPath = this.normalizeFilePath(filePath)
-      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath) as { modified_at: string } | undefined
+      const existing = this.db.prepare('SELECT file_mtime FROM files WHERE path = ?').get(normalizedPath) as { file_mtime: string } | undefined
       
       if (!existing) {
         // File doesn't exist in database, needs processing
         return true
       }
       
-      const dbMtime = new Date(existing.modified_at)
+      const dbMtime = existing.file_mtime ? new Date(existing.file_mtime) : new Date(0)
       // File needs processing if it's been modified since last time
       return currentMtime > dbMtime
     } catch (error) {

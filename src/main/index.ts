@@ -811,12 +811,6 @@ ipcMain.handle('file:openDirectory', async () => {
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
       // Start watcher
       startVaultWatcher(normalizedDirPath)
-      // Kick off an initial recursive index so content exists immediately
-      try {
-        await processDirectoryRecursively(normalizedDirPath)
-      } catch (e) {
-        console.error('⚠️ [Directory Switch] Initial recursive indexing failed:', e)
-      }
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
@@ -850,30 +844,6 @@ ipcMain.handle('file:openDirectory', async () => {
         modified: stats.mtime.toISOString(), // FIX: Convert Date to ISO string
         size: stats.size
       }
-      
-      // ✅ SMART INCREMENTAL RAG PROCESSING - Only process new/changed files
-      if (entry.isFile() && entry.name.endsWith('.md')) {
-        try {
-          const needsProcessing = database.needsProcessing(fullPath, stats.mtime)
-          
-          if (needsProcessing) {
-            console.log('📖 [Incremental] Processing new/modified file:', entry.name)
-            const content = await readFile(fullPath, 'utf-8')
-            
-            // Save to database with RAG chunking and FTS indexing
-            database.saveFile(fullPath, entry.name, content)
-            console.log('🧠 [Incremental] RAG processed:', entry.name)
-          } else {
-            console.log('⏭️ [Incremental] Skipping unchanged file:', entry.name)
-          }
-        } catch (contentError) {
-          console.error('⚠️ Failed to process content for', entry.name, ':', contentError)
-          // Continue with metadata-only entry
-        }
-      }
-      
-      // 🚫 RECURSIVE PROCESSING COMPLETELY DISABLED 
-      // (This was causing the massive file processing on startup)
       
       files.push(fileItem)
       console.log('✅ Added:', entry.name, entry.isDirectory() ? 'directory' : 'file')
@@ -1428,8 +1398,8 @@ ipcMain.handle('settings:set', async (_, key: string, value: string) => {
 
 ipcMain.handle('settings:getAll', async () => {
   try {
-    // For now, return empty object since getAllSettings doesn't exist
-    return {}
+    await database.ensureReady()
+    return database.getAllSettings()
   } catch (error) {
     console.error('❌ [IPC] Error getting all settings:', error)
     throw error
