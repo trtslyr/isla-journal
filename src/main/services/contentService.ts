@@ -44,8 +44,8 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
     return { start, end }
   }
   
-  // Year only: "2025" or "from 2025"
-  const yearMatch = q.match(/\b(202[0-9])\b/)
+  // Year only: "2025", "2025!", "from 2025", "in 2025"
+  const yearMatch = q.match(/(202[0-9])/)
   if (yearMatch) {
     const year = +yearMatch[1]
     console.log(`🗓️ [ContentService] Detected year filter: ${year}`)
