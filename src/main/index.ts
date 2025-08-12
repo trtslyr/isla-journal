@@ -1341,7 +1341,15 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const { prompt, sources } = await contentService.preparePrompt(query, [])
+    // Build conversation history if chatId provided
+    let conversationHistory: Array<{role: string, content: string}> = []
+    if (chatId) {
+      try {
+        const recentMessages = database.getChatMessages(chatId, 8)
+        conversationHistory = recentMessages.map(msg => ({ role: msg.role, content: msg.content }))
+      } catch {}
+    }
+    const { prompt, sources } = await contentService.preparePrompt(query, conversationHistory)
     let full = ''
     // Stream via LlamaService
     await llama.sendMessage([{ role:'user', content: prompt }], (chunk)=>{
