@@ -148,6 +148,40 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow: BrowserWindow | null = null
 let vaultWatcher: import('chokidar').FSWatcher | null = null
 
+// Embeddings autobuilder state
+let embeddingsWorkerRunning = false
+
+async function scheduleEmbeddingsWorker(): Promise<void> {
+  if (embeddingsWorkerRunning) return
+  embeddingsWorkerRunning = true
+  try {
+    // Ensure DB ready
+    try { await database.ensureReady() } catch {}
+
+    for (;;) {
+      try {
+        const llama = LlamaService.getInstance()
+        const model = llama.getCurrentModel()
+        if (!model) break
+        const batch: Array<{ id: number; file_id: number; chunk_text: string }> = (database as any).getChunksNeedingEmbeddings?.(model, 50) || []
+        if (!batch.length) break
+        const texts = batch.map(b => b.chunk_text)
+        const vectors = await llama.embedTexts(texts, model)
+        for (let i = 0; i < batch.length; i++) {
+          try { (database as any).upsertEmbedding?.(batch[i].id, vectors[i], model) } catch {}
+        }
+        // Small yield to keep UI responsive
+        await new Promise(r => setTimeout(r, 20))
+      } catch (err) {
+        console.error('❌ [Embeddings] Worker error:', err)
+        break
+      }
+    }
+  } finally {
+    embeddingsWorkerRunning = false
+  }
+}
+
 function startVaultWatcher(rootDir: string) {
   try {
     // Close previous watcher
@@ -163,13 +197,16 @@ function startVaultWatcher(rootDir: string) {
       if (!lower.endsWith('.md')) return true
       return false
     }
-    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: true, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
+    // Process existing markdown files on startup so the entire codebase is indexed
+    vaultWatcher = chokidar.watch(rootDir, { ignoreInitial: false, ignored, awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 } })
     const onAddOrChange = async (filePath: string) => {
       try {
         if (!filePath.toLowerCase().endsWith('.md')) return
         const content = await readFile(filePath, 'utf-8')
         const name = path.basename(filePath)
         database.saveFile(filePath, name, content)
+        // Schedule embeddings fill for any new chunks
+        scheduleEmbeddingsWorker().catch(() => {})
       } catch (e) {
         console.error('Watcher add/change failed:', e)
       }
@@ -802,8 +839,10 @@ ipcMain.handle('file:openDirectory', async () => {
     if (isRootDirectoryChange) {
       database.setSetting('selectedDirectory', normalizedDirPath)
       console.log('📂 [Directory Switch] Set new root directory:', normalizedDirPath)
-      // Start watcher
+      // Start watcher (will index existing files due to ignoreInitial:false)
       startVaultWatcher(normalizedDirPath)
+      // Kick off embeddings worker once indexing begins
+      scheduleEmbeddingsWorker().catch(() => {})
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
     }
@@ -849,6 +888,8 @@ ipcMain.handle('file:openDirectory', async () => {
             
             // Save to database with RAG chunking and FTS indexing
             database.saveFile(fullPath, entry.name, content)
+            // Schedule embeddings for any new chunks
+            scheduleEmbeddingsWorker().catch(() => {})
             console.log('🧠 [Incremental] RAG processed:', entry.name)
           } else {
             console.log('⏭️ [Incremental] Skipping unchanged file:', entry.name)
@@ -953,6 +994,8 @@ ipcMain.handle('file:writeFile', async (_, filePath: string, content: string) =>
       const fileName = path.basename(normalizedPath)
       database.saveFile(normalizedPath, fileName, content)
       console.log('🧠 [File] Updated RAG index for:', fileName)
+      // Schedule embeddings for any new chunks
+      scheduleEmbeddingsWorker().catch(() => {})
     }
     
     return true
@@ -1062,6 +1105,9 @@ ipcMain.handle('db:reindexAll', async () => {
     // Recursively reindex all markdown files in the directory
     await processDirectoryRecursively(selectedDirectory)
     
+    // Kick off embeddings rebuild automatically
+    scheduleEmbeddingsWorker().catch(() => {})
+    
     const stats = database.getStats()
     console.log('✅ [IPC] Reindexing completed:', stats)
     return stats
@@ -1165,6 +1211,9 @@ ipcMain.handle('llm:switchModel', async (_, modelName: string) => {
   try {
     const llamaService = LlamaService.getInstance()
     await llamaService.switchModel(modelName)
+    // Since embeddings are single-model in current schema, clear and rebuild for new model
+    try { (database as any).clearEmbeddings?.() } catch {}
+    scheduleEmbeddingsWorker().catch(() => {})
     return true
   } catch (error) {
     console.error('❌ [IPC] Error switching LLM model:', error)
