@@ -27,16 +27,19 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
   const iso = q.match(/\b(\d{4})-(\d{2})(?:-(\d{2}))?\b/)
   if (iso) {
     const y = +iso[1], m = +iso[2]-1, d = iso[3] ? +iso[3] : 1
+    // Use UTC boundaries consistently
     const start = new Date(Date.UTC(y,m,d))
     const end = iso[3] ? new Date(Date.UTC(y,m,d+1)) : new Date(Date.UTC(y,m+1,1))
     return { start, end }
   }
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
-  const today = startOfDay(now)
-  if (q.includes('today')) return { start: today, end: new Date(+today + 86400000) }
-  if (q.includes('yesterday')) { const y = new Date(+today - 86400000); return { start: y, end: today } }
-  if (q.includes('last week')) return { start: new Date(+today - 7*86400000), end: today }
-  const m = q.match(/last (\d+)\s*days?/) ; if (m) { const n = Math.min(365, +m[1]||7); return { start: new Date(+today - n*86400000), end: today } }
+  // UTC midnight helpers
+  const toUtcStartOfDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+  const todayUtc = toUtcStartOfDay(new Date(now.toISOString()))
+  if (q.includes('today')) return { start: todayUtc, end: new Date(+todayUtc + 86400000) }
+  if (q.includes('yesterday')) { const y = new Date(+todayUtc - 86400000); return { start: y, end: todayUtc } }
+  if (q.includes('last week')) return { start: new Date(+todayUtc - 7*86400000), end: todayUtc }
+  const mRel = q.match(/last (\d+)\s*days?/)
+  if (mRel) { const n = Math.min(365, +mRel[1]||7); return { start: new Date(+todayUtc - n*86400000), end: todayUtc } }
   return null
 }
 
@@ -71,15 +74,16 @@ class ContentService {
 
     // Retrieval (FTS/Hybrid)
     const hasFTS = typeof (database as any).searchContentFTS === 'function'
-    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+    const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : (database as any).searchContent(query, 20, dateFilter)
     let results: any[] = ftsResults
     try {
       const llama = LlamaService.getInstance()
       const model = llama.getCurrentModel()
-      if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-        const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+      if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
+        const candidateIds = ftsResults.map(r => r.id).slice(0, 200)
+        const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
         const qVec = (await llama.embedTexts([query], model))[0] || []
-        const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
+        const scored = embRows.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
         const topE = scored.slice(0, 30)
         const merged = new Map<number, any>()
@@ -102,13 +106,31 @@ class ContentService {
       return `Date range: ${start} → ${end}`
     })()
 
-    const retrievedBlock = results.length>0
-      ? results.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
+    // Cap per-file hits and overall count/size
+    const perFileCap = 2
+    const seenPerFile = new Map<string, number>()
+    const finalResults: any[] = []
+    let totalChars = 0
+    const charBudget = 2400
+    for (const r of results) {
+      const key = r.file_path
+      const count = seenPerFile.get(key) || 0
+      const snippet = String(r.content_snippet || '')
+      if (count < perFileCap && totalChars + snippet.length <= charBudget) {
+        finalResults.push(r)
+        seenPerFile.set(key, count + 1)
+        totalChars += snippet.length
+      }
+      if (finalResults.length >= 20 || totalChars >= charBudget) break
+    }
+
+    const retrievedBlock = finalResults.length>0
+      ? finalResults.map((r,i)=>`(${i+1}) ${r.file_name}: ${String(r.content_snippet||'').replace(/<\/?mark>/g,'')}`).join('\n')
       : ''
     const today = new Date().toISOString()
     const prompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedContent}${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-    const sources: Array<{file_name:string; file_path:string; snippet:string}> = results.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
+    const sources: Array<{file_name:string; file_path:string; snippet:string}> = finalResults.map((r:any)=>({ file_name:r.file_name, file_path:r.file_path, snippet:String(r.content_snippet||'').replace(/<\/?mark>/g,'') }))
     try {
       const pinnedItemsJson = database.getSetting('pinnedItems')
       if (pinnedItemsJson) {
@@ -166,18 +188,23 @@ class ContentService {
 
       // 2. Retrieval: FTS + embeddings hybrid if available
       const hasFTS = typeof (database as any).searchContentFTS === 'function'
-      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : database.searchContent(query, 20)
+      const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : (database as any).searchContent(query, 20, dateFilter)
 
       let hybridResults: any[] = ftsResults
       try {
         const llama = LlamaService.getInstance()
         const model = llama.getCurrentModel()
-        if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
-          const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+        if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
+          let candidateIds = ftsResults.map(r => r.id).slice(0, 200)
+          if (candidateIds.length === 0 && typeof (database as any).getEmbeddingsForModel === 'function') {
+            const allEmbMeta = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
+            candidateIds = allEmbMeta.slice(0, 500).map(e => e.chunk_id)
+          }
+          const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
           // Build query vector
           const qVec = (await llama.embedTexts([query], model))[0] || []
           // Score top-N embeddings
-          const scored = allEmb.map(e => ({
+          const scored = embRows.map(e => ({
             id: e.chunk_id,
             file_id: e.file_id,
             file_path: e.file_path,
@@ -204,7 +231,7 @@ class ContentService {
             const eScore = 0.6 * sim
             if (existing) {
               existing.sim = Math.max(existing.sim || 0, sim)
-              existing.score = Math.max(existing.score || 0, existing.score + eScore)
+              existing.score = (existing.score || 0) + eScore
               merged.set(e.id, existing)
             } else {
               merged.set(e.id, { ...e, rank: 0, ftsRank: 0, score: eScore })
@@ -220,6 +247,22 @@ class ContentService {
       }
 
       const results = hybridResults
+        .reduce((acc: any[], r: any) => acc.concat(r), [])
+        .slice(0, 100)
+
+      // Cap per-file hits to at most 2
+      const perFileCap = 2
+      const seenPerFile = new Map<string, number>()
+      const capped = [] as any[]
+      for (const r of results) {
+        const key = r.file_path
+        const count = seenPerFile.get(key) || 0
+        if (count < perFileCap) {
+          capped.push(r)
+          seenPerFile.set(key, count + 1)
+        }
+        if (capped.length >= 20) break
+      }
 
       // 3. Build context blocks
       const pinnedBlock = pinnedContent ? `Pinned notes:\n${pinnedContent}` : ''
@@ -232,11 +275,11 @@ class ContentService {
       }
 
       let retrievedBlock = ''
-      if (results.length > 0) {
-        retrievedBlock = results.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
+      if (capped.length > 0) {
+        retrievedBlock = capped.map((r, i) => `(${i+1}) ${r.file_name}: ${String(r.content_snippet || '').replace(/<\/?mark>/g, '')}`).join('\n')
       }
 
-      if (results.length === 0 && !pinnedContent) {
+      if (capped.length === 0 && !pinnedContent) {
         return {
           answer: "I couldn't find anything specific in your notes. Try broadening the query or specify a date (e.g., 2024-01 or last 7 days).",
           sources: []
@@ -254,8 +297,8 @@ class ContentService {
       const today = new Date().toISOString()
       const ragPrompt = `You are a concise, friendly assistant for the user's local notes.\nToday is ${today}.\n\nContext from notes:\n${pinnedBlock}\n${dateBlock}\n${retrievedBlock}\n\nUser’s request: ${query}\n\nInstructions:\n- Prefer the supplied context; cite filenames.\n- Keep answers tight (2–4 short paragraphs; bullets for steps).\n- If context is sparse, say so and suggest next steps or date ranges.\n- If the request implies dates, prioritize those notes.\n- End with 1–2 helpful follow‑ups.`
 
-      const totalSources = results.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
-      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${results.length} search + pinned files)`)      
+      const totalSources = capped.length + (pinnedContent ? pinnedContent.split('📌 Pinned:').length - 1 : 0)
+      console.log(`🧠 [ContentService] Sending to LLM with ${totalSources} sources (${capped.length} search + pinned files)`)      
 
       // 6. Get LLM response
       const llamaService = LlamaService.getInstance()
@@ -264,7 +307,7 @@ class ContentService {
       ])
 
       // 7. Sources list
-      const sources = results.map((r: any) => ({
+      const sources = capped.map((r: any) => ({
         file_name: r.file_name,
         file_path: r.file_path,
         snippet: String(r.content_snippet || '').replace(/<\/?mark>/g, '')

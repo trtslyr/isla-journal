@@ -110,21 +110,7 @@ class IslaDatabase {
       // Resolve to absolute path and normalize
       const resolved = resolve(filePath)
       
-      // Windows-specific path handling
-      if (this.isWindows) {
-        // Handle long paths on Windows (>260 chars)
-        const longPathPrefix = '\\\\?\\'
-        let windowsPath = resolved
-        
-        if (resolved.length > 260 && !resolved.startsWith(longPathPrefix)) {
-          windowsPath = longPathPrefix + resolved
-        }
-        
-        // Convert to forward slashes for consistent storage
-        return windowsPath.replace(/\\/g, '/')
-      }
-      
-      // Convert Windows backslashes to forward slashes for consistent storage
+      // Normalize to forward slashes for consistent storage across platforms
       return resolved.replace(/\\/g, '/')
     } catch (error) {
       console.warn(`⚠️ [Database] Path normalization failed for ${filePath}:`, error)
@@ -407,15 +393,7 @@ class IslaDatabase {
     // FTS removed - using direct content_chunks search instead
 
     // Search index table - for full-text search
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS search_index (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_id INTEGER NOT NULL,
-        word TEXT NOT NULL,
-        position INTEGER NOT NULL,
-        FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
-      )
-    `)
+    // (Removed legacy search_index table)
 
     // Chat conversations table
     this.db.exec(`
@@ -454,8 +432,6 @@ class IslaDatabase {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_files_path ON files (path);
       CREATE INDEX IF NOT EXISTS idx_files_modified ON files (modified_at);
-      CREATE INDEX IF NOT EXISTS idx_search_word ON search_index (word);
-      CREATE INDEX IF NOT EXISTS idx_search_file ON search_index (file_id);
       CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats (updated_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages (chat_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at);
@@ -473,7 +449,7 @@ class IslaDatabase {
     if (!this.db) throw new Error('Database not initialized')
 
     // Add file_mtime and note_date columns if missing
-    const columns: Array<{name: string}> = this.db.prepare("PRAGMA table_info(files)").all() as any
+    const columns: Array<{name: string, pk?: number}> = this.db.prepare("PRAGMA table_info(files)").all() as any
     const hasMtime = columns.some(c => c.name === 'file_mtime')
     const hasNoteDate = columns.some(c => c.name === 'note_date')
 
@@ -501,6 +477,44 @@ class IslaDatabase {
     } catch (e) {
       console.warn('⚠️ [Database] Failed to create indexes for new columns:', e)
     }
+
+    // Embeddings primary key migration to (chunk_id, model)
+    try {
+      const embCols: Array<{name: string, pk: number}> = this.db.prepare("PRAGMA table_info(embeddings)").all() as any
+      const hasModelInPk = embCols.some(c => c.name === 'model' && c.pk > 0)
+      if (embCols.length > 0 && !hasModelInPk) {
+        console.log('🔄 [Database] Migrating embeddings table to composite PK (chunk_id, model)')
+        this.db.exec('BEGIN')
+        try {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS embeddings_new (
+              chunk_id INTEGER NOT NULL,
+              vector TEXT NOT NULL,
+              dim INTEGER NOT NULL,
+              model TEXT NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (chunk_id, model),
+              FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
+            );
+          `)
+          // Copy existing rows (will dedupe by last write via INSERT OR REPLACE)
+          this.db.exec(`
+            INSERT OR REPLACE INTO embeddings_new (chunk_id, vector, dim, model, created_at)
+            SELECT chunk_id, vector, dim, model, created_at FROM embeddings;
+          `)
+          this.db.exec('DROP TABLE embeddings')
+          this.db.exec('ALTER TABLE embeddings_new RENAME TO embeddings')
+          this.db.exec('CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings (model)')
+          this.db.exec('COMMIT')
+          console.log('✅ [Database] Embeddings table migration complete')
+        } catch (e) {
+          this.db.exec('ROLLBACK')
+          console.warn('⚠️ [Database] Embeddings migration failed (safe to continue with single-model PK):', e)
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed checking embeddings schema:', e)
+    }
   }
 
   private setupFTS(): void {
@@ -517,6 +531,13 @@ class IslaDatabase {
       `)
       // Auxiliary index-like trigger not strictly necessary with manual sync
       this.ftsReady = true
+      // Smoke test the FTS table
+      try {
+        this.db.prepare('SELECT count(*) as c FROM chunks_fts').get()
+      } catch (smoke) {
+        console.warn('⚠️ [Database] FTS smoke test failed; disabling FTS:', smoke)
+        this.ftsReady = false
+      }
       console.log('✅ [Database] FTS5 ready')
     } catch (e) {
       console.warn('⚠️ [Database] FTS5 unavailable, falling back to LIKE search:', e)
@@ -527,11 +548,12 @@ class IslaDatabase {
     try {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS embeddings (
-          chunk_id INTEGER PRIMARY KEY,
+          chunk_id INTEGER NOT NULL,
           vector TEXT NOT NULL,
           dim INTEGER NOT NULL,
           model TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (chunk_id, model),
           FOREIGN KEY (chunk_id) REFERENCES content_chunks (id) ON DELETE CASCADE
         );
       `)
@@ -578,25 +600,29 @@ class IslaDatabase {
 
     const noteDate = this.deriveNoteDate(fileName, content)
 
-    const stmt = this.db.prepare(`
-      INSERT INTO files (path, name, content, modified_at, size, file_mtime, note_date)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        name=excluded.name,
-        content=excluded.content,
-        modified_at=CURRENT_TIMESTAMP,
-        size=excluded.size,
-        file_mtime=excluded.file_mtime,
-        note_date=COALESCE(excluded.note_date, files.note_date)
-    `)
-    const result = stmt.run(normalizedPath, fileName, content, content.length, fileMtimeIso, noteDate)
+    const tx = this.db.transaction(() => {
+      const stmt = this.db!.prepare(`
+        INSERT INTO files (path, name, content, modified_at, size, file_mtime, note_date)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+          name=excluded.name,
+          content=excluded.content,
+          modified_at=CURRENT_TIMESTAMP,
+          size=excluded.size,
+          file_mtime=excluded.file_mtime,
+          note_date=COALESCE(excluded.note_date, files.note_date)
+      `)
+      stmt.run(normalizedPath, fileName, content, content.length, fileMtimeIso, noteDate)
 
-    // Get file id (insert or existing)
-    const fileRecord = this.db.prepare('SELECT id FROM files WHERE path = ?').get(normalizedPath) as { id: number }
-    const fileId = fileRecord.id
+      // Get file id (insert or existing)
+      const fileRecord = this.db!.prepare('SELECT id FROM files WHERE path = ?').get(normalizedPath) as { id: number }
+      const fileId = fileRecord.id
 
-    // Update content chunks and FTS
-    this.updateContentChunks(fileId, normalizedPath, fileName, content)
+      // Update content chunks and FTS
+      this.updateContentChunks(fileId, normalizedPath, fileName, content)
+    })
+
+    tx()
 
     console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
   }
@@ -607,24 +633,24 @@ class IslaDatabase {
   private updateContentChunks(fileId: number, filePath: string, fileName: string, content: string): void {
     if (!this.db) throw new Error('Database not initialized')
 
-    // Clear existing chunks and FTS rows for this file
-    this.db.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
-    if (this.ftsReady) {
-      this.db.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
-    }
-
     const chunks = this.chunkContent(content)
 
-    const insertChunk = this.db.prepare(`
-      INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
-      VALUES (?, ?, ?)
-    `)
-
-    const insertFts = this.ftsReady
-      ? this.db.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
-      : null
-
     const tx = this.db.transaction(() => {
+      // Clear existing chunks and FTS rows for this file
+      this.db!.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
+      if (this.ftsReady) {
+        this.db!.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
+      }
+
+      const insertChunk = this.db!.prepare(`
+        INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
+        VALUES (?, ?, ?)
+      `)
+
+      const insertFts = this.ftsReady
+        ? this.db!.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
+        : null
+
       chunks.forEach((chunk, index) => {
         const res = insertChunk.run(fileId, chunk, index)
         const chunkId = Number(res.lastInsertRowid)
@@ -661,29 +687,32 @@ class IslaDatabase {
   /**
    * Search content using simple LIKE queries
    */
-  public searchContent(query: string, limit: number = 10): SearchResult[] {
+  public searchContent(query: string, limit: number = 10, dateRange: { start: Date; end: Date } | null = null): SearchResult[] {
     if (!this.db) throw new Error('Database not initialized')
 
     try {
-      // Clean and split query into individual words
-      const words = query.toLowerCase()
-        .replace(/['\"*?!@#$%^&()+={}[\\]|\\\\:\";'<>,.]/g, ' ')
+      // Unicode-safe tokenization
+      const words = query
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
         .split(/\s+/)
-        .filter(word => word.length > 2) // Only words longer than 2 chars
-        .slice(0, 3) // Max 3 words to keep it simple
+        .filter(word => word.length > 2)
+        .slice(0, 3)
 
       if (words.length === 0) {
-        console.log('🔍 [Database] No valid search words found')
         return []
       }
 
-      console.log(`🔍 [Database] Search words: ${words.join(', ')}`)
-
-      // Simple approach: search for any word match
       const results: SearchResult[] = []
-      
+
+      const hasDate = !!dateRange
+      const noteStart = hasDate ? dateRange!.start.toISOString().slice(0,10) : undefined
+      const noteEndIncl = hasDate ? new Date(+dateRange!.end - 24*60*60*1000).toISOString().slice(0,10) : undefined
+      const mtimeStart = hasDate ? dateRange!.start.toISOString() : undefined
+      const mtimeEndExclusive = hasDate ? dateRange!.end.toISOString() : undefined
+
       for (const word of words) {
-        const stmt = this.db.prepare(`
+        const baseSql = `
           SELECT 
             c.id,
             c.file_id,
@@ -694,19 +723,23 @@ class IslaDatabase {
           FROM content_chunks c
           JOIN files f ON c.file_id = f.id
           WHERE LOWER(c.chunk_text) LIKE '%' || ? || '%'
-          LIMIT ?
-        `)
-        
-        const wordResults = stmt.all(word, Math.ceil(limit / words.length)) as SearchResult[]
+        `
+        const dateSql = hasDate ? ` AND ( (f.note_date BETWEEN ? AND ?) OR (f.file_mtime >= ? AND f.file_mtime < ?) )` : ''
+        const limSql = ` LIMIT ?`
+        const sql = baseSql + dateSql + limSql
+        const params = hasDate 
+          ? [word, noteStart, noteEndIncl, mtimeStart, mtimeEndExclusive, Math.ceil(limit / words.length)]
+          : [word, Math.ceil(limit / words.length)]
+
+        const stmt = this.db!.prepare(sql)
+        const wordResults = stmt.all(...params) as SearchResult[]
         results.push(...wordResults)
       }
 
-      // Remove duplicates and limit results
       const uniqueResults = results.filter((result, index, self) => 
         index === self.findIndex(r => r.id === result.id)
       ).slice(0, limit)
 
-      console.log(`🔍 [Database] Found ${uniqueResults.length} results for: ${query}`)
       return uniqueResults
       
     } catch (error) {
@@ -753,7 +786,6 @@ class IslaDatabase {
       const transaction = this.db.transaction(() => {
         // Clear backing tables
         this.db!.prepare('DELETE FROM content_chunks').run()
-        this.db!.prepare('DELETE FROM search_index').run()
         this.db!.prepare('DELETE FROM files').run()
       })
       
@@ -1160,14 +1192,14 @@ class IslaDatabase {
 
     try {
       const normalizedPath = this.normalizeFilePath(filePath)
-      const existing = this.db.prepare('SELECT modified_at FROM files WHERE path = ?').get(normalizedPath) as { modified_at: string } | undefined
+      const existing = this.db.prepare('SELECT file_mtime FROM files WHERE path = ?').get(normalizedPath) as { file_mtime: string } | undefined
       
       if (!existing) {
         // File doesn't exist in database, needs processing
         return true
       }
       
-      const dbMtime = new Date(existing.modified_at)
+      const dbMtime = existing.file_mtime ? new Date(existing.file_mtime) : new Date(0)
       // File needs processing if it's been modified since last time
       return currentMtime > dbMtime
     } catch (error) {
@@ -1279,12 +1311,19 @@ class IslaDatabase {
   public searchContentFTS(query: string, limit: number = 20, dateRange: { start: Date; end: Date } | null = null): SearchResult[] {
     if (!this.db) throw new Error('Database not initialized')
     if (!this.ftsReady) {
-      return this.searchContent(query, limit)
+      return this.searchContent(query, limit, dateRange)
     }
 
     try {
-      // Basic FTS5 match string: quote the whole query for now
-      const match = query.replace(/['\"]+/g, ' ').trim()
+      // Build safer FTS query: quoted tokens joined by AND
+      const tokens = query
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter(t => t.length > 2)
+        .slice(0, 5)
+      if (tokens.length === 0) return []
+      const match = tokens.map(t => `"${t.replace(/"/g, ' ')}"`).join(' AND ')
 
       const clauses: string[] = []
       const params: any[] = []
@@ -1293,10 +1332,12 @@ class IslaDatabase {
       params.push(match)
 
       if (dateRange) {
-        clauses.push("(f.note_date BETWEEN ? AND ? OR f.file_mtime BETWEEN ? AND ?)")
-        const startIso = dateRange.start.toISOString()
-        const endIso = dateRange.end.toISOString()
-        params.push(startIso, endIso, startIso, endIso)
+        const noteStart = dateRange.start.toISOString().slice(0,10)
+        const noteEndIncl = new Date(+dateRange.end - 24*60*60*1000).toISOString().slice(0,10)
+        const mtimeStart = dateRange.start.toISOString()
+        const mtimeEndExclusive = dateRange.end.toISOString()
+        clauses.push("(f.note_date BETWEEN ? AND ? OR (f.file_mtime >= ? AND f.file_mtime < ?))")
+        params.push(noteStart, noteEndIncl, mtimeStart, mtimeEndExclusive)
       }
 
       const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
@@ -1317,7 +1358,7 @@ class IslaDatabase {
         LIMIT ?
       `
 
-      const rows = this.db.prepare(sql).all(...params, limit) as any[]
+      const rows = this.db!.prepare(sql).all(...params, limit) as any[]
       return rows.map(r => ({
         id: r.id,
         file_id: r.file_id,
@@ -1328,7 +1369,8 @@ class IslaDatabase {
       }))
     } catch (error) {
       console.error('⚠️ [Database] FTS search failed, falling back:', error)
-      return this.searchContent(query, limit)
+      this.ftsReady = false // auto-disable until next initialization
+      return this.searchContent(query, limit, dateRange)
     }
   }
 
@@ -1356,7 +1398,7 @@ class IslaDatabase {
     const sql = `
       INSERT INTO embeddings (chunk_id, vector, dim, model)
       VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET
+      ON CONFLICT(chunk_id, model) DO UPDATE SET
         vector = excluded.vector,
         dim = excluded.dim,
         model = excluded.model,
@@ -1402,6 +1444,29 @@ class IslaDatabase {
     } else {
       this.db.prepare('DELETE FROM embeddings').run()
     }
+  }
+
+  /** Load embeddings for specific chunk IDs and a model */
+  public getEmbeddingsForChunks(model: string, chunkIds: number[]): Array<{ chunk_id: number; file_id: number; file_path: string; file_name: string; chunk_text: string; vector: number[] }> {
+    if (!this.db) throw new Error('Database not initialized')
+    if (!chunkIds || chunkIds.length === 0) return []
+    const placeholders = chunkIds.map(() => '?').join(',')
+    const sql = `
+      SELECT e.chunk_id, c.file_id, f.path as file_path, f.name as file_name, c.chunk_text, e.vector
+      FROM embeddings e
+      JOIN content_chunks c ON c.id = e.chunk_id
+      JOIN files f ON f.id = c.file_id
+      WHERE e.model = ? AND e.chunk_id IN (${placeholders})
+    `
+    const rows = this.db.prepare(sql).all(model, ...chunkIds) as any[]
+    return rows.map(r => ({
+      chunk_id: r.chunk_id,
+      file_id: r.file_id,
+      file_path: r.file_path,
+      file_name: r.file_name,
+      chunk_text: r.chunk_text,
+      vector: (() => { try { return JSON.parse(r.vector) } catch { return [] } })()
+    }))
   }
 }
 
