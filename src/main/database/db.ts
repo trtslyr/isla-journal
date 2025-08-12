@@ -4,6 +4,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
 import path from 'path'
 import os from 'os'
+import crypto from 'crypto'
 
 // Safe console wrapper for Windows compatibility
 const safeConsole = {
@@ -493,6 +494,19 @@ class IslaDatabase {
       }
     }
 
+    // Add chunk_hash to content_chunks if missing
+    try {
+      const chunkCols: Array<{name: string}> = this.db.prepare("PRAGMA table_info(content_chunks)").all() as any
+      const hasChunkHash = chunkCols.some(c => c.name === 'chunk_hash')
+      if (!hasChunkHash) {
+        this.db.exec("ALTER TABLE content_chunks ADD COLUMN chunk_hash TEXT")
+        // Index to speed up matching
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_file_hash ON content_chunks (file_id, chunk_hash)")
+      }
+    } catch (e) {
+      console.warn('⚠️ [Database] Failed to ensure chunk_hash on content_chunks:', e)
+    }
+
     // Indexes for new columns
     try {
       this.db.exec(`
@@ -610,40 +624,78 @@ class IslaDatabase {
     console.log(`✅ [Database] Saved file: ${fileName} (${normalizedPath})`)
   }
 
+  /** Compute a stable hash for a chunk */
+  private computeChunkHash(text: string): string {
+    return crypto.createHash('sha1').update(text).digest('hex')
+  }
+
   /**
-   * Break content into chunks and update FTS index
+   * Break content into chunks and update FTS index (diff by chunk hash)
    */
   private updateContentChunks(fileId: number, filePath: string, fileName: string, content: string): void {
     if (!this.db) throw new Error('Database not initialized')
 
-    // Clear existing chunks and FTS rows for this file
-    this.db.prepare('DELETE FROM content_chunks WHERE file_id = ?').run(fileId)
-    if (this.ftsReady) {
-      this.db.prepare('DELETE FROM chunks_fts WHERE file_id = ?').run(fileId)
+    const chunks = this.chunkContent(content)
+    const newChunks = chunks.map((t, idx) => ({ text: t, index: idx, hash: this.computeChunkHash(t) }))
+
+    // Load existing chunks for file
+    const existingRows = this.db.prepare('SELECT id, chunk_hash, chunk_index FROM content_chunks WHERE file_id = ?').all(fileId) as Array<{ id:number, chunk_hash:string|null, chunk_index:number }>
+
+    const hashToIds = new Map<string, number[]>()
+    for (const row of existingRows) {
+      if (!row.chunk_hash) continue
+      const arr = hashToIds.get(row.chunk_hash) || []
+      arr.push(row.id)
+      hashToIds.set(row.chunk_hash, arr)
     }
 
-    const chunks = this.chunkContent(content)
+    const toInsert: Array<{ text:string, index:number, hash:string }> = []
+    const keep: Array<{ id:number, index:number, hash:string }> = []
 
-    const insertChunk = this.db.prepare(`
-      INSERT INTO content_chunks (file_id, chunk_text, chunk_index)
-      VALUES (?, ?, ?)
-    `)
+    for (const nc of newChunks) {
+      const pool = hashToIds.get(nc.hash)
+      if (pool && pool.length) {
+        const id = pool.shift()!
+        keep.push({ id, index: nc.index, hash: nc.hash })
+      } else {
+        toInsert.push(nc)
+      }
+    }
 
-    const insertFts = this.ftsReady
-      ? this.db.prepare(`INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)`)
-      : null
+    // Any remaining ids in hashToIds are removals
+    const toDeleteIds: number[] = []
+    for (const arr of hashToIds.values()) {
+      for (const id of arr) toDeleteIds.push(id)
+    }
+
+    const updateIndexStmt = this.db.prepare('UPDATE content_chunks SET chunk_index = ? WHERE id = ?')
+    const insertChunkStmt = this.db.prepare('INSERT INTO content_chunks (file_id, chunk_text, chunk_index, chunk_hash) VALUES (?, ?, ?, ?)')
+    const deleteChunkStmt = this.db.prepare('DELETE FROM content_chunks WHERE id = ?')
+
+    const insertFts = this.ftsReady ? this.db.prepare('INSERT INTO chunks_fts(rowid, chunk_text, file_id) VALUES(?, ?, ?)') : null
+    const deleteFts = this.ftsReady ? this.db.prepare('DELETE FROM chunks_fts WHERE rowid = ?') : null
 
     const tx = this.db.transaction(() => {
-      chunks.forEach((chunk, index) => {
-        const res = insertChunk.run(fileId, chunk, index)
-        const chunkId = Number(res.lastInsertRowid)
-        if (insertFts) insertFts.run(chunkId, chunk, fileId)
-      })
+      // Delete removed
+      for (const id of toDeleteIds) {
+        deleteChunkStmt.run(id)
+        if (deleteFts) deleteFts.run(id)
+      }
+      // Insert new
+      for (const ins of toInsert) {
+        const res = insertChunkStmt.run(fileId, ins.text, ins.index, ins.hash)
+        const newId = Number(res.lastInsertRowid)
+        if (insertFts) insertFts.run(newId, ins.text, fileId)
+      }
+      // Update index for kept (no text change)
+      for (const k of keep) {
+        updateIndexStmt.run(k.index, k.id)
+      }
     })
 
     tx()
 
-    console.log(`📝 [Database] Indexed ${chunks.length} chunks for ${fileName}`)
+    console.log(`📝 [Database] Indexed ${newChunks.length} chunks for ${fileName} (inserted ${toInsert.length}, removed ${toDeleteIds.length}, kept ${keep.length})`)
   }
 
   /**
