@@ -1369,6 +1369,7 @@ class IslaDatabase {
       }))
     } catch (error) {
       console.error('⚠️ [Database] FTS search failed, falling back:', error)
+      this.ftsReady = false // auto-disable until next initialization
       return this.searchContent(query, limit, dateRange)
     }
   }

@@ -27,16 +27,19 @@ function extractDateFilter(qIn: string, now = new Date()): DateFilter {
   const iso = q.match(/\b(\d{4})-(\d{2})(?:-(\d{2}))?\b/)
   if (iso) {
     const y = +iso[1], m = +iso[2]-1, d = iso[3] ? +iso[3] : 1
+    // Use UTC boundaries consistently
     const start = new Date(Date.UTC(y,m,d))
     const end = iso[3] ? new Date(Date.UTC(y,m,d+1)) : new Date(Date.UTC(y,m+1,1))
     return { start, end }
   }
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
-  const today = startOfDay(now)
-  if (q.includes('today')) return { start: today, end: new Date(+today + 86400000) }
-  if (q.includes('yesterday')) { const y = new Date(+today - 86400000); return { start: y, end: today } }
-  if (q.includes('last week')) return { start: new Date(+today - 7*86400000), end: today }
-  const m = q.match(/last (\d+)\s*days?/) ; if (m) { const n = Math.min(365, +m[1]||7); return { start: new Date(+today - n*86400000), end: today } }
+  // UTC midnight helpers
+  const toUtcStartOfDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+  const todayUtc = toUtcStartOfDay(new Date(now.toISOString()))
+  if (q.includes('today')) return { start: todayUtc, end: new Date(+todayUtc + 86400000) }
+  if (q.includes('yesterday')) { const y = new Date(+todayUtc - 86400000); return { start: y, end: todayUtc } }
+  if (q.includes('last week')) return { start: new Date(+todayUtc - 7*86400000), end: todayUtc }
+  const mRel = q.match(/last (\d+)\s*days?/)
+  if (mRel) { const n = Math.min(365, +mRel[1]||7); return { start: new Date(+todayUtc - n*86400000), end: todayUtc } }
   return null
 }
 
