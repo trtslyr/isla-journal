@@ -94,10 +94,101 @@ class ContentService {
     const hasFTS = typeof (database as any).searchContentFTS === 'function'
     const ftsResults: any[] = hasFTS ? (database as any).searchContentFTS(query, 20, dateFilter) : (database as any).searchContent(query, 20, dateFilter)
     let results: any[] = ftsResults
+
+    // Define recency boost functions to use for all search results
+    const currentTime = Date.now()
+    const dayMs = 24 * 60 * 60 * 1000
+    
+    const getFileDate = (result: any): number => {
+      // Priority 1: Use database note_date if available (most accurate)
+      if (result.note_date) {
+        return new Date(result.note_date).getTime()
+      }
+      
+      // Priority 2: Use file_mtime from database
+      if (result.file_mtime) {
+        return new Date(result.file_mtime).getTime()
+      }
+      
+      // Priority 3: Try to parse from filename
+      const fileName = result.file_name || ''
+      
+      // ISO format: 2025-08-12
+      let dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/)
+      if (dateMatch) {
+        return new Date(`${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`).getTime()
+      }
+      
+      // Various month formats - map month names
+      const monthMap: Record<string, number> = {
+        jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+        apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+        aug: 8, august: 8, sep: 9, september: 9, oct: 10, october: 10,
+        nov: 11, november: 11, dec: 12, december: 12
+      }
+      
+      // "4 aug" or "12 august" format (day + month)
+      let monthMatch = fileName.toLowerCase().match(/(\d{1,2})\s+(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november|dec|december)/i)
+      if (monthMatch) {
+        const day = parseInt(monthMatch[1])
+        const month = monthMap[monthMatch[2].toLowerCase()]
+        const currentYear = new Date().getFullYear()
+        return new Date(currentYear, month - 1, day).getTime()
+      }
+      
+      // "17 Jan" format (day + month abbreviation, reverse order)
+      monthMatch = fileName.toLowerCase().match(/(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i)
+      if (monthMatch) {
+        const day = parseInt(monthMatch[1])
+        const month = monthMap[monthMatch[2].toLowerCase()]
+        const currentYear = new Date().getFullYear()
+        return new Date(currentYear, month - 1, day).getTime()
+      }
+      
+      // "Jan 17" format (month + day)
+      monthMatch = fileName.toLowerCase().match(/(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november|dec|december)\s+(\d{1,2})/i)
+      if (monthMatch) {
+        const month = monthMap[monthMatch[1].toLowerCase()]
+        const day = parseInt(monthMatch[2])
+        const currentYear = new Date().getFullYear()
+        return new Date(currentYear, month - 1, day).getTime()
+      }
+      
+      return currentTime - (365 * dayMs) // fallback to 1 year ago if no date
+    }
+
+    const applyRecencyBoost = (searchResults: any[]): any[] => {
+      return searchResults.map(result => {
+        const fileDate = getFileDate(result)
+        const daysSinceFile = (currentTime - fileDate) / dayMs
+        
+        // Strong recency boost to prioritize recent content
+        // Files from today: +1.0, 1 week ago: +0.8, 1 month ago: +0.5, 6+ months: +0
+        let recencyBoost = 0
+        if (daysSinceFile <= 1) recencyBoost = 1.0        // Today - very strong boost
+        else if (daysSinceFile <= 7) recencyBoost = 0.8   // This week - strong boost
+        else if (daysSinceFile <= 30) recencyBoost = 0.5  // This month
+        else if (daysSinceFile <= 90) recencyBoost = 0.3  // Last 3 months
+        else if (daysSinceFile <= 180) recencyBoost = 0.1 // Last 6 months
+        
+        console.log(`📅 [ContentService] File "${result.file_name}" - Date: ${new Date(fileDate).toISOString().slice(0,10)}, Days ago: ${daysSinceFile.toFixed(1)}, Recency boost: +${recencyBoost}`)
+        
+        return {
+          ...result,
+          originalScore: result.score || result.rank || 0,
+          recencyBoost,
+          finalScore: (result.score || result.rank || 0) + recencyBoost,
+          fileDate,
+          daysSinceFile
+        }
+      })
+    }
+
     try {
       const llama = LlamaService.getInstance()
       const model = llama.getCurrentModel()
       if (model && typeof (database as any).getEmbeddingsForChunks === 'function') {
+        // Embedding/hybrid path
         const candidateIds = ftsResults.map(r => r.id).slice(0, 200)
         const embRows = (database as any).getEmbeddingsForChunks(model, candidateIds) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
         const qVec = (await llama.embedTexts([query], model))[0] || []
@@ -113,79 +204,28 @@ class ContentService {
           if (existing) { existing.sim = Math.max(existing.sim||0, sim); existing.score = (existing.score||0)+eScore; merged.set(e.id, existing) }
           else merged.set(e.id, { ...e, rank:0, score: eScore })
         }
-        // Add recency boost to make newer notes rank higher
-        const currentTime = Date.now()
-        const dayMs = 24 * 60 * 60 * 1000
         
-        const boostedResults = Array.from(merged.values()).map(result => {
-          const getFileDate = (result: any): number => {
-            // Priority 1: Use database note_date if available (most accurate)
-            if (result.note_date) {
-              return new Date(result.note_date).getTime()
-            }
-            
-            // Priority 2: Use file_mtime from database
-            if (result.file_mtime) {
-              return new Date(result.file_mtime).getTime()
-            }
-            
-            // Priority 3: Try to parse from filename
-            const fileName = result.file_name || ''
-            
-            // ISO format: 2025-08-12
-            let dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/)
-            if (dateMatch) {
-              return new Date(`${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`).getTime()
-            }
-            
-            // "4 aug" format - map month names
-            const monthMap: Record<string, number> = {
-              jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
-              apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
-              aug: 8, august: 8, sep: 9, september: 9, oct: 10, october: 10,
-              nov: 11, november: 11, dec: 12, december: 12
-            }
-            
-            const monthMatch = fileName.toLowerCase().match(/(\d{1,2})\s+(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november|dec|december)/i)
-            if (monthMatch) {
-              const day = parseInt(monthMatch[1])
-              const month = monthMap[monthMatch[2].toLowerCase()]
-              const currentYear = new Date().getFullYear()
-              return new Date(currentYear, month - 1, day).getTime()
-            }
-            
-            return currentTime - (365 * dayMs) // fallback to 1 year ago if no date
-          }
-          
-          const fileDate = getFileDate(result)
-          const daysSinceFile = (currentTime - fileDate) / dayMs
-          
-          // Strong recency boost to prioritize recent content for "recently" queries
-          // Files from today: +1.0, 1 week ago: +0.8, 1 month ago: +0.5, 6+ months: +0
-          let recencyBoost = 0
-          if (daysSinceFile <= 1) recencyBoost = 1.0        // Today - very strong boost
-          else if (daysSinceFile <= 7) recencyBoost = 0.8   // This week - strong boost
-          else if (daysSinceFile <= 30) recencyBoost = 0.5  // This month
-          else if (daysSinceFile <= 90) recencyBoost = 0.3  // Last 3 months
-          else if (daysSinceFile <= 180) recencyBoost = 0.1 // Last 6 months
-          
-          console.log(`📅 [ContentService] File "${result.file_name}" - Date: ${new Date(fileDate).toISOString().slice(0,10)}, Days ago: ${daysSinceFile.toFixed(1)}, Recency boost: +${recencyBoost}`)
-          
-          return {
-            ...result,
-            originalScore: result.score || 0,
-            recencyBoost,
-            finalScore: (result.score || 0) + recencyBoost,
-            fileDate,
-            daysSinceFile
-          }
-        })
-        
+        // Apply recency boost to hybrid results
+        const boostedResults = applyRecencyBoost(Array.from(merged.values()))
+        results = boostedResults
+          .sort((a,b) => b.finalScore - a.finalScore) // Sort by boosted score
+          .slice(0,20)
+      } else {
+        // FTS-only path - also apply recency boost!
+        console.log('🔍 [ContentService] Using FTS-only search with recency boost')
+        const boostedResults = applyRecencyBoost(ftsResults)
         results = boostedResults
           .sort((a,b) => b.finalScore - a.finalScore) // Sort by boosted score
           .slice(0,20)
       }
-    } catch {}
+    } catch {
+      // Fallback: still apply recency boost to FTS results
+      console.log('⚠️ [ContentService] Search fallback with recency boost')
+      const boostedResults = applyRecencyBoost(ftsResults)
+      results = boostedResults
+        .sort((a,b) => b.finalScore - a.finalScore)
+        .slice(0,20)
+    }
 
     const dateBlock = (()=>{
       if (!dateFilter) return ''

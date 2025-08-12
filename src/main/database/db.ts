@@ -646,10 +646,20 @@ class IslaDatabase {
       november: '11', nov: '11', december: '12', dec: '12'
     }
     
-    const monthFilename = fileName.toLowerCase().match(/(\d{1,2})\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)/i)
+    // "4 aug" or "12 august" format (day + month)
+    let monthFilename = fileName.toLowerCase().match(/(\d{1,2})\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)/i)
     if (monthFilename) {
       const day = parseInt(monthFilename[1]).toString().padStart(2, '0')
       const month = monthMap[monthFilename[2].toLowerCase()]
+      const currentYear = new Date().getFullYear()
+      return `${currentYear}-${month}-${day}`
+    }
+    
+    // "Jan 17" format (month + day)
+    monthFilename = fileName.toLowerCase().match(/(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{1,2})/i)
+    if (monthFilename) {
+      const month = monthMap[monthFilename[1].toLowerCase()]
+      const day = parseInt(monthFilename[2]).toString().padStart(2, '0')
       const currentYear = new Date().getFullYear()
       return `${currentYear}-${month}-${day}`
     }
