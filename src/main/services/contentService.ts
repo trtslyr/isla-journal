@@ -78,7 +78,8 @@ class ContentService {
       const model = llama.getCurrentModel()
       if (model && typeof (database as any).getEmbeddingsForModel === 'function') {
         const allEmb = (database as any).getEmbeddingsForModel(model) as Array<{ chunk_id:number; file_id:number; file_path:string; file_name:string; chunk_text:string; vector:number[] }>
-        const qVec = (await llama.embedTexts([query], model))[0] || []
+        // Use embedding model for retrieval embedding
+        const qVec = (await llama.embedTexts([query]))[0] || []
         const scored = allEmb.map(e => ({ id:e.chunk_id, file_id:e.file_id, file_path:e.file_path, file_name:e.file_name, content_snippet:e.chunk_text.slice(0,200), sim: cosineSimilarity(qVec, e.vector) }))
         scored.sort((a,b)=>b.sim-a.sim)
         const topE = scored.slice(0, 30)

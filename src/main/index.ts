@@ -1093,7 +1093,7 @@ ipcMain.handle('embeddings:rebuild', async (_, modelName?: string) => {
   try {
     await database.ensureReady()
     const llama = LlamaService.getInstance()
-    const model = modelName || llama.getCurrentModel()
+    const model = modelName || llama.getEmbeddingModel()
     if (!model) throw new Error('No model selected for embeddings')
 
     // Process in small batches to avoid blocking too much

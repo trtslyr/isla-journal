@@ -22,6 +22,7 @@ export class LlamaService {
   private currentModel: string | null = null
   private isInitialized = false
   private mainWindow: BrowserWindow | null = null
+  private embeddingModel: string = 'nomic-embed-text'
 
   public static getInstance(): LlamaService {
     if (!LlamaService.instance) {
@@ -154,6 +155,11 @@ export class LlamaService {
       
       this.isInitialized = true
       this.safeLog('✅ [LlamaService] Initialization completed')
+      
+      // Best effort: ensure embedding model is available in background
+      try {
+        await this.ensureModelAvailable(this.embeddingModel)
+      } catch {}
       
     } catch (error) {
       this.safeLog(`❌ [LlamaService] Initialization failed: ${error}`, 'error')
@@ -308,6 +314,10 @@ export class LlamaService {
     return this.currentModel
   }
 
+  public getEmbeddingModel(): string {
+    return this.embeddingModel
+  }
+
   public async switchModel(modelName: string): Promise<void> {
     console.log(`🔄 [LlamaService] Switching to model: ${modelName}`)
     
@@ -333,10 +343,12 @@ export class LlamaService {
     if (!this.isInitialized) {
       throw new Error('LlamaService not initialized')
     }
-    const model = modelOverride || this.currentModel
+    const model = modelOverride || this.embeddingModel
     if (!model) throw new Error('No model available for embeddings')
 
     try {
+      // Ensure embedding model is available
+      await this.ensureModelAvailable(model)
       // Ollama embeddings endpoint supports single text per call; do sequential to avoid overload
       const vectors: number[][] = []
       for (const t of texts) {
