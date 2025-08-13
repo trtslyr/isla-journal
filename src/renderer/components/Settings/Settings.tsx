@@ -180,11 +180,15 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
         downloadProgress: 0
       })
 
-      // Set selected model to current model
-      if (currentModel) {
+      // Set selected model preference
+      const chatCapable = (m: string) => !/embed/i.test(m)
+      if (currentModel && chatCapable(currentModel)) {
         setSelectedModel(currentModel)
-      } else if (recommendedModel) {
+      } else if (recommendedModel?.modelName && chatCapable(recommendedModel.modelName)) {
         setSelectedModel(recommendedModel.modelName)
+      } else {
+        const firstChat = (availableModels || []).find(chatCapable)
+        if (firstChat) setSelectedModel(firstChat)
       }
 
     } catch (error) {
@@ -353,7 +357,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadCurrentTheme = async () => {
     try {
-      const theme = await window.electronAPI.settingsGet('theme') || 'dark'
+      const theme = await window.electronAPI.settingsGet?.('theme') || 'dark'
       setCurrentTheme(theme)
       applyTheme(theme)
     } catch (error) {
@@ -364,7 +368,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleThemeChange = async (newTheme: string) => {
     try {
       setCurrentTheme(newTheme)
-      await window.electronAPI.settingsSet('theme', newTheme)
+      await window.electronAPI.settingsSet?.('theme', newTheme)
       applyTheme(newTheme)
       console.log('🎨 Theme changed to:', newTheme)
     } catch (error) {
@@ -378,8 +382,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadCurrentFontSettings = async () => {
     try {
-      const fontFamily = await window.electronAPI.settingsGet('fontFamily') || 'jetbrains-mono'
-      const fontSize = await window.electronAPI.settingsGet('fontSize') || 14
+      const fontFamily = await window.electronAPI.settingsGet?.('fontFamily') || 'jetbrains-mono'
+      const fontSize = await window.electronAPI.settingsGet?.('fontSize') || 14
       setCurrentFontFamily(fontFamily)
       setCurrentFontSize(fontSize)
       applyFontSettings(fontFamily, fontSize)
@@ -404,10 +408,10 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadFtsSettings = async () => {
     try {
-      const maxResults = parseInt((await window.electronAPI.settingsGet('ftsMaxResults')) || '20')
-      const perFile = parseInt((await window.electronAPI.settingsGet('ftsPerFileCap')) || '2')
-      const charBudget = parseInt((await window.electronAPI.settingsGet('ftsCharBudget')) || '2400')
-      const op = ((await window.electronAPI.settingsGet('ftsOperator')) || 'AND').toUpperCase()
+      const maxResults = parseInt((await window.electronAPI.settingsGet?.('ftsMaxResults')) || '20')
+      const perFile = parseInt((await window.electronAPI.settingsGet?.('ftsPerFileCap')) || '2')
+      const charBudget = parseInt((await window.electronAPI.settingsGet?.('ftsCharBudget')) || '2400')
+      const op = ((await window.electronAPI.settingsGet?.('ftsOperator')) || 'AND').toUpperCase()
       setFtsMaxResults(Number.isFinite(maxResults) ? maxResults : 20)
       setFtsPerFileCap(Number.isFinite(perFile) ? perFile : 2)
       setFtsCharBudget(Number.isFinite(charBudget) ? charBudget : 2400)
@@ -420,7 +424,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleFontFamilyChange = async (newFontFamily: string) => {
     try {
       setCurrentFontFamily(newFontFamily)
-      await window.electronAPI.settingsSet('fontFamily', newFontFamily)
+      await window.electronAPI.settingsSet?.('fontFamily', newFontFamily)
       applyFontSettings(newFontFamily, currentFontSize)
       console.log('👀 Font family changed to:', newFontFamily)
     } catch (error) {
@@ -431,7 +435,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleFontSizeChange = async (newFontSize: number) => {
     try {
       setCurrentFontSize(newFontSize)
-      await window.electronAPI.settingsSet('fontSize', newFontSize)
+      await window.electronAPI.settingsSet?.('fontSize', newFontSize)
       applyFontSettings(currentFontFamily, newFontSize)
       console.log('👀 Font size changed to:', newFontSize)
     } catch (error) {
@@ -629,12 +633,9 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
               )}
             </div>
 
-            {/* Advanced Settings - Collapsible (only when a model is connected on startup) */}
-            {modelStatus.isConnected && (
+            {/* Model selection (always visible) */}
             <div className="settings-item">
-              <details className="advanced-settings">
-                <summary className="advanced-toggle">🔧 Advanced Model Settings</summary>
-                <div className="advanced-content">
+              <div className="advanced-content">
                   <p className="advanced-note">
                     <small>⚠️ The system automatically selects the best model for your device. Only change this if you have specific requirements.</small>
                   </p>
@@ -669,50 +670,30 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
                   {/* Manual Model Selection */}
                   <div className="manual-selection">
-                    <label>Override Model Selection:</label>
-                    <select 
-                      className="settings-select"
-                      value={selectedModel}
-                      onChange={(e) => handleModelChange(e.target.value)}
-                      disabled={modelStatus.isDownloading}
-                    >
-                      <option value="llama3.2:latest">
-                        Llama 3.2 3B - Fast & Efficient {selectedModel === 'llama3.2:latest' ? '(Active)' : ''}
-                      </option>
-                      <option value="llama3.1:latest">
-                        Llama 3.1 8B - High Quality {selectedModel === 'llama3.1:latest' ? '(Active)' : ''}
-                      </option>
-                      <option value="gemma2:2b">
-                        Gemma 2 2B - Ultra Fast {selectedModel === 'gemma2:2b' ? '(Active)' : ''}
-                      </option>
-                      <option value="phi3:mini">
-                        Phi-3 Mini - Code & Reasoning {selectedModel === 'phi3:mini' ? '(Active)' : ''}
-                      </option>
-                    </select>
+                    <label>Installed Models:</label>
+                    {modelStatus.availableModels.length === 0 ? (
+                      <div style={{ color: 'var(--text-secondary)' }}>No models detected. In a terminal: <code>ollama pull gemma2:2b</code></div>
+                    ) : (
+                      <select 
+                        className="settings-select"
+                        value={selectedModel}
+                        onChange={(e) => handleModelChange(e.target.value)}
+                        disabled={modelStatus.isDownloading}
+                      >
+                        {modelStatus.availableModels
+                          .filter(m => !/embed/i.test(m))
+                          .map(m => (
+                            <option key={m} value={m}>{m}{selectedModel === m ? ' (Active)' : ''}</option>
+                          ))}
+                      </select>
+                    )}
                     <small style={{ color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
-                      Current: {modelStatus.currentModel || 'Loading...'}
-                      {modelStatus.recommendedModel && modelStatus.currentModel === modelStatus.recommendedModel.modelName && ' (Auto-Selected)'}
+                      Current: {modelStatus.currentModel || '—'}
                     </small>
                   </div>
 
-                  {/* Available Models List */}
-                  {modelStatus.availableModels.length > 0 && (
-                    <div className="installed-models-section">
-                      <label>Installed Models:</label>
-                      <div className="installed-models">
-                        {modelStatus.availableModels.map(model => (
-                          <span key={model} className="installed-model">
-                            {model}
-                            {model === modelStatus.currentModel && <span className="current-indicator"> (active)</span>}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </details>
+              </div>
             </div>
-            )}
           </div>
 
           {/* Storage Section */}

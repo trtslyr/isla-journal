@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Testing Ollama API</h1>
+    <button onclick="testAPI()">Test Chat API</button>
+    <div id="result"></div>
+
+    <script>
+    async function testAPI() {
+        const result = document.getElementById('result');
+        try {
+            result.innerHTML = 'Testing...';
+            
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'gemma2:2b',
+                    messages: [{ role: 'user', content: 'Hello test' }],
+                    stream: false
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            result.innerHTML = `<pre>SUCCESS:\n${JSON.stringify(data, null, 2)}</pre>`;
+            
+        } catch (error) {
+            result.innerHTML = `<pre>ERROR: ${error.message}</pre>`;
+        }
+    }
+    
+    // Test on load
+    testAPI();
+    </script>
+</body>
+</html>

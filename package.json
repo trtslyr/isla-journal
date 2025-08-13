@@ -1,229 +1,43 @@
 {
   "name": "isla-journal",
   "version": "0.1.0",
-  "description": "A fully offline, VS Code-style journal app with AI integration",
-  "main": "dist/main/index.js",
+  "description": "A fully offline, VS Code-style journal app with AI integration (PWA)",
+  "private": true,
   "scripts": {
-    "dev": "npm run build && electron-forge start",
-    "start": "electron-forge start",
-    "build": "npm run clean:dist && npm run build:vite && npm run build:main && npm run build:preload",
-    "build:vite": "vite build",
-    "build:main": "tsc -p tsconfig.main.json",
-    "build:preload": "tsc -p tsconfig.preload.json",
-    "package": "npm run build && electron-forge package",
-    "make": "npm run build && electron-forge make",
-    "make:windows": "npm run build && electron-forge make --platform=win32",
-    "make:mac-zip": "npm run build && electron-forge make --targets=@electron-forge/maker-zip --platform=darwin",
-    "make:all": "npm run build && electron-forge make --platform=win32 --platform=darwin --platform=linux",
-    "publish": "npm run build && electron-forge publish",
-    "postinstall": "npm run setup:platform",
-    "setup:platform": "node -e \"console.log('Setting up for', process.platform, process.arch)\"",
-    "rebuild:native": "npx @electron/rebuild --force",
-    "rebuild:clean": "npm run clean:all && npm install && npm run rebuild:native",
-    "rebuild:windows": "npm run clean:modules && npm install --ignore-scripts && npx @electron/rebuild --force --arch=x64",
-    "clean:all": "npm run clean:dist && npm run clean:modules",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "node scripts/serve-proxy.mjs",
+    "serve:build": "npm run build && node scripts/serve-proxy.mjs",
     "clean:dist": "node -e \"const fs=require('fs'); const path='dist'; if(fs.existsSync(path)) fs.rmSync(path,{recursive:true,force:true}); console.log('dist cleaned')\"",
-    "clean:modules": "node -e \"const fs=require('fs'); ['node_modules','package-lock.json'].forEach(p=>{if(fs.existsSync(p)) fs.rmSync(p,{recursive:true,force:true})}); console.log('modules cleaned')\"",
-    "binaries": "node scripts/download-precompiled-binaries.js",
-    "binaries:all": "node scripts/download-precompiled-binaries.js --all",
-    "binaries:clean": "node scripts/download-precompiled-binaries.js --clean",
-    "icons": "node scripts/generate-icons.js",
-    "dev:icon": "node scripts/dev-with-icon.js",
-    "build:windows": "node scripts/clean-build-windows.js"
+    "clean:modules": "node -e \"const fs=require('fs'); ['node_modules','package-lock.json'].forEach(p=>{if(fs.existsSync(p)) fs.rmSync(p,{recursive:true,force:true})}); console.log('modules cleaned')\""
   },
   "keywords": [
     "journal",
     "offline",
     "ai",
-    "electron",
-    "react",
-    "cross-platform"
+    "pwa",
+    "react"
   ],
   "author": "Taylor Wall",
   "license": "MIT",
   "homepage": "./",
   "devDependencies": {
-    "@electron-forge/cli": "^7.8.3",
-    "@electron-forge/maker-deb": "^7.8.3",
-    "@electron-forge/maker-dmg": "^7.8.3",
-    "@electron-forge/maker-rpm": "^7.8.3",
-    "@electron-forge/maker-squirrel": "^7.8.3",
-    "@electron-forge/maker-wix": "^7.8.3",
-    "@electron-forge/maker-zip": "^7.8.3",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.8.3",
-    "@electron-forge/plugin-fuses": "^7.8.3",
-    "@electron-forge/publisher-github": "^7.8.3",
-    "@electron/fuses": "^1.8.0",
-    "@electron/rebuild": "^3.6.0",
-    "@types/chokidar": "^1.7.5",
-    "@types/node": "^20.19.10",
     "@types/react": "^18.2.31",
     "@types/react-dom": "^18.2.14",
     "@vitejs/plugin-react": "^4.1.0",
-    "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3",
-    "electron": "^27.0.0",
-    "electron-builder": "^26.0.12",
-    "electron-icon-builder": "^2.0.1",
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "@qdrant/js-client-rest": "^1.15.0",
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.2.0",
-    "chokidar": "^4.0.3",
     "dompurify": "^3.2.6",
-    "electron-squirrel-startup": "^1.0.1",
-    "llamaindex": "^0.11.26",
     "marked": "^16.1.2",
     "monaco-editor": "^0.52.2",
-    "ollama": "^0.5.16",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "systeminformation": "^5.27.7",
-    "uuid": "^11.1.0"
-  },
-  "build": {
-    "appId": "com.taylorwall.isla-journal",
-    "productName": "Isla Journal",
-    "copyright": "Copyright © 2025 Taylor Wall",
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/systeminformation/**/*",
-      "node_modules/electron-squirrel-startup/**/*",
-      "node_modules/chokidar/**/*",
-      "node_modules/ollama/**/*",
-      "node_modules/uuid/**/*",
-      "!node_modules/**/*.{md,txt,license,LICENSE}",
-      "!node_modules/**/test/**/*",
-      "!node_modules/**/tests/**/*",
-      "!node_modules/**/*.d.ts",
-      "!node_modules/**/docs/**/*",
-      "!node_modules/**/example/**/*",
-      "!node_modules/**/examples/**/*"
-    ],
-    "extraMetadata": {
-      "main": "dist/main/index.js"
-    },
-    "mac": {
-      "category": "public.app-category.productivity",
-      "hardenedRuntime": true,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "gatekeeperAssess": false,
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "dmg": {
-      "title": "Isla Journal",
-      "backgroundColor": "#1e1e1e",
-      "window": {
-        "width": 540,
-        "height": 380
-      },
-      "contents": [
-        {
-          "x": 180,
-          "y": 170,
-          "type": "file"
-        },
-        {
-          "x": 360,
-          "y": 170,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Isla Journal"
-    },
-    "linux": {
-      "category": "Office",
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "rpm",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "tar.gz",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "appImage": {
-      "synopsis": "AI-powered offline journal and writing companion"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "trtslyr",
-      "repo": "isla-journal"
-    }
+    "uuid": "^11.1.0",
+    "http-proxy": "^1.18.1",
+    "sirv": "^2.0.3"
   }
 }
