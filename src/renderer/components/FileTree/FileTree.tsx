@@ -72,11 +72,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   useEffect(() => {
     const loadPinnedItems = async () => {
       try {
-        const saved = await window.electronAPI.settingsGet('pinnedItems')
+        const saved = await window.electronAPI.settingsGet?.('pinnedItems')
         if (saved) {
           const parsed = JSON.parse(saved)
           // Normalize paths by prepending current root if items were saved with base names only
-          const root = await window.electronAPI.settingsGet('selectedDirectory')
+          const root = await window.electronAPI.settingsGet?.('selectedDirectory')
           const normed = Array.isArray(parsed) ? parsed.map((p: any) => {
             if (p?.path && !p.path.startsWith('/')) {
               return { ...p, path: `${root}/${p.path}` }
@@ -117,7 +117,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   useEffect(() => {
     const savePinnedItems = async () => {
       try {
-        await window.electronAPI.settingsSet('pinnedItems', JSON.stringify(pinnedItems))
+        await window.electronAPI.settingsSet?.('pinnedItems', JSON.stringify(pinnedItems))
       } catch (error) {
         console.error('Failed to save pinned items:', error)
       }
@@ -167,7 +167,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     
     try {
       console.log('📁 [FileTree] Loading directory:', dirPath)
-      const result = await window.electronAPI.readDirectory(dirPath)
+      const result = await window.electronAPI.readDirectory?.(dirPath)
       
       const processedFiles = result.map((item: any) => ({
         ...item,
@@ -191,7 +191,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   const loadSubdirectory = async (dirPath: string): Promise<FileItem[]> => {
     try {
-      const result = await window.electronAPI.readDirectory(dirPath)
+      const result = await window.electronAPI.readDirectory?.(dirPath)
       const processedFiles = result.map((item: any) => ({
         ...item,
         name: item.type === 'file' ? cleanFileName(item.name) : cleanDirectoryName(item.name),
@@ -348,7 +348,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     }
 
     try {
-      await window.electronAPI.deleteFile(item.path)
+      await window.electronAPI.deleteFile?.(item.path)
       
       // Remove from pinned items if it was pinned
       setPinnedItems(prev => prev.filter(pinned => pinned.path !== item.path))
@@ -387,12 +387,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     if (!renamingItem) return
 
     try {
-      const result = await window.electronAPI.renameFile(renamingItem.path, newName)
+      const result = await window.electronAPI.renameFile?.(renamingItem.path, newName)
       
       // Update pinned items if the renamed item was pinned
       setPinnedItems(prev => prev.map(pinned => 
         pinned.path === renamingItem.path 
-          ? { ...pinned, path: result.newPath, name: newName }
+          ? { ...pinned, path: result?.newPath, name: newName }
           : pinned
       ))
       
@@ -401,7 +401,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         const newSelected = new Set(prev)
         if (newSelected.has(renamingItem.path)) {
           newSelected.delete(renamingItem.path)
-          newSelected.add(result.newPath)
+          newSelected.add(result?.newPath || '')
         }
         return newSelected
       })
@@ -434,7 +434,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     if (!rootPath) return
     
     try {
-      await window.electronAPI.createFile(rootPath, fileName)
+      await window.electronAPI.createFile?.(rootPath, fileName)
       loadDirectory(rootPath) // Refresh the list
     } catch (error) {
       console.error('Failed to create file:', error)
@@ -446,7 +446,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     if (!rootPath) return
     
     try {
-      await window.electronAPI.createDirectory(rootPath, folderName)
+      await window.electronAPI.createDirectory?.(rootPath, folderName)
       loadDirectory(rootPath) // Refresh the list
     } catch (error) {
       console.error('Failed to create folder:', error)
@@ -479,7 +479,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   const loadSavedDirectory = async () => {
     try {
       console.log('🔄 [FileTree] Manually loading saved directory...')
-      const savedDirectory = await window.electronAPI.settingsGet('selectedDirectory')
+      const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
       console.log('🔍 [FileTree] Found saved directory:', savedDirectory)
       if (savedDirectory) {
         // Trigger the parent to update rootPath by calling onDirectorySelect
@@ -506,7 +506,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
     setIsSearching(true)
     try {
-      const results = await window.electronAPI.searchContent(query, 20)
+      const results = await window.electronAPI.searchContent?.(query, 20)
       setSearchResults(results)
       setShowSearchResults(true)
       console.log(`🔍 [FileTree] Found ${results.length} search results for: ${query}`)
@@ -776,14 +776,14 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           if (!draggedItem) continue
           
           try {
-            const result = await window.electronAPI.moveFile(draggedPath, targetItem.path)
-            if (result.success) {
+            const result = await window.electronAPI.moveFile?.(draggedPath, targetItem.path)
+            if (result?.success) {
               console.log('🚚 [FileTree] Moved:', draggedItem.name, 'to', targetItem.name)
               
               // Update pinned items if the moved item was pinned
               setPinnedItems(prev => prev.map(pinned => 
                 pinned.path === draggedPath 
-                  ? { ...pinned, path: result.newPath }
+                  ? { ...pinned, path: result?.newPath }
                   : pinned
               ))
               
@@ -792,11 +792,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                 const newSelected = new Set(prev)
                 if (newSelected.has(draggedPath)) {
                   newSelected.delete(draggedPath)
-                  newSelected.add(result.newPath)
+                  newSelected.add(result?.newPath || '')
                 }
                 return newSelected
               })
-            } else if (result.message) {
+            } else if (result?.message) {
               console.log('ℹ️ [FileTree]', result.message)
             }
           } catch (error) {

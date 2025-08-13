@@ -135,7 +135,7 @@ const App: React.FC = () => {
 
   // Event-driven settings updates (theme and others)
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onSettingsChanged(({ key, value }) => {
+    const unsubscribe = window.electronAPI.onSettingsChanged?.(({ key, value }) => {
       if (key === 'theme') {
         setCurrentTheme(value || 'dark')
         document.documentElement.setAttribute('data-theme', value || 'dark')
@@ -345,16 +345,16 @@ const App: React.FC = () => {
         }
         
         // Get app info
-        const versionInfo = await window.electronAPI.getVersion()
+        const versionInfo = await window.electronAPI.getVersion?.()
         setVersion(versionInfo)
         try {
-          const plat = await window.electronAPI.getPlatform()
+          const plat = await window.electronAPI.getPlatform?.()
           setPlatform(plat)
         } catch {}
 
         // Load saved directory from settings
         try {
-          const savedDirectory = await window.electronAPI.settingsGet('selectedDirectory')
+          const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
           console.log('🔍 [App] Raw saved directory result:', savedDirectory)
           if (savedDirectory) {
             console.log('📁 [App] Restoring saved directory:', savedDirectory)
@@ -369,14 +369,14 @@ const App: React.FC = () => {
 
         // Restore previous editor session (tabs + active)
         try {
-          const savedTabsJson = await window.electronAPI.settingsGet('sessionTabs')
-          const savedActive = await window.electronAPI.settingsGet('sessionActiveTabId')
+          const savedTabsJson = await window.electronAPI.settingsGet?.('sessionTabs')
+          const savedActive = await window.electronAPI.settingsGet?.('sessionActiveTabId')
           if (savedTabsJson) {
             const list: Array<{id:string; name:string; path:string|null}> = JSON.parse(savedTabsJson)
             const restored: EditorTab[] = []
             for (const t of list) {
               try {
-                const content = t.path ? await window.electronAPI.readFile(t.path) : ''
+                const content = t.path ? await window.electronAPI.readFile?.(t.path) : ''
                 restored.push({ id: t.id, name: t.name, path: t.path, content, hasUnsavedChanges: false })
               } catch (e) {
                 console.warn('⚠️ [App] Failed to restore tab content for', t.path, e)
@@ -397,7 +397,7 @@ const App: React.FC = () => {
         }
 
         // Load chats
-        const chats = await window.electronAPI.chatGetAll()
+        const chats = await window.electronAPI.chatGetAll?.()
         setAllChats(chats)
 
         // Load LLM models and current model
@@ -411,7 +411,7 @@ const App: React.FC = () => {
         }
 
         // Load active chat and its messages (if any exist)
-        const activeChat = await window.electronAPI.chatGetActive()
+        const activeChat = await window.electronAPI.chatGetActive?.()
         if (activeChat) {
           setActiveChat(activeChat)
           const messages = await window.electronAPI.chatGetMessages(activeChat.id)
@@ -436,8 +436,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const minimal = tabs.map(t => ({ id: t.id, name: t.name, path: t.path }))
     try {
-      window.electronAPI.settingsSet('sessionTabs', JSON.stringify(minimal))
-      if (activeTabId) window.electronAPI.settingsSet('sessionActiveTabId', activeTabId)
+      window.electronAPI.settingsSet?.('sessionTabs', JSON.stringify(minimal))
+      if (activeTabId) window.electronAPI.settingsSet?.('sessionActiveTabId', activeTabId)
     } catch (e) {
       console.warn('⚠️ [App] Failed to persist session', e)
     }
@@ -481,7 +481,7 @@ const App: React.FC = () => {
   const handleFileSelect = async (filePath: string, fileName: string) => {
     try {
       // Load the selected file content
-      const content = await window.electronAPI.readFile(filePath)
+      const content = await window.electronAPI.readFile?.(filePath)
       
       // Clean up the file name by removing ID suffix
           const cleanFileName = fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md').replace(/\.md$/i,'')
@@ -514,7 +514,7 @@ const App: React.FC = () => {
       }
       // Update date meta in title area (read-only)
       try {
-        const meta = await window.electronAPI.getFileMetaByPath(filePath)
+        const meta = await window.electronAPI.getFileMetaByPath?.(filePath)
         const el = document.getElementById('editor-file-date')
         if (el && meta) {
           const created = meta.note_date || meta.created_at || ''
@@ -560,7 +560,7 @@ const App: React.FC = () => {
       console.log('💬 [App] Sending message:', userContent)
       
       // Save user message to database
-      await window.electronAPI.chatAddMessage(activeChat.id, 'user', userContent)
+      await window.electronAPI.chatAddMessage?.(activeChat.id, 'user', userContent)
       
       // Add user message to UI immediately
       const userMessage = {
@@ -583,11 +583,13 @@ const App: React.FC = () => {
       if (!ragResponse) {
         console.log(`⚠️ [App] No RAG response, falling back to basic LLM`)
         // Fallback to basic LLM response
-        const basicResponse = await window.electronAPI.llmSendMessage([
-          { role: 'user', content: userContent }
-        ])
+        const basicResponse = await window.electronAPI.llmSendMessage?.(
+          [
+            { role: 'user', content: userContent }
+          ]
+        )
         
-        await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', basicResponse)
+        await window.electronAPI.chatAddMessage?.(activeChat.id, 'assistant', basicResponse)
         
         const assistantMessage = {
           id: (Date.now() + 1).toString(),
@@ -615,11 +617,13 @@ const App: React.FC = () => {
       // Fallback to basic LLM if RAG fails
       try {
         console.log('🔄 [App] RAG failed, falling back to basic LLM...')
-        const basicResponse = await window.electronAPI.llmSendMessage([
-          { role: 'user', content: userContent }
-        ])
+        const basicResponse = await window.electronAPI.llmSendMessage?.(
+          [
+            { role: 'user', content: userContent }
+          ]
+        )
         
-        await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', basicResponse)
+        await window.electronAPI.chatAddMessage?.(activeChat.id, 'assistant', basicResponse)
         
         const assistantMessage = {
           id: (Date.now() + 1).toString(),
@@ -662,13 +666,13 @@ const App: React.FC = () => {
       
       console.log('🆕 [App] Creating new chat:', title || 'Untitled')
       const newTitle = title || `Chat ${allChats.length + 1}`
-      const newChat = await window.electronAPI.chatCreate(newTitle)
+      const newChat = await window.electronAPI.chatCreate?.(newTitle)
       console.log('✅ [App] Chat created with ID:', newChat.id)
       
       // No automatic welcome messages - user starts with clean chat
       
       // Refresh chats and set as active
-      const chats = await window.electronAPI.chatGetAll()
+      const chats = await window.electronAPI.chatGetAll?.()
       setAllChats(chats)
       console.log('🔄 [App] Refreshed chat list, switching to new chat')
       
@@ -691,10 +695,10 @@ const App: React.FC = () => {
       }
       
       console.log('🔄 [App] Switching to chat ID:', chatId)
-      await window.electronAPI.chatSetActive(chatId)
+      await window.electronAPI.chatSetActive?.(chatId)
       
       // Update local state
-      const updatedChats = await window.electronAPI.chatGetAll()
+      const updatedChats = await window.electronAPI.chatGetAll?.()
       setAllChats(updatedChats)
       
       const chat = updatedChats.find(c => c.id === chatId)
@@ -703,7 +707,7 @@ const App: React.FC = () => {
         console.log('✅ [App] Active chat set:', chat.title)
         
         // Load messages for this chat
-        const messages = await window.electronAPI.chatGetMessages(chatId)
+        const messages = await window.electronAPI.chatGetMessages?.(chatId)
         setChatMessages(messages.map(msg => ({
           id: msg.id.toString(),
           content: msg.content,
@@ -722,8 +726,8 @@ const App: React.FC = () => {
 
   const deleteChat = async (chatId: number) => {
     try {
-      await window.electronAPI.chatDelete(chatId)
-      const chats = await window.electronAPI.chatGetAll()
+      await window.electronAPI.chatDelete?.(chatId)
+      const chats = await window.electronAPI.chatGetAll?.()
       setAllChats(chats)
       
       // If deleted chat was active, switch to first available or create new
@@ -752,11 +756,11 @@ const App: React.FC = () => {
     try {
       console.log('🔧 [App] Calling chatRename API...')
       console.log('🔧 [App] electronAPI.chatRename exists?', typeof window.electronAPI.chatRename)
-      await window.electronAPI.chatRename(renamingChat.id, newTitle)
+      await window.electronAPI.chatRename?.(renamingChat.id, newTitle)
       console.log('🔧 [App] chatRename API completed')
       
       // Refresh chats list
-      const chats = await window.electronAPI.chatGetAll()
+      const chats = await window.electronAPI.chatGetAll?.()
       setAllChats(chats)
       
       // Update active chat if it was renamed
@@ -783,14 +787,14 @@ const App: React.FC = () => {
   // Directory persistence
   const handleOpenDirectory = async () => {
     try {
-      const result = await window.electronAPI.openDirectory()
+      const result = await window.electronAPI.openDirectory?.()
       if (result) {
         console.log('📁 [App] Directory selected:', result)
         setRootDirectory(result)
         
         // Save the selected directory to settings
         try {
-          await window.electronAPI.settingsSet('selectedDirectory', result)
+          await window.electronAPI.settingsSet?.('selectedDirectory', result)
           console.log('💾 [App] Directory saved to settings:', result)
         } catch (settingsError) {
           console.error('❌ [App] Failed to save directory to settings:', settingsError)
@@ -864,7 +868,7 @@ const App: React.FC = () => {
       // Debounced content search; dedupe by file_path
       const t = setTimeout(async () => {
         try {
-          const res = await window.electronAPI.searchContent(query, 12)
+          const res = await window.electronAPI.searchContent?.(query, 12)
           const seen: Record<string, boolean> = {}
           const uniq = res.filter((r:any)=>{
             if (seen[r.file_path]) return false
@@ -944,7 +948,7 @@ const App: React.FC = () => {
               try {
                 if (!activeTab?.path) return
                 const clean = newName.replace(/\.?md$/i, '')
-                await window.electronAPI.renameFile(activeTab.path, clean + '.md')
+                await window.electronAPI.renameFile?.(activeTab.path, clean + '.md')
                 // Refresh active tab path and name
                 const parent = activeTab
                 setTabs(prev => prev.map(t => t.id === parent.id ? { ...t, name: clean + '.md' } as any : t))
@@ -1047,7 +1051,7 @@ const App: React.FC = () => {
                               onClick={async () => {
                                 if (confirm('Delete ALL chats and messages? This cannot be undone.')) {
                                   try { await window.electronAPI.chatDeleteAll() } catch {}
-                                  const chats = await window.electronAPI.chatGetAll()
+                                  const chats = await window.electronAPI.chatGetAll?.()
                                   setAllChats(chats)
                                   setActiveChat(null as any)
                                   setChatMessages([])
@@ -1117,7 +1121,7 @@ const App: React.FC = () => {
                                   title={src.snippet}
                                   onClick={async ()=>{
                                     try {
-                                      const content = await window.electronAPI.readFile(src.file_path)
+                                      const content = await window.electronAPI.readFile?.(src.file_path)
                                       if (activeTab) {
                                         setTabs(prev => prev.map(tab => 
                                           tab.id === activeTab.id 

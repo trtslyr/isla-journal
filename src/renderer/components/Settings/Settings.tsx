@@ -353,7 +353,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadCurrentTheme = async () => {
     try {
-      const theme = await window.electronAPI.settingsGet('theme') || 'dark'
+      const theme = await window.electronAPI.settingsGet?.('theme') || 'dark'
       setCurrentTheme(theme)
       applyTheme(theme)
     } catch (error) {
@@ -364,7 +364,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleThemeChange = async (newTheme: string) => {
     try {
       setCurrentTheme(newTheme)
-      await window.electronAPI.settingsSet('theme', newTheme)
+      await window.electronAPI.settingsSet?.('theme', newTheme)
       applyTheme(newTheme)
       console.log('🎨 Theme changed to:', newTheme)
     } catch (error) {
@@ -378,8 +378,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadCurrentFontSettings = async () => {
     try {
-      const fontFamily = await window.electronAPI.settingsGet('fontFamily') || 'jetbrains-mono'
-      const fontSize = await window.electronAPI.settingsGet('fontSize') || 14
+      const fontFamily = await window.electronAPI.settingsGet?.('fontFamily') || 'jetbrains-mono'
+      const fontSize = await window.electronAPI.settingsGet?.('fontSize') || 14
       setCurrentFontFamily(fontFamily)
       setCurrentFontSize(fontSize)
       applyFontSettings(fontFamily, fontSize)
@@ -404,10 +404,10 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
   const loadFtsSettings = async () => {
     try {
-      const maxResults = parseInt((await window.electronAPI.settingsGet('ftsMaxResults')) || '20')
-      const perFile = parseInt((await window.electronAPI.settingsGet('ftsPerFileCap')) || '2')
-      const charBudget = parseInt((await window.electronAPI.settingsGet('ftsCharBudget')) || '2400')
-      const op = ((await window.electronAPI.settingsGet('ftsOperator')) || 'AND').toUpperCase()
+      const maxResults = parseInt((await window.electronAPI.settingsGet?.('ftsMaxResults')) || '20')
+      const perFile = parseInt((await window.electronAPI.settingsGet?.('ftsPerFileCap')) || '2')
+      const charBudget = parseInt((await window.electronAPI.settingsGet?.('ftsCharBudget')) || '2400')
+      const op = ((await window.electronAPI.settingsGet?.('ftsOperator')) || 'AND').toUpperCase()
       setFtsMaxResults(Number.isFinite(maxResults) ? maxResults : 20)
       setFtsPerFileCap(Number.isFinite(perFile) ? perFile : 2)
       setFtsCharBudget(Number.isFinite(charBudget) ? charBudget : 2400)
@@ -420,7 +420,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleFontFamilyChange = async (newFontFamily: string) => {
     try {
       setCurrentFontFamily(newFontFamily)
-      await window.electronAPI.settingsSet('fontFamily', newFontFamily)
+      await window.electronAPI.settingsSet?.('fontFamily', newFontFamily)
       applyFontSettings(newFontFamily, currentFontSize)
       console.log('👀 Font family changed to:', newFontFamily)
     } catch (error) {
@@ -431,7 +431,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const handleFontSizeChange = async (newFontSize: number) => {
     try {
       setCurrentFontSize(newFontSize)
-      await window.electronAPI.settingsSet('fontSize', newFontSize)
+      await window.electronAPI.settingsSet?.('fontSize', newFontSize)
       applyFontSettings(currentFontFamily, newFontSize)
       console.log('👀 Font size changed to:', newFontSize)
     } catch (error) {

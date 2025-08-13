@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { resolve, join } from 'path'
+import { resolve } from 'path'
 
 // Cross-platform path resolution
 const resolveAbsolute = (...paths: string[]) => resolve(__dirname, ...paths)
@@ -20,14 +20,12 @@ export default defineConfig({
     // Ensure consistent builds across platforms
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
-      input: resolveAbsolute('src', 'renderer', 'index.html'),
-      external: ['electron']
+      input: resolveAbsolute('src', 'renderer', 'index.html')
     }
   },
   resolve: {
     alias: {
       '@': resolveAbsolute('src'),
-      '@main': resolveAbsolute('src', 'main'),
       '@renderer': resolveAbsolute('src', 'renderer'),
       '@shared': resolveAbsolute('src', 'shared')
     }
@@ -36,9 +34,7 @@ export default defineConfig({
     host: 'localhost',
     port: 5173
   },
-  // Remove publicDir reference to non-existent build directory
-  publicDir: false,
-  // Cross-platform optimizations
+  publicDir: resolveAbsolute('public'),
   optimizeDeps: {
     include: ['react', 'react-dom']
   },
