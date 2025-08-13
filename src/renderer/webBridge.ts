@@ -11,8 +11,145 @@ const storage = {
 	}
 }
 
-// Basic IndexedDB wrapper for files index if needed later (placeholder)
-// For now, we read directly from the file system via File System Access API
+// Indexable extensions similar to desktop app
+const INDEXABLE_EXTENSIONS = new Set<string>([
+	'.md', '.mdx', '.txt', '.ts', '.tsx', '.js', '.jsx', '.json', '.yml', '.yaml',
+	'.py', '.go', '.rs', '.java', '.cs', '.cpp', '.c', '.h', '.rb', '.php', '.sh', '.toml'
+])
+const hasIndexableExt = (name: string): boolean => {
+	const lower = name.toLowerCase()
+	const i = lower.lastIndexOf('.')
+	if (i < 0) return false
+	return INDEXABLE_EXTENSIONS.has(lower.slice(i))
+}
+
+// In-memory index for PWA session
+interface IndexedFile { path: string; name: string; content: string; file_mtime?: string; note_date?: string; size: number }
+interface IndexedChunk { id: number; file_path: string; file_name: string; chunk_text: string; chunk_index: number; file_mtime?: string; note_date?: string }
+;(window as any).__isla_files = [] as IndexedFile[]
+;(window as any).__isla_chunks = [] as IndexedChunk[]
+
+// Date parsing similar to desktop
+function deriveNoteDate(fileName: string, content?: string): string | null {
+	if (content) {
+		const fm = content.match(/^---[\s\S]*?date:\s*['"]?(\d{4}-\d{2}-\d{2})['"]?[\s\S]*?---/i)
+		if (fm) return fm[1]
+		const firstLines = content.split('\n').slice(0, 3).join('\n')
+		const iso = firstLines.match(/(\d{4}-\d{2}-\d{2})/)
+		if (iso) return iso[1]
+		const us = firstLines.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+		if (us) {
+			const mo = parseInt(us[1]).toString().padStart(2, '0')
+			const d = parseInt(us[2]).toString().padStart(2, '0')
+			return `${us[3]}-${mo}-${d}`
+		}
+		const monthMap: Record<string,string> = { january:'01',jan:'01',february:'02',feb:'02',march:'03',mar:'03',april:'04',apr:'04',may:'05',june:'06',jun:'06',july:'07',jul:'07',august:'08',aug:'08',september:'09',sep:'09',october:'10',oct:'10',november:'11',nov:'11',december:'12',dec:'12' }
+		const written = firstLines.match(/(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{1,2}),?\s+(\d{4})/i)
+		if (written) {
+			const mo = monthMap[written[1].toLowerCase()]
+			const d = parseInt(written[2]).toString().padStart(2, '0')
+			return `${written[3]}-${mo}-${d}`
+		}
+		const reverse = firstLines.match(/(\d{1,2})\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec),?\s+(\d{4})/i)
+		if (reverse) {
+			const mo = monthMap[reverse[2].toLowerCase()]
+			const d = parseInt(reverse[1]).toString().padStart(2, '0')
+			return `${reverse[3]}-${mo}-${d}`
+		}
+	}
+	const isoInName = fileName.match(/(\d{4})-(\d{2})-(\d{2})/)
+	if (isoInName) return `${isoInName[1]}-${isoInName[2]}-${isoInName[3]}`
+	return null
+}
+
+// Chunking similar to desktop, heading-aware
+function chunkContentStructured(content: string): Array<{ text: string; headingPath: string; heading: string; level: number }> {
+	const lines = content.split(/\r?\n/)
+	const pathStack: Array<{ level: number; text: string }> = []
+	const textBlocks: Array<{ start: number; end: number; text: string; level: number; heading: string; headingPath: string }> = []
+	let currentStart = 0
+	let currentLevel = 0
+	let currentHeading = ''
+	let currentPath = ''
+	const flush = (end: number) => {
+		const block = lines.slice(currentStart, end).join('\n').trim()
+		if (block) textBlocks.push({ start: currentStart, end, text: block, level: currentLevel, heading: currentHeading, headingPath: currentPath })
+	}
+	for (let i=0;i<lines.length;i++) {
+		const m = lines[i].match(/^(#{1,6})\s+(.*)$/)
+		if (m) {
+			flush(i)
+			const level = m[1].length
+			const text = (m[2] || '').trim()
+			while (pathStack.length && pathStack[pathStack.length-1].level >= level) pathStack.pop()
+			pathStack.push({ level, text })
+			currentPath = pathStack.map(h=>h.text).join(' > ')
+			currentHeading = text
+			currentLevel = level
+			currentStart = i + 1
+		}
+	}
+	flush(lines.length)
+	const chunks: Array<{ text:string; headingPath:string; heading:string; level:number }> = []
+	const maxLen = 800
+	const overlap = 150
+	for (const b of textBlocks) {
+		const t = b.text.replace(/\s+/g, ' ').trim()
+		if (!t) continue
+		if (t.length <= maxLen) chunks.push({ text: t, headingPath: b.headingPath, heading: b.heading, level: b.level || 0 })
+		else {
+			for (let i=0;i<t.length;i += (maxLen - overlap)) {
+				const slice = t.slice(i, i+maxLen)
+				if (slice.trim().length > 50) chunks.push({ text: slice.trim(), headingPath: b.headingPath, heading: b.heading, level: b.level || 0 })
+			}
+		}
+	}
+	if (chunks.length === 0 && content.trim()) chunks.push({ text: content.trim(), headingPath: '', heading: '', level: 0 })
+	return chunks
+}
+
+// FS helpers
+async function getDirectoryHandleByPath(root: FileSystemDirectoryHandle, path: string): Promise<FileSystemDirectoryHandle | null> {
+	const rel = path.replace('fsroot://', '').replace(/^\/+/, '')
+	if (!rel) return root
+	const parts = rel.split('/').filter(Boolean)
+	let current: FileSystemDirectoryHandle = root
+	for (const p of parts) {
+		try {
+			// @ts-ignore
+			current = await current.getDirectoryHandle(p, { create: false })
+		} catch { return null }
+	}
+	return current
+}
+
+async function indexDirectoryRecursive(dir: FileSystemDirectoryHandle, basePath: string): Promise<void> {
+	for await (const [name, handle] of (dir as any).entries()) {
+		if (name.startsWith('.')) continue
+		if ((handle as any).kind === 'directory') {
+			await indexDirectoryRecursive(handle as FileSystemDirectoryHandle, `${basePath}/${name}`)
+		} else {
+			if (!hasIndexableExt(name)) continue
+			try {
+				const file = await (handle as FileSystemFileHandle).getFile()
+				const text = await file.text()
+				const filePath = `fsroot://${basePath}/${name}`.replace(/\/g,'/').replace(/\/+/g,'/')
+				const rec: IndexedFile = { path: filePath, name, content: text, size: file.size, file_mtime: new Date(file.lastModified).toISOString(), note_date: deriveNoteDate(name, text) || undefined }
+				;(window as any).__isla_files.push(rec)
+				const chunks = chunkContentStructured(text)
+				chunks.forEach((c, idx) => {
+					;(window as any).__isla_chunks.push({ id: (window as any).__isla_chunks.length + 1, file_path: filePath, file_name: name, chunk_text: c.text, chunk_index: idx, file_mtime: rec.file_mtime, note_date: rec.note_date })
+				})
+			} catch {}
+		}
+	}
+}
+
+async function buildIndexFromRoot(root: FileSystemDirectoryHandle): Promise<void> {
+	;(window as any).__isla_files = []
+	;(window as any).__isla_chunks = []
+	await indexDirectoryRecursive(root, '')
+}
 
 // File System Access helpers
 async function pickDirectory(): Promise<string | null> {
@@ -22,6 +159,7 @@ async function pickDirectory(): Promise<string | null> {
 		// @ts-ignore
 		const handle: FileSystemDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
 		;(window as any).__isla_rootHandle = handle
+		await buildIndexFromRoot(handle)
 		return 'fsroot://'
 	} catch {
 		return null
@@ -32,8 +170,10 @@ async function listDirectory(path: string): Promise<any[]> {
 	try {
 		const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 		if (!root) return []
+		const dirHandle = await getDirectoryHandleByPath(root, path)
+		if (!dirHandle) return []
 		const results: any[] = []
-		for await (const [name, handle] of (root as any).entries()) {
+		for await (const [name, handle] of (dirHandle as any).entries()) {
 			if (name.startsWith('.')) continue
 			const isDirectory = handle.kind === 'directory'
 			let size = 0
@@ -45,15 +185,9 @@ async function listDirectory(path: string): Promise<any[]> {
 					modified = new Date(file.lastModified).toISOString()
 				} catch {}
 			}
-			results.push({
-				name,
-				path: `fsroot://${name}`,
-				type: isDirectory ? 'directory' : 'file',
-				modified,
-				size
-			})
+			const subPath = (path.endsWith('/') || path === 'fsroot://') ? `${path}${name}` : `${path}/${name}`
+			results.push({ name, path: subPath, type: isDirectory ? 'directory' : 'file', modified, size })
 		}
-		// directories first
 		results.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'directory' ? -1 : 1))
 		return results
 	} catch {
@@ -65,8 +199,11 @@ async function readFileAt(path: string): Promise<string> {
 	try {
 		const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 		if (!root) throw new Error('No directory selected')
-		const name = path.replace('fsroot://', '')
-		const fileHandle = await root.getFileHandle(name, { create: false })
+		const rel = path.replace('fsroot://', '').replace(/^\/+/, '')
+		const dir = await getDirectoryHandleByPath(root, 'fsroot://' + rel.split('/').slice(0, -1).join('/'))
+		if (!dir) throw new Error('Directory not found')
+		const name = rel.split('/').pop()!
+		const fileHandle = await dir.getFileHandle(name, { create: false })
 		const file = await fileHandle.getFile()
 		return await file.text()
 	} catch (e:any) {
@@ -78,11 +215,26 @@ async function writeFileAt(path: string, content: string): Promise<boolean> {
 	try {
 		const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 		if (!root) throw new Error('No directory selected')
-		const name = path.replace('fsroot://', '')
-		const fileHandle = await root.getFileHandle(name, { create: true })
+		const rel = path.replace('fsroot://', '').replace(/^\/+/, '')
+		const dir = await getDirectoryHandleByPath(root, 'fsroot://' + rel.split('/').slice(0, -1).join('/'))
+		if (!dir) throw new Error('Directory not found')
+		const name = rel.split('/').pop()!
+		const fileHandle = await dir.getFileHandle(name, { create: true })
 		const writable = await fileHandle.createWritable()
 		await writable.write(content)
 		await writable.close()
+		// Update in-memory index
+		const idx = (window as any).__isla_files.findIndex((f:IndexedFile)=>f.path===path)
+		if (idx >= 0) {
+			;(window as any).__isla_files[idx].content = content
+			;(window as any).__isla_files[idx].file_mtime = new Date().toISOString()
+		} else {
+			;(window as any).__isla_files.push({ path, name, content, size: content.length, file_mtime: new Date().toISOString(), note_date: deriveNoteDate(name, content) || undefined })
+		}
+		// Re-chunk for this file
+		;(window as any).__isla_chunks = (window as any).__isla_chunks.filter((c:IndexedChunk)=>c.file_path!==path)
+		const chunks = chunkContentStructured(content)
+		chunks.forEach((c, i) => (window as any).__isla_chunks.push({ id: (window as any).__isla_chunks.length + 1, file_path: path, file_name: name, chunk_text: c.text, chunk_index: i }))
 		return true
 	} catch (e:any) {
 		throw new Error(e?.message || 'Write failed')
@@ -93,71 +245,90 @@ async function createFileAt(dirPath: string, fileName: string): Promise<string> 
 	const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 	if (!root) throw new Error('No directory selected')
 	if (!fileName.endsWith('.md')) fileName += '.md'
-	const handle = await root.getFileHandle(fileName, { create: true })
+	const dir = await getDirectoryHandleByPath(root, dirPath)
+	if (!dir) throw new Error('Directory not found')
+	const handle = await dir.getFileHandle(fileName, { create: true })
 	const writable = await handle.createWritable()
-	await writable.write(`# ${fileName.replace(/\.md$/,'')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`)
+	const initial = `# ${fileName.replace(/\.md$/,'')}\n\n*Created on ${new Date().toLocaleDateString()}*\n\n`
+	await writable.write(initial)
 	await writable.close()
-	return `fsroot://${fileName}`
+	const newPath = (dirPath.endsWith('/') ? `${dirPath}${fileName}` : `${dirPath}/${fileName}`)
+	;(window as any).__isla_files.push({ path: newPath, name: fileName, content: initial, size: initial.length, file_mtime: new Date().toISOString(), note_date: deriveNoteDate(fileName, initial) || undefined })
+	;(window as any).__isla_chunks.push({ id: (window as any).__isla_chunks.length + 1, file_path: newPath, file_name: fileName, chunk_text: initial, chunk_index: 0 })
+	return newPath
 }
 
 async function createDirectoryAt(parentPath: string, dirName: string): Promise<string> {
 	const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 	if (!root) throw new Error('No directory selected')
+	const dir = await getDirectoryHandleByPath(root, parentPath)
+	if (!dir) throw new Error('Directory not found')
 	// @ts-ignore
-	const dir = await root.getDirectoryHandle(dirName, { create: true })
-	return `fsroot://${dirName}`
+	await dir.getDirectoryHandle(dirName, { create: true })
+	return (parentPath.endsWith('/') ? `${parentPath}${dirName}` : `${parentPath}/${dirName}`)
 }
 
 async function deleteEntry(targetPath: string): Promise<boolean> {
 	const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 	if (!root) throw new Error('No directory selected')
-	const name = targetPath.replace('fsroot://', '')
+	const rel = targetPath.replace('fsroot://', '').replace(/^\/+/, '')
+	const parent = await getDirectoryHandleByPath(root, 'fsroot://' + rel.split('/').slice(0, -1).join('/'))
+	if (!parent) throw new Error('Directory not found')
+	const name = rel.split('/').pop()!
 	// @ts-ignore
-	await root.removeEntry(name, { recursive: true }).catch(() => {})
+	await parent.removeEntry(name, { recursive: true }).catch(() => {})
+	;(window as any).__isla_files = (window as any).__isla_files.filter((f:IndexedFile)=>!f.path.startsWith(targetPath))
+	;(window as any).__isla_chunks = (window as any).__isla_chunks.filter((c:IndexedChunk)=>!c.file_path.startsWith(targetPath))
 	return true
 }
 
 async function renameEntry(oldPath: string, newName: string): Promise<{ success: boolean; newPath: string }> {
-	// File System Access API does not support rename directly. Perform copy+delete for files.
 	const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 	if (!root) throw new Error('No directory selected')
-	const oldName = oldPath.replace('fsroot://', '')
+	const rel = oldPath.replace('fsroot://', '').replace(/^\/+/, '')
+	const parent = await getDirectoryHandleByPath(root, 'fsroot://' + rel.split('/').slice(0, -1).join('/'))
+	if (!parent) return { success: false, newPath: oldPath }
 	try {
-		const fileHandle = await root.getFileHandle(oldName, { create: false })
+		const oldName = rel.split('/').pop()!
+		const fileHandle = await parent.getFileHandle(oldName, { create: false })
 		const file = await fileHandle.getFile()
-		const newPath = `fsroot://${newName}`
-		const newHandle = await root.getFileHandle(newName, { create: true })
+		const newPath = 'fsroot://' + rel.split('/').slice(0, -1).concat([newName]).join('/')
+		const newHandle = await parent.getFileHandle(newName, { create: true })
 		const writable = await newHandle.createWritable()
 		await writable.write(await file.text())
 		await writable.close()
-		// delete old
 		// @ts-ignore
-		await root.removeEntry(oldName).catch(()=>{})
+		await parent.removeEntry(oldName).catch(()=>{})
+		;(window as any).__isla_files = (window as any).__isla_files.map((f:IndexedFile)=> f.path===oldPath ? { ...f, path: newPath, name: newName } : f)
+		;(window as any).__isla_chunks = (window as any).__isla_chunks.map((c:IndexedChunk)=> c.file_path===oldPath ? { ...c, file_path: newPath, file_name: newName } : c)
 		return { success: true, newPath }
 	} catch {
 		return { success: false, newPath: oldPath }
 	}
 }
 
-async function moveEntry(sourcePath: string, targetDirectoryPath: string): Promise<{ success: boolean; newPath: string }> {
-	// Not directly supported without DirectoryHandle for target; keep no-op
-	return { success: false, newPath: sourcePath }
+async function moveEntry(sourcePath: string, targetDirectoryPath: string): Promise<{ success: boolean; newPath: string; message?: string }> {
+	// Not supported without writable DirectoryHandle for deep trees; return a message
+	return { success: false, newPath: sourcePath, message: 'Move is not supported in PWA mode yet' }
 }
 
 async function saveImage(dirPath: string, baseName: string, dataBase64: string, ext: string): Promise<string | null> {
 	try {
 		const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
 		if (!root) return null
+		const dir = await getDirectoryHandleByPath(root, dirPath)
+		if (!dir) return null
 		const safeExt = (ext || 'png').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
 		const fileName = `${baseName.replace(/[^a-zA-Z0-9-_]/g, '_')}_${Date.now()}.${safeExt}`
-		const handle = await root.getFileHandle(fileName, { create: true })
+		const handle = await dir.getFileHandle(fileName, { create: true })
 		const writable = await handle.createWritable()
 		const commaIdx = dataBase64.indexOf(',')
 		const payload = commaIdx >= 0 ? dataBase64.slice(commaIdx + 1) : dataBase64
 		const buf = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
 		await writable.write(buf)
 		await writable.close()
-		return `fsroot://${fileName}`
+		const fullPath = (dirPath.endsWith('/') ? `${dirPath}${fileName}` : `${dirPath}/${fileName}`)
+		return fullPath
 	} catch {
 		return null
 	}
@@ -208,25 +379,88 @@ async function ollamaChat(host: string, model: string, messages: Array<{role:str
 	}
 	return full
 }
+async function ollamaEmbed(host: string, model: string, text: string): Promise<number[]> {
+	const res = await fetch(`${host}/api/embeddings`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model, prompt: text }) })
+	if (!res.ok) return []
+	const json: any = await res.json().catch(()=>null)
+	return (json?.embedding || json?.data?.[0]?.embedding || []) as number[]
+}
 
-// Minimal content search shim: naive in-memory search over currently opened root directory (reads only top-level files)
-async function searchContentShim(query: string, limit: number = 20): Promise<any[]> {
+// Query utils
+type DateFilter = { start: Date; end: Date } | null
+function extractDateFilter(qIn: string, now = new Date()): DateFilter {
+	const q = qIn.toLowerCase()
+	const iso = q.match(/\b(\d{4})-(\d{2})(?:-(\d{2}))?\b/)
+	if (iso) {
+		const y = +iso[1], m = +iso[2] - 1, d = iso[3] ? +iso[3] : 1
+		const start = new Date(Date.UTC(y, m, d))
+		const end = iso[3] ? new Date(Date.UTC(y, m, d + 1)) : new Date(Date.UTC(y, m + 1, 1))
+		return { start, end }
+	}
+	const toUtcStartOfDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+	const todayUtc = toUtcStartOfDay(new Date(now.toISOString()))
+	if (q.includes('today')) return { start: todayUtc, end: new Date(+todayUtc + 86400000) }
+	if (q.includes('yesterday')) { const y = new Date(+todayUtc - 86400000); return { start: y, end: todayUtc } }
+	if (q.includes('this week')) return { start: new Date(+todayUtc - 7 * 86400000), end: new Date(+todayUtc + 86400000) }
+	if (q.includes('last week')) return { start: new Date(+todayUtc - 14 * 86400000), end: new Date(+todayUtc - 7 * 86400000) }
+	if (q.includes('this month')) { const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)); return { start: startOfMonth, end: new Date(+todayUtc + 86400000) } }
+	const mRel = q.match(/last (\d+)\s*(days?|weeks?|months?)/)
+	if (mRel) { const n = Math.min(365, +mRel[1] || 7); const unit = mRel[2]; let mul = 1; if (unit.startsWith('week')) mul = 7; else if (unit.startsWith('month')) mul = 30; return { start: new Date(+todayUtc - n * mul * 86400000), end: todayUtc } }
+	return null
+}
+
+async function tryExpandQuery(original: string): Promise<string> {
+	const enabled = ((storage.get('ragExpandQuery') || 'true').toLowerCase() === 'true')
+	if (!enabled) return original
 	try {
-		const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
-		if (!root) return []
-		const results: any[] = []
-		for await (const [name, handle] of (root as any).entries()) {
-			if (handle.kind !== 'file') continue
-			const file = await (handle as FileSystemFileHandle).getFile()
-			const text = await file.text()
-			const idx = text.toLowerCase().indexOf(query.toLowerCase())
-			if (idx >= 0) {
-				results.push({ id: results.length+1, file_id: 0, file_path: `fsroot://${name}`, file_name: name, content_snippet: text.slice(Math.max(0, idx-60), idx+200), rank: 1, chunk_index: 0 })
-				if (results.length >= limit) break
-			}
-		}
-		return results
-	} catch { return [] }
+		const host = storage.get('ollamaHost') || OLLAMA_HOST_DEFAULT
+		const model = storage.get('ollamaModel') || 'llama3.2:latest'
+		const prompt = `For the user query below, output 8-15 literal search terms (single words or short noun phrases) separated by spaces. No punctuation, no sentences.\n\nQuery: ${original}\n\nTerms:`
+		const out = await ollamaChat(host, model, [{ role: 'user', content: prompt }])
+		const terms = String(out || '').replace(/[\n,;]+/g, ' ').replace(/\s+/g, ' ').trim()
+		if (!terms) return original
+		return `${original} ${terms}`
+	} catch { return original }
+}
+
+function rankAndFilter(results: IndexedChunk[], expanded: string, dateFilter: DateFilter, limit: number): any[] {
+	const tokens = expanded.toLowerCase().split(/\s+/).filter(t => t.length > 2)
+	const now = Date.now()
+	const scored = results.map((r, idx) => {
+		const textLC = r.chunk_text.toLowerCase()
+		const covered = tokens.reduce((acc, t) => acc + (textLC.includes(t) ? 1 : 0), 0)
+		const coverage = Math.min(1, covered / Math.max(3, Math.min(tokens.length, 10)))
+		let recency = 0
+		try { if (r.file_mtime) { const days = Math.max(0, (now - new Date(r.file_mtime).getTime())/86400000); recency = 1/(1+days/45) } } catch {}
+		const bm = 1 / (1 + idx)
+		const score = 0.5*coverage + 0.35*bm + 0.15*recency
+		return { r, score }
+	}).sort((a,b)=>b.score-a.score)
+	const filtered = scored.map(s=>s.r).slice(0, limit)
+	return filtered.map((r, i) => ({ id: i+1, file_id: 0, file_path: r.file_path, file_name: r.file_name, content_snippet: r.chunk_text.slice(0, 240), rank: i+1, chunk_index: r.chunk_index, file_mtime: r.file_mtime, note_date: r.note_date }))
+}
+
+async function searchContent(query: string, limit: number = 20): Promise<any[]> {
+	const dateFilter = extractDateFilter(query)
+	const expanded = await tryExpandQuery(query)
+	let rows: IndexedChunk[] = (window as any).__isla_chunks || []
+	// Apply date filter
+	if (dateFilter) {
+		rows = rows.filter(r => {
+			try {
+				const d1 = r.note_date ? new Date(r.note_date).getTime() : (r.file_mtime ? new Date(r.file_mtime).getTime() : 0)
+				return d1 && d1 >= dateFilter.start.getTime() && d1 < dateFilter.end.getTime()
+			} catch { return true }
+		})
+	}
+	// Text match: include chunks containing any expanded token
+	const tokens = expanded.toLowerCase().split(/\s+/).filter(t => t.length > 2)
+	const matched = rows.filter(r => {
+		const lc = r.chunk_text.toLowerCase()
+		return tokens.some(t => lc.includes(t))
+	})
+	if (matched.length === 0) return []
+	return rankAndFilter(matched, expanded, dateFilter, limit)
 }
 
 const electronAPI = {
@@ -247,21 +481,21 @@ const electronAPI = {
 	saveImage: (dirPath: string, baseName: string, dataBase64: string, ext: string) => saveImage(dirPath, baseName, dataBase64, ext),
 
 	// Database-like operations (settings only here)
-	dbClearAll: async () => true,
-	dbGetStats: async () => ({ fileCount: 0, chunkCount: 0, indexSize: 0 }),
-	dbReindexAll: async () => ({ fileCount: 0, chunkCount: 0, indexSize: 0 }),
+	dbClearAll: async () => { (window as any).__isla_files = []; (window as any).__isla_chunks = []; return true },
+	dbGetStats: async () => ({ fileCount: ((window as any).__isla_files||[]).length, chunkCount: ((window as any).__isla_chunks||[]).length, indexSize: ((window as any).__isla_chunks||[]).length }),
+	dbReindexAll: async () => { const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle; if (root) await buildIndexFromRoot(root); return { fileCount: ((window as any).__isla_files||[]).length, chunkCount: ((window as any).__isla_chunks||[]).length, indexSize: ((window as any).__isla_chunks||[]).length } },
 
 	// Settings
 	settingsGet: async (key: string) => storage.get(key),
 	settingsSet: async (key: string, value: string) => { storage.set(key, value); return true },
 
-	// RAG/Content search (shim)
-	searchContent: (query: string, limit?: number) => searchContentShim(query, limit ?? 20),
+	// RAG/Content search (PWA)
+	searchContent: (query: string, limit?: number) => searchContent(query, limit ?? 20),
 	contentSearchAndAnswer: async (query: string, _chatId?: number) => {
-		const sources = await searchContentShim(query, 10)
+		const sources = await searchContent(query, 18)
 		const today = new Date().toISOString()
 		const context = sources.map(s=>`• ${s.file_name} — ${s.content_snippet}`).join('\n')
-		const prompt = `Today is ${today}.\n${context ? `\nContext from notes:\n${context}` : ''}\n\nUser’s request: ${query}`
+		const prompt = `You are a concise, friendly assistant for the user's local notes.\n\nToday is ${today}.\n${context ? `\nContext from notes:\n${context}` : ''}\n\nUser’s request: ${query}\n\nInstructions:\n- Use ONLY the context above.\n- Prefer 2–4 short paragraphs with occasional bullets.\n- If context is sparse, say what's missing and suggest one next step.`
 		const host = storage.get('ollamaHost') || OLLAMA_HOST_DEFAULT
 		const models = await ollamaList(host)
 		const currentModel = (storage.get('ollamaModel') || models?.models?.[0]?.name || 'llama3.2:latest')
@@ -274,17 +508,16 @@ const electronAPI = {
 		const currentModel = (storage.get('ollamaModel') || models?.models?.[0]?.name || 'llama3.2:latest')
 		let listeners: Array<(d:any)=>void> = []
 		;(window as any).__isla_streamListeners = listeners
-		const sources = await searchContentShim(query, 10)
+		const sources = await searchContent(query, 18)
 		const today = new Date().toISOString()
 		const context = sources.map(s=>`• ${s.file_name} — ${s.content_snippet}`).join('\n')
-		const prompt = `Today is ${today}.\n${context ? `\nContext from notes:\n${context}` : ''}\n\nUser’s request: ${query}`
+		const prompt = `You are a concise, friendly assistant for the user's local notes.\n\nToday is ${today}.\n${context ? `\nContext from notes:\n${context}` : ''}\n\nUser’s request: ${query}`
 		setTimeout(async () => {
 			let full = ''
 			await ollamaChat(host, currentModel, [{ role: 'user', content: prompt }], (chunk) => {
 				full += chunk
 				listeners.forEach(fn=>fn({ chunk }))
 			})
-			// done event
 			const done = (window as any).__isla_streamDone
 			done && done({ answer: full, sources })
 		}, 0)
@@ -343,7 +576,6 @@ const electronAPI = {
 		const rec = { id, chat_id: chatId, role, content, created_at: new Date().toISOString(), metadata }
 		msgs.push(rec)
 		chatStore.saveMsgs(chatId, msgs)
-		// bump chat updated
 		const chats = chatStore.getAll().map(c=>c.id===chatId?{...c, updated_at:new Date().toISOString()}:c)
 		chatStore.saveAll(chats)
 		return rec
@@ -365,11 +597,9 @@ const electronAPI = {
 	// System operations
 	openExternal: async (url: string) => { try { window.open(url, '_blank', 'noopener,noreferrer') } catch {} return true },
 
-	// Events
-	onSettingsChanged: (callback: (payload: { key: string; value: any }) => void) => {
-		// No central event bus; return a no-op unregister
-		return () => {}
-	}
+	// Events (no-op shims for compatibility)
+	onSettingsChanged: (callback: (payload: { key: string; value: any }) => void) => (()=>{}),
+	onEmbeddingsProgress: (cb: any) => (()=>{})
 }
 
 ;(window as any).electronAPI = electronAPI
