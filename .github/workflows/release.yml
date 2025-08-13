@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -114,7 +115,9 @@ jobs:
       - name: Build app
         run: npm run build
       - name: Make Windows (x64)
-        run: npx electron-forge make --platform=win32 --arch=x64 | cat
+        shell: bash
+        run: |
+          npx electron-forge make --platform=win32 --arch=x64
       - name: Collect artifacts
         shell: bash
         run: |
