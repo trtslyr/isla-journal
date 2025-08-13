@@ -228,19 +228,31 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     }
     loadLabel()
     if (rootPath) {
-      console.log('📁 [FileTree] Loading directory for rootPath:', rootPath)
-      loadDirectory(rootPath)
-      // Ensure root is expanded by default
-      setExpandedFolders(new Set([rootPath]))
-      // show preparing indicator until embeddings report done
-      setIsBuilding(true)
+      console.log('📁 [FileTree] RootPath set:', rootPath)
+      // Only try to load directory if we have a handle
+      const hasHandle = !!(window as any).__isla_rootHandle
+      console.log('📁 [FileTree] Directory handle available:', hasHandle)
+      
+      if (hasHandle) {
+        console.log('📁 [FileTree] Loading directory content...')
+        loadDirectory(rootPath)
+        // Ensure root is expanded by default
+        setExpandedFolders(new Set([rootPath]))
+        // show preparing indicator until embeddings report done
+        setIsBuilding(true)
+      } else {
+        console.log('📁 [FileTree] No handle - showing empty state')
+        setFiles([])
+        setIsBuilding(false)
+      }
     } else {
       setFiles([])
       setRootLabel('')
+      setIsBuilding(false)
     }
   }, [rootPath])
   
-  // Force refresh label periodically to catch updates
+  // Force refresh label and content periodically to catch updates
   useEffect(() => {
     const interval = setInterval(() => {
       const name = (window as any).__isla_rootName
@@ -251,10 +263,19 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           console.log('📁 [FileTree] Updated root label from window:', cleanName)
         }
       }
+      
+      // Check if directory handle became available and reload content
+      const hasHandle = !!(window as any).__isla_rootHandle
+      if (rootPath && hasHandle && files.length === 0 && !loading) {
+        console.log('📁 [FileTree] Handle now available - loading content')
+        loadDirectory(rootPath)
+        setExpandedFolders(new Set([rootPath]))
+        setIsBuilding(true)
+      }
     }, 500) // Check every 500ms
     
     return () => clearInterval(interval)
-  }, [rootLabel])
+  }, [rootLabel, rootPath, files.length, loading])
 
   const toggleFolder = async (item: FileItem) => {
     const isCurrentlyExpanded = expandedFolders.has(item.path)
