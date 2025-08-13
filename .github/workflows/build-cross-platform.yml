@@ -41,6 +41,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
     
+    env:
+      # Apple signing environment variables (macOS only)
+      CSC_TEAM_ID: ${{ secrets.TEAM_ID }}
+      CSC_LINK: ${{ secrets.P12_BASE64 }}
+      CSC_KEY_PASSWORD: ${{ secrets.P12_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
