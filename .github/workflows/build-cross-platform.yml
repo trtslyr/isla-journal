@@ -470,7 +470,7 @@ jobs:
           find . -name "*.exe" -o -name "*.dmg" -o -name "*.msi" -o -name "*.zip" -o -name "*.app" | head -20
           echo "=== END FILE LISTING ==="
           
-      - name: Upload to GitHub Release - FIXED VERSION
+      - name: Upload to GitHub Release - Latest
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         env:
@@ -480,26 +480,28 @@ jobs:
             **/*.dmg
             **/*.exe
             **/*.msi
+            **/*.zip
           tag_name: ${{ github.ref_name }}
-          name: "Isla Journal ${{ github.ref_name }} - NUCLEAR Option"
+          name: "Isla Journal ${{ github.ref_name }}"
           body: |
-            🚀 **Isla Journal ${{ github.ref_name }}** - NUCLEAR Option Build
+            🚀 **Isla Journal ${{ github.ref_name }}** - Latest Release
             
             📦 **DIRECT DOWNLOADS:**
             - **🪟 Windows**: Download the `.exe` installer below
-            - **🍎 Mac Intel**: Download the Intel `.dmg` installer below
-            - **🍎 Mac Apple Silicon**: Download the ARM64 `.dmg` installer below
+            - **🍎 Mac Intel**: Download the Intel `.dmg` installer below (signed)
+            - **🍎 Mac Apple Silicon**: Download the ARM64 `.dmg` installer below (signed)
             
-            🗜️ **NUCLEAR Option Features:**
-            - ✅ DRASTIC size reduction - only essential dependencies
-            - ✅ AI-powered offline journal with local Ollama
-            - ✅ VS Code-style interface
-            - ✅ All dependency issues FIXED
-            - ✅ Cross-platform Electron application
+            ✨ **Features:**
+            - ✅ AI-powered offline journal with local LLM support
+            - ✅ VS Code-style interface with file tree
+            - ✅ Fully offline - your data stays on your device
+            - ✅ Cross-platform: Windows, macOS (Intel + Apple Silicon)
+            - ✅ Signed macOS builds (no security warnings)
             
             **Click the installer file below for your platform and you're ready to go!** 🎉
           draft: false
           prerelease: false
+          make_latest: true
           fail_on_unmatched_files: false
           generate_release_notes: false
       
