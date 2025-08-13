@@ -179,20 +179,9 @@ async function listDirectory(path: string): Promise<any[]> {
     try {
         let root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
         if (!root) {
-            // No handle available – ask user again via picker to recover
-            console.log('🔄 [webBridge] No directory handle, prompting user to re-select')
-            try {
-                const picked = await pickDirectory()
-                if (!picked) {
-                    console.log('❌ [webBridge] User cancelled directory selection')
-                    return []
-                }
-                root = (window as any).__isla_rootHandle
-                console.log('✅ [webBridge] Directory handle restored')
-            } catch (error) {
-                console.error('❌ [webBridge] Failed to restore directory handle:', error)
-                return []
-            }
+            // No handle available - return empty to show "click to access" message
+            console.log('⚠️ [webBridge] No directory handle available for listDirectory')
+            return []
         }
 		const dirHandle = await getDirectoryHandleByPath(root, path)
 		if (!dirHandle) return []

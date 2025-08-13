@@ -370,11 +370,12 @@ const App: React.FC = () => {
               console.log('✅ [App] Directory handle already available:', existingName)
               setRootDirectory(savedDirectory)
             } else {
-              // Set the saved name and try to restore directory - webBridge will handle re-prompting
-              console.log('🔄 [App] Restoring directory session, webBridge will handle re-authentication')
+              // Set the saved name and directory path, but don't auto-trigger loading yet
+              console.log('🔄 [App] Directory session found but handle missing - showing name only')
               ;(window as any).__isla_rootName = savedName
-              setRootDirectory(savedDirectory) // Let webBridge handle the missing handle via auto re-prompt
-              console.log('✅ [App] Directory restored - FileTree will auto-prompt for access if needed')
+              setRootDirectory(savedDirectory) 
+              // The FileTree will show the name but won't try to load content until user action
+              console.log('✅ [App] Directory name restored, content will load on user interaction')
             }
           } else {
             console.log('📁 [App] No saved directory - user needs to select directory')
@@ -826,9 +827,12 @@ const App: React.FC = () => {
   // Directory persistence
   const handleOpenDirectory = async () => {
     try {
+      console.log('📁 [App] Opening directory picker...')
       const result = await window.electronAPI.openDirectory?.()
       if (result) {
         console.log('📁 [App] Directory selected:', result)
+        
+        // Immediately update UI
         setRootDirectory(result)
         
         // Save both directory path and name to settings for persistence
@@ -842,6 +846,11 @@ const App: React.FC = () => {
         } catch (settingsError) {
           console.error('❌ [App] Failed to save directory to settings:', settingsError)
         }
+        
+        // Force a refresh of the FileTree component
+        console.log('🔄 [App] Directory selection complete - UI should update')
+      } else {
+        console.log('❌ [App] No directory selected')
       }
     } catch (error) {
       console.error('❌ [App] Failed to open directory:', error)

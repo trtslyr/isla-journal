@@ -221,11 +221,14 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           const cleanName = cleanDirectoryName(name)
           setRootLabel(cleanName)
           console.log('📁 [FileTree] Set root label:', cleanName)
+        } else {
+          setRootLabel('')
         }
       } catch {}
     }
     loadLabel()
     if (rootPath) {
+      console.log('📁 [FileTree] Loading directory for rootPath:', rootPath)
       loadDirectory(rootPath)
       // Ensure root is expanded by default
       setExpandedFolders(new Set([rootPath]))
@@ -236,6 +239,22 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       setRootLabel('')
     }
   }, [rootPath])
+  
+  // Force refresh label periodically to catch updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const name = (window as any).__isla_rootName
+      if (name) {
+        const cleanName = cleanDirectoryName(name)
+        if (cleanName !== rootLabel) {
+          setRootLabel(cleanName)
+          console.log('📁 [FileTree] Updated root label from window:', cleanName)
+        }
+      }
+    }, 500) // Check every 500ms
+    
+    return () => clearInterval(interval)
+  }, [rootLabel])
 
   const toggleFolder = async (item: FileItem) => {
     const isCurrentlyExpanded = expandedFolders.has(item.path)
