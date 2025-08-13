@@ -370,12 +370,11 @@ const App: React.FC = () => {
               console.log('✅ [App] Directory handle already available:', existingName)
               setRootDirectory(savedDirectory)
             } else {
-              // Set the saved name so UI shows it, but directory needs re-selection
-              console.log('🔄 [App] Restoring directory session, but need user to re-grant access')
+              // Set the saved name and try to restore directory - webBridge will handle re-prompting
+              console.log('🔄 [App] Restoring directory session, webBridge will handle re-authentication')
               ;(window as any).__isla_rootName = savedName
-              // Don't set rootDirectory yet - this will cause FileTree to try loading without a handle
-              // Instead, the user needs to click the directory button to re-grant access
-              console.log('⚠️ [App] Directory handle missing - user must re-select directory to access files')
+              setRootDirectory(savedDirectory) // Let webBridge handle the missing handle via auto re-prompt
+              console.log('✅ [App] Directory restored - FileTree will auto-prompt for access if needed')
             }
           } else {
             console.log('📁 [App] No saved directory - user needs to select directory')

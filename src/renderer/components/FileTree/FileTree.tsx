@@ -843,10 +843,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           <button 
             className="open-directory-btn"
             onClick={onDirectorySelect}
-            title={rootPath ? 'Re-select directory to access files' : 'Choose directory'}
+            title={rootPath || 'Choose directory'}
             style={{flex:'1 1 auto', textAlign:'left'}}
           >
-            {rootPath && rootLabel ? `${rootLabel} (Click to re-access)` : (rootLabel ? `${rootLabel} (Click to access)` : '[Select Directory]')}
+            {rootLabel || (rootPath ? cleanDirectoryName(rootPath.split('/').pop() || rootPath) : '[Select Directory]')}
           </button>
           {isBuilding && (
             <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 6px', border:'1px solid var(--border-light)', borderRadius:6 }} title="Indexing and building embeddings…">
