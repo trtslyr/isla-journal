@@ -27,6 +27,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Import Apple code signing certificate
+        uses: apple-actions/import-codesign-certs@v1
+        with:
+          p12-file-base64: ${{ secrets.P12_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+      - name: Verify signing identities
+        run: |
+          security find-identity -p codesigning -v | cat
+          echo "Team: ${{ secrets.TEAM_ID }}"
       - name: Install dependencies
         run: npm ci --no-optional
       - name: Build app
@@ -62,6 +71,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Import Apple code signing certificate
+        uses: apple-actions/import-codesign-certs@v1
+        with:
+          p12-file-base64: ${{ secrets.P12_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+      - name: Verify signing identities
+        run: |
+          security find-identity -p codesigning -v | cat
+          echo "Team: ${{ secrets.TEAM_ID }}"
       - name: Install dependencies
         run: npm ci --no-optional
       - name: Build app
