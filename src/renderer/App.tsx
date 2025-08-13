@@ -63,6 +63,10 @@ const App: React.FC = () => {
   const [showChatDropdown, setShowChatDropdown] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [currentModelName, setCurrentModelName] = useState<string | null>(null)
+  // Context injection for AI
+  const [contextSelections, setContextSelections] = useState<Array<{path:string,name:string}>>([])
+  const [fileSuggestions, setFileSuggestions] = useState<Array<{path:string,name:string}>>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
   
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false)
@@ -227,6 +231,12 @@ const App: React.FC = () => {
         return prev
       })
       setIsAiThinking(false)
+      // Persist assistant message to DB so it survives restarts
+      try {
+        if (activeChat?.id && answer) {
+          await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', answer, JSON.stringify({ sources }))
+        }
+      } catch (e) { console.warn('⚠️ [App] Failed to persist streamed message:', e) }
       // Refresh from DB to ensure persistence reflected in UI (optional but safe)
       try {
         if (activeChat?.id) {
@@ -253,13 +263,14 @@ const App: React.FC = () => {
     }
   }, [handleLeftResize, handleRightResize, handleMouseUp])
 
+
   // Tab management functions
   const createNewTab = () => {
     const newTab: EditorTab = {
       id: `untitled-${Date.now()}`,
-      name: 'Untitled.md',
+      name: 'Untitled',
       path: null,
-      content: '# New Document\n\n',
+      content: '',
       hasUnsavedChanges: false
     }
     setTabs(prev => [...prev, newTab])
@@ -285,7 +296,7 @@ const App: React.FC = () => {
         // Create a new welcome tab if no tabs left
         const welcomeTab: EditorTab = {
           id: 'welcome-new',
-          name: 'Welcome.md',
+          name: 'Welcome',
           path: null,
           content: '# Welcome\n\nStart writing...',
           hasUnsavedChanges: false
@@ -356,6 +367,35 @@ const App: React.FC = () => {
           console.error('❌ [App] Failed to load saved directory:', error)
         }
 
+        // Restore previous editor session (tabs + active)
+        try {
+          const savedTabsJson = await window.electronAPI.settingsGet('sessionTabs')
+          const savedActive = await window.electronAPI.settingsGet('sessionActiveTabId')
+          if (savedTabsJson) {
+            const list: Array<{id:string; name:string; path:string|null}> = JSON.parse(savedTabsJson)
+            const restored: EditorTab[] = []
+            for (const t of list) {
+              try {
+                const content = t.path ? await window.electronAPI.readFile(t.path) : ''
+                restored.push({ id: t.id, name: t.name, path: t.path, content, hasUnsavedChanges: false })
+              } catch (e) {
+                console.warn('⚠️ [App] Failed to restore tab content for', t.path, e)
+                restored.push({ id: t.id, name: t.name, path: t.path, content: '', hasUnsavedChanges: false })
+              }
+            }
+            if (restored.length > 0) {
+              setTabs(restored)
+              if (savedActive && restored.some(r => r.id === savedActive)) {
+                setActiveTabId(savedActive)
+              } else {
+                setActiveTabId(restored[restored.length - 1].id)
+              }
+            }
+          }
+        } catch (e) {
+          console.error('❌ [App] Failed to restore editor session:', e)
+        }
+
         // Load chats
         const chats = await window.electronAPI.chatGetAll()
         setAllChats(chats)
@@ -391,6 +431,17 @@ const App: React.FC = () => {
 
     initializeApp()
   }, [])
+
+  // Persist editor session whenever tabs or active tab changes
+  useEffect(() => {
+    const minimal = tabs.map(t => ({ id: t.id, name: t.name, path: t.path }))
+    try {
+      window.electronAPI.settingsSet('sessionTabs', JSON.stringify(minimal))
+      if (activeTabId) window.electronAPI.settingsSet('sessionActiveTabId', activeTabId)
+    } catch (e) {
+      console.warn('⚠️ [App] Failed to persist session', e)
+    }
+  }, [tabs, activeTabId])
 
   // Auto-save active tab
   useEffect(() => {
@@ -433,7 +484,7 @@ const App: React.FC = () => {
       const content = await window.electronAPI.readFile(filePath)
       
       // Clean up the file name by removing ID suffix
-      const cleanFileName = fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md')
+          const cleanFileName = fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md').replace(/\.md$/i,'')
       
       if (activeTab) {
         // Update the current active tab with the new file
@@ -461,6 +512,18 @@ const App: React.FC = () => {
         setTabs(prev => [...prev, newTab])
         setActiveTabId(newTab.id)
       }
+      // Update date meta in title area (read-only)
+      try {
+        const meta = await window.electronAPI.getFileMetaByPath(filePath)
+        const el = document.getElementById('editor-file-date')
+        if (el && meta) {
+          const created = meta.note_date || meta.created_at || ''
+          const modified = meta.file_mtime || meta.modified_at || ''
+          const createdStr = created ? new Date(created).toLocaleDateString() : ''
+          const modifiedStr = modified ? new Date(modified).toLocaleDateString() : ''
+          el.textContent = [createdStr && `Created: ${createdStr}`, modifiedStr && `Last edit: ${modifiedStr}`].filter(Boolean).join(' • ')
+        }
+      } catch {}
     } catch (error) {
       console.error('Failed to open file:', error)
       alert('Failed to open file: ' + fileName)
@@ -510,7 +573,12 @@ const App: React.FC = () => {
 
       // Use RAG for intelligent notes-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      const ragResponse = await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
+      let ragResponse: any = null
+      if (contextSelections.length > 0 && window.electronAPI.contentStreamSearchAndAnswerWithContext) {
+        ragResponse = await window.electronAPI.contentStreamSearchAndAnswerWithContext(userContent, activeChat.id, contextSelections.map(c=>c.path))
+      } else {
+        ragResponse = await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
+      }
       
       if (!ragResponse) {
         console.log(`⚠️ [App] No RAG response, falling back to basic LLM`)
@@ -782,6 +850,40 @@ const App: React.FC = () => {
     }
   }
 
+  // Suggestion search when typing '@'
+  useEffect(() => {
+    const atIndex = chatInput.lastIndexOf('@')
+    if (atIndex >= 0) {
+      const query = chatInput.slice(atIndex + 1).trim()
+      if (query.length === 0) {
+        setShowSuggestions(true)
+        // show nothing until user types
+        setFileSuggestions([])
+        return
+      }
+      // Debounced content search; dedupe by file_path
+      const t = setTimeout(async () => {
+        try {
+          const res = await window.electronAPI.searchContent(query, 12)
+          const seen: Record<string, boolean> = {}
+          const uniq = res.filter((r:any)=>{
+            if (seen[r.file_path]) return false
+            seen[r.file_path]=true
+            return true
+          }).map((r:any)=>({ path: r.file_path, name: r.file_name.replace(/\s+[a-f0-9]{32}\.md$/,'').replace(/\.md$/i,'') }))
+          setFileSuggestions(uniq)
+          setShowSuggestions(true)
+        } catch (e) {
+          setFileSuggestions([])
+          setShowSuggestions(false)
+        }
+      }, 200)
+      return () => clearTimeout(t)
+    } else {
+      setShowSuggestions(false)
+    }
+  }, [chatInput])
+
   return (
     <div className="app">
       {/* Only show main app if licensed */}
@@ -828,14 +930,32 @@ const App: React.FC = () => {
             theme={currentTheme}
             onChange={handleEditorChange}
             onNewEditor={() => {
-              const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled.md', path: null, content: '# New Document\n\n', hasUnsavedChanges: false }
+              const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
               setTabs(prev => [...prev, newTab as any]); setActiveTabId((newTab as any).id)
             }}
             onRenameFile={(newName) => {
               if (!activeTab) return
               // Only update title; saving path rename is managed elsewhere
-              setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, name: newName, hasUnsavedChanges: true } : t))
+              // Hide extension in UI
+              const clean = newName.replace(/\.?md$/i, '')
+              setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, name: clean, hasUnsavedChanges: true } : t))
             }}
+            onCommitRename={async (newName) => {
+              try {
+                if (!activeTab?.path) return
+                const clean = newName.replace(/\.?md$/i, '')
+                await window.electronAPI.renameFile(activeTab.path, clean + '.md')
+                // Refresh active tab path and name
+                const parent = activeTab
+                setTabs(prev => prev.map(t => t.id === parent.id ? { ...t, name: clean + '.md' } as any : t))
+              } catch (e) {
+                console.error('Rename failed:', e)
+              }
+            }}
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={(id)=> setActiveTabId(id)}
+            onCloseTab={(id)=> closeTab(id)}
           />
 
         </div>
@@ -888,37 +1008,56 @@ const App: React.FC = () => {
                                 setShowChatDropdown(false)
                               }}
                             >
-                              <span className="chat-item-title">{chat.title}</span>
+                              <span className="chat-item-title">{String(chat.title || '').replace(/\.?md$/i,'')}</span>
                               <span className="chat-item-date">
                                 {new Date(chat.updated_at).toLocaleDateString()}
                               </span>
                             </div>
-                            <div className="chat-item-actions">
-                              <button 
-                                className="chat-action-btn rename-btn"
-                                onClick={() => renameChat(chat.id, chat.title)}
-                                title="Rename Chat"
-                              >
-                                [EDIT]
-                              </button>
-                              <button 
-                                className="chat-action-btn delete-btn"
-                                onClick={() => {
-                                  if (confirm(`Delete "${chat.title}"?`)) {
-                                    deleteChat(chat.id)
-                                    setShowChatDropdown(false)
-                                  }
-                                }}
-                                title="Delete Chat"
-                              >
-                                [DEL]
-                              </button>
+                            <button 
+                              className="chat-item-kebab"
+                              onClick={(e)=>{
+                                e.stopPropagation()
+                                const container = e.currentTarget.parentElement as HTMLElement
+                                const menu = container.querySelector('.chat-item-menu') as HTMLElement
+                                if (menu) {
+                                  const willOpen = !menu.classList.contains('open')
+                                  menu.classList.toggle('open', willOpen)
+                                  menu.style.display = willOpen ? 'flex' : 'none'
+                                }
+                              }}
+                              title="More"
+                            >
+                              ⋯
+                            </button>
+                            <div className="chat-item-menu" style={{display:'none'}}>
+                              <button onClick={() => renameChat(chat.id, chat.title)}>Rename</button>
+                              <button className="danger" onClick={() => { if (confirm(`Delete "${chat.title}"?`)) { deleteChat(chat.id); setShowChatDropdown(false) } }}>Delete</button>
                             </div>
                           </div>
                         ))}
                         {allChats.length === 0 && (
                           <div className="chat-dropdown-empty">
                             No chats yet. Create your first chat!
+                          </div>
+                        )}
+                        {allChats.length > 0 && (
+                          <div className="chat-dropdown-item" style={{justifyContent:'center'}}>
+                            <button
+                              className="chat-action-btn delete-btn"
+                              onClick={async () => {
+                                if (confirm('Delete ALL chats and messages? This cannot be undone.')) {
+                                  try { await window.electronAPI.chatDeleteAll() } catch {}
+                                  const chats = await window.electronAPI.chatGetAll()
+                                  setAllChats(chats)
+                                  setActiveChat(null as any)
+                                  setChatMessages([])
+                                  setShowChatDropdown(false)
+                                }
+                              }}
+                              title="Delete all chats"
+                            >
+                              Trash
+                            </button>
                           </div>
                         )}
                       </div>
@@ -963,9 +1102,9 @@ const App: React.FC = () => {
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                           <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:8, padding:'8px 0', borderTop:'1px solid var(--border-light)' }}>
                             <div style={{ fontSize:'12px', color:'var(--text-secondary)', fontWeight:500 }}>Sources:</div>
-                            {message.sources.slice(0,6).map((src, idx) => {
+                            {message.sources.filter(s=> (s?.file_name && s?.file_path && (s?.snippet||'').length > 40)).slice(0,6).map((src, idx) => {
                               // Clean filename by removing hash IDs
-                              const cleanFileName = src.file_name
+                               const cleanFileName = src.file_name
                                 .replace(/\s+[a-f0-9]{32,}\.md$/i, '')
                                 .replace(/\.md$/i, '')
                                 .replace(/^\d+\s+/, '')
@@ -1020,7 +1159,7 @@ const App: React.FC = () => {
                   </div>
                   
                   <div className="chat-input-area">
-                    <div className="chat-input-wrapper">
+                  <div className="chat-input-wrapper">
                       <textarea 
                         ref={(el) => {
                           if (el) {
@@ -1042,7 +1181,7 @@ const App: React.FC = () => {
                             handleSendMessage()
                           }
                         }}
-                        placeholder="Ask about your journal entries, request insights, or start a reflection..."
+                        placeholder="Ask or reflect..."
                         className="chat-input"
                         disabled={isAiThinking || !activeChat}
                         rows={1}

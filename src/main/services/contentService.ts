@@ -102,9 +102,14 @@ class ContentService {
 
   // Keep signature compatible; ignore conversation history
   async searchAndAnswer(query: string, _conversationHistory?: Array<{ role: string; content: string }>): Promise<RAGResponse> {
+    const trimmed = (query || '').trim()
+    // Guard against vague/empty prompts; keep responses grounded
+    if (trimmed.length < 2 || /^(hi|hello|hey|yo|sup|hola|howdy|\?$)/i.test(trimmed)) {
+      const safe = 'Hi! I can search your notes or help with a question. Ask something specific (e.g., “ideas from last week’s meeting” or “todos today”).'
+      return { answer: safe, sources: [] }
+    }
     const { prompt, sources } = await this.preparePromptWithHybrid(query)
-      const llama = LlamaService.getInstance()
-    // Ensure LLM is ready (init is idempotent and fast if already done)
+    const llama = LlamaService.getInstance()
     try { await llama.initialize() } catch {}
     const answer = await llama.sendMessage([{ role: 'user', content: prompt }])
     return { answer, sources }

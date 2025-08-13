@@ -50,6 +50,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
   const [databaseStats, setDatabaseStats] = useState({ fileCount: 0, chunkCount: 0, indexSize: 0 })
   const [isClearing, setIsClearing] = useState(false)
   const [isReindexing, setIsReindexing] = useState(false)
+  const [isEmbedding, setIsEmbedding] = useState(false)
+  const [embedProgress, setEmbedProgress] = useState<{ total?: number; embedded?: number; model?: string; status?: string; error?: string } | null>(null)
   const [modelStatus, setModelStatus] = useState<ModelStatus>({
     currentModel: null,
     isConnected: false,
@@ -87,6 +89,19 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
     }
   }, [isOpen])
 
+  // Initial embeddings stats load when opened
+  useEffect(() => {
+    const loadEmbStats = async () => {
+      try {
+        const stats = await window.electronAPI.embeddingsGetStats?.()
+        if (stats && typeof stats.embeddedCount === 'number') {
+          setEmbedProgress({ total: stats.chunkCount, embedded: stats.embeddedCount, model: stats.model, status: 'idle' })
+        }
+      } catch {}
+    }
+    if (isOpen) loadEmbStats()
+  }, [isOpen])
+
   // Listen for model download progress
   useEffect(() => {
     if (!window.electronAPI?.onLLMDownloadProgress) return
@@ -99,6 +114,17 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       }))
     })
 
+    return unsubscribe
+  }, [])
+
+  // Listen for embeddings progress
+  useEffect(() => {
+    if (!window.electronAPI?.onEmbeddingsProgress) return
+    const unsubscribe = window.electronAPI.onEmbeddingsProgress((payload) => {
+      setEmbedProgress(payload || null)
+      if (payload?.status === 'running' || payload?.status === 'starting') setIsEmbedding(true)
+      if (payload?.status === 'done' || payload?.status === 'error') setIsEmbedding(false)
+    })
     return unsubscribe
   }, [])
 
@@ -248,6 +274,20 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       setValidationMessage('[ERROR] Failed to reindex files')
     } finally {
       setIsReindexing(false)
+    }
+  }
+
+  const handleBuildEmbeddings = async () => {
+    if (!window.electronAPI?.embeddingsRebuildAll) {
+      setValidationMessage('[ERROR] Embeddings API not available')
+      return
+    }
+    try {
+      setIsEmbedding(true)
+      await window.electronAPI.embeddingsRebuildAll()
+    } catch (e) {
+      setIsEmbedding(false)
+      setValidationMessage('[ERROR] Failed to start embeddings build')
     }
   }
 
@@ -589,7 +629,8 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
               )}
             </div>
 
-            {/* Advanced Settings - Collapsible */}
+            {/* Advanced Settings - Collapsible (only when a model is connected on startup) */}
+            {modelStatus.isConnected && (
             <div className="settings-item">
               <details className="advanced-settings">
                 <summary className="advanced-toggle">🔧 Advanced Model Settings</summary>
@@ -671,6 +712,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 </div>
               </details>
             </div>
+            )}
           </div>
 
           {/* Storage Section */}
@@ -682,16 +724,49 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                   <span className="storage-label">Files Indexed:</span>
                   <span className="storage-value">{databaseStats.fileCount.toLocaleString()} files</span>
                 </div>
-                <div className="storage-item">
-                  <span className="storage-label">Chunks Indexed:</span>
-                  <span className="storage-value">{databaseStats.chunkCount.toLocaleString()} chunks</span>
+                {/* Advanced chunk metrics intentionally hidden for simplicity */}
+              </div>
+              {/* Embeddings status */}
+              <div className="storage-embeddings">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Embeddings</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {embedProgress?.model ? `Model: ${embedProgress.model}` : 'Model: —'}
+                    </div>
+                  </div>
+                  <button 
+                    className="settings-btn"
+                    onClick={handleBuildEmbeddings}
+                    disabled={isEmbedding}
+                    title="Build embeddings for all indexed chunks"
+                  >
+                    {isEmbedding ? 'Building…' : 'Build Embeddings'}
+                  </button>
                 </div>
-                <div className="storage-item">
-                  <span className="storage-label">Search Index Size:</span>
-                  <span className="storage-value">{databaseStats.indexSize.toLocaleString()} entries</span>
+                <div style={{ marginTop: 8 }}>
+                  {embedProgress?.status === 'error' ? (
+                    <div className="validation-message">[ERROR] {embedProgress.error}</div>
+                  ) : (
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        <span>Status: {embedProgress?.status || 'idle'}</span>
+                        <span>
+                          {(embedProgress?.embedded ?? 0).toLocaleString()} / {(embedProgress?.total ?? 0).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="progress-bar" style={{ marginTop: 4 }}>
+                        <div 
+                          className="progress-fill" 
+                          style={{ width: `${Math.min(100, Math.round(((embedProgress?.embedded || 0) / Math.max(1, embedProgress?.total || 0)) * 100))}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="storage-actions">
+
+              <div className="storage-actions" style={{ marginTop: 12 }}>
                 <button 
                   className="settings-btn danger" 
                   onClick={handleClearDatabase}

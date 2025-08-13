@@ -40,6 +40,7 @@ const electronAPI = {
     ipcRenderer.invoke('content:streamSearchAndAnswer', query, chatId),
   // Embeddings
   embeddingsRebuildAll: (model?: string) => ipcRenderer.invoke('embeddings:rebuildAll', model),
+  embeddingsGetStats: (model?: string) => ipcRenderer.invoke('embeddings:getStats', model),
   onEmbeddingsProgress: (cb: (payload: { total?: number; embedded?: number; model?: string; status?: string; error?: string }) => void) => {
     const handler = (_: any, payload: any) => cb(payload)
     ipcRenderer.on('embeddings:progress', handler)

@@ -40,6 +40,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   const [error, setError] = useState<string | null>(null)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [pinnedItems, setPinnedItems] = useState<PinnedItem[]>([])
+  // Build indicator (embeddings progress while new root loads)
+  const [isBuilding, setIsBuilding] = useState<boolean>(false)
+  const [buildTotal, setBuildTotal] = useState<number>(0)
+  const [buildEmbedded, setBuildEmbedded] = useState<number>(0)
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [lastClickedItem, setLastClickedItem] = useState<string | null>(null)
   
@@ -70,13 +74,43 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       try {
         const saved = await window.electronAPI.settingsGet('pinnedItems')
         if (saved) {
-          setPinnedItems(JSON.parse(saved))
+          const parsed = JSON.parse(saved)
+          // Normalize paths by prepending current root if items were saved with base names only
+          const root = await window.electronAPI.settingsGet('selectedDirectory')
+          const normed = Array.isArray(parsed) ? parsed.map((p: any) => {
+            if (p?.path && !p.path.startsWith('/')) {
+              return { ...p, path: `${root}/${p.path}` }
+            }
+            return p
+          }) : []
+          setPinnedItems(normed)
         }
       } catch (error) {
         console.error('Failed to load pinned items:', error)
       }
     }
     loadPinnedItems()
+  }, [])
+
+  // Listen for embeddings build progress to show indicator
+  useEffect(() => {
+    const off = window.electronAPI.onEmbeddingsProgress?.((p) => {
+      if (!p) return
+      if (p.status === 'starting') {
+        setIsBuilding(true)
+        setBuildTotal(p.total || 0)
+        setBuildEmbedded(p.embedded || 0)
+      } else if (p.status === 'running') {
+        setIsBuilding(true)
+        if (typeof p.total === 'number') setBuildTotal(p.total)
+        if (typeof p.embedded === 'number') setBuildEmbedded(p.embedded)
+      } else if (p.status === 'done' || p.status === 'error') {
+        setBuildEmbedded(p.embedded || 0)
+        setBuildTotal(p.total || 0)
+        setTimeout(() => setIsBuilding(false), 400)
+      }
+    })
+    return () => { if (off) off() }
   }, [])
 
   // Save pinned items to settings when changed
@@ -88,9 +122,8 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         console.error('Failed to save pinned items:', error)
       }
     }
-    if (pinnedItems.length > 0) {
-      savePinnedItems()
-    }
+    // Always save (allow clearing to persist as well)
+    savePinnedItems()
   }, [pinnedItems])
 
   // Cleanup search timeout on unmount
@@ -104,6 +137,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   const cleanFileName = (fileName: string): string => {
     return fileName.replace(/\s+[a-f0-9]{32}\.md$/, '.md')
+  }
+
+  const cleanDirectoryName = (dirName: string): string => {
+    // Remove trailing long hex identifiers often appended to folder names
+    // e.g., "My Folder 134dde5ed759812ab82..." -> "My Folder"
+    return dirName.replace(/\s+[a-f0-9]{16,}$/i, '')
   }
 
   const sortItems = (items: FileItem[]): FileItem[] => {
@@ -132,7 +171,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       
       const processedFiles = result.map((item: any) => ({
         ...item,
-        name: item.type === 'file' ? cleanFileName(item.name) : item.name,
+        name: item.type === 'file' ? cleanFileName(item.name) : cleanDirectoryName(item.name),
         children: item.type === 'directory' ? [] : undefined,
         expanded: false
       }))
@@ -155,7 +194,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       const result = await window.electronAPI.readDirectory(dirPath)
       const processedFiles = result.map((item: any) => ({
         ...item,
-        name: item.type === 'file' ? cleanFileName(item.name) : item.name,
+        name: item.type === 'file' ? cleanFileName(item.name) : cleanDirectoryName(item.name),
         children: item.type === 'directory' ? [] : undefined,
         expanded: false
       }))
@@ -173,6 +212,8 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       loadDirectory(rootPath)
       // Ensure root is expanded by default
       setExpandedFolders(new Set([rootPath]))
+      // show preparing indicator until embeddings report done
+      setIsBuilding(true)
     } else {
       setFiles([])
     }
@@ -266,20 +307,20 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   }
 
   const handlePinItem = (item: FileItem) => {
-    // Only allow pinning files, not folders
+    // Only allow favoriting files, not folders
     if (item.type === 'directory') {
-      alert('Only files can be pinned, not folders')
+      alert('Only files can be favorited, not folders')
       return
     }
     
     if (pinnedItems.length >= 5) {
-      alert('Maximum 5 items can be pinned')
+      alert('Maximum 5 favorites allowed')
       return
     }
     
     const alreadyPinned = pinnedItems.some(pinned => pinned.path === item.path)
     if (alreadyPinned) {
-      alert('Item is already pinned')
+      alert('Item is already a favorite')
       return
     }
 
@@ -520,12 +561,8 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             style={{ paddingLeft: `${12 + depth * 16}px` }}
             title={`${item.name} ${item.type === 'file' ? `(${formatFileSize(item.size)}) - Modified: ${formatDate(item.modified)}` : ''}`}
           >
-            <span className="tree-icon">{getFileIcon(item)}</span>
-            <span className="tree-name">{item.name}</span>
-            {item.type === 'file' && (
-              <span className="file-size">{formatFileSize(item.size)}</span>
-            )}
-            {isPinned && <span className="pinned-indicator">[*]</span>}
+            <span className="tree-name">{item.name.replace(/\.?md$/i,'')}</span>
+            {isPinned && <span className="pinned-indicator">fav</span>}
             
             {/* Hover menu */}
             {isHovered && !isDragging && (
@@ -555,11 +592,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     if (pinnedItems.length === 0) return null
 
     return (
-      <div className="pinned-section">
-        <div className="pinned-header">
-          <span className="pinned-title">[*] Pinned</span>
-          <span className="pinned-count">({pinnedItems.length}/5)</span>
-        </div>
+        <div className="pinned-section">
+          <div className="pinned-header">
+            <span className="pinned-title">Favorites</span>
+            <span className="pinned-count">({pinnedItems.length}/5)</span>
+          </div>
         <div 
           className="pinned-items"
         >
@@ -568,16 +605,23 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
               key={item.path}
               className={`pinned-item ${item.type} ${selectedItems.has(item.path) ? 'selected' : ''}`}
               onClick={(event) => {
-                if (item.type === 'file') {
-                  onFileSelect(item.path, item.name)
+                try {
+                  if (item.type === 'file') {
+                    onFileSelect(item.path, item.name)
+                  } else if (item.type === 'directory') {
+                    // Expand directory if pinned
+                    toggleFolder({ ...item, children: item.children || [], expanded: expandedFolders.has(item.path) } as any)
+                  }
+                } catch (e) {
+                  alert(`Failed to open: ${item.name}`)
                 }
                 setSelectedItems(new Set([item.path]))
               }}
               onMouseEnter={() => setHoveredItem(item.path)}
               onMouseLeave={() => setHoveredItem(null)}
-              title={`Pinned: ${item.name}`}
+              title={`Favorite: ${item.name}`}
             >
-              <span className="tree-icon">{item.type === 'directory' ? '▶' : '○'}</span>
+              <span className="tree-icon"></span>
               <span className="tree-name">{item.name}</span>
               
               {/* Unpin button */}
@@ -588,7 +632,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                     e.stopPropagation()
                     handleUnpinItem(item.path)
                   }}
-                  title="Unpin item"
+                  title="Remove favorite"
                 >
                   ✕
                 </button>
@@ -776,30 +820,24 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   return (
     <div className="file-tree">
       <div className="panel-header">
-        <div className="file-tree-header">
-          <div className="header-actions">
-            <button 
-              className="refresh-btn"
-              onClick={() => rootPath ? loadDirectory(rootPath) : loadSavedDirectory()}
-              title={rootPath ? "Refresh directory" : "Load saved directory"}
-            >
-              [↻]
-            </button>
-            <button 
-              className="search-btn"
-              onClick={() => setShowSearchResults(!showSearchResults)}
-              title="Search files"
-            >
-              [search]
-            </button>
-            <button 
-              className="open-directory-btn"
-              onClick={onDirectorySelect}
-              title="Choose directory"
-            >
-              [DIR]
-            </button>
-          </div>
+        {/* Top header: directory name only */}
+        <div className="file-tree-header" style={{justifyContent:'flex-start', gap:8, width:'100%'}}>
+          <button 
+            className="open-directory-btn"
+            onClick={onDirectorySelect}
+            title={rootPath || 'Choose directory'}
+            style={{flex:'1 1 auto', textAlign:'left'}}
+          >
+            {rootPath ? cleanDirectoryName(rootPath.split('/').pop() || rootPath) : '[Select Directory]'}
+          </button>
+          {isBuilding && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 6px', border:'1px solid var(--border-light)', borderRadius:6 }} title="Indexing and building embeddings…">
+              <span>⏳</span>
+              <span style={{ fontSize:12, color:'var(--text-secondary)' }}>
+                {buildEmbedded.toLocaleString()} / {buildTotal.toLocaleString()}
+              </span>
+            </div>
+          )}
         </div>
         
         {/* Search input - only show when search is active */}
@@ -830,7 +868,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         ) : !rootPath ? (
           <div className="file-tree-empty">
             <p>No directory selected</p>
-            <small>Use [DIR] button above to choose a directory</small>
+            <small>Use the header above to choose a directory</small>
           </div>
         ) : (
           <>
@@ -840,36 +878,9 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             {/* Root directory node and children */}
             <div className="file-tree-content">
               {rootPath && (
-                <>
-                  <div
-                    className={`tree-item directory ${expandedFolders.has(rootPath) ? 'expanded' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      // toggle root expanded state
-                      setExpandedFolders(prev => {
-                        const next = new Set(prev)
-                        if (next.has(rootPath)) next.delete(rootPath)
-                        else next.add(rootPath)
-                        return next
-                      })
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setContextMenuPosition({ x: e.clientX, y: e.clientY })
-                      setShowContextMenu(rootPath)
-                    }}
-                    style={{ paddingLeft: `${12}px` }}
-                    title={rootPath}
-                  >
-                    <span className="tree-icon">{expandedFolders.has(rootPath) ? '▼' : '▶'}</span>
-                    <span className="tree-name">{rootPath.split('/').pop() || rootPath}</span>
-                  </div>
-                  {expandedFolders.has(rootPath) && (
-                    <div className="tree-children">
-                      {renderTreeItems(files, 1)}
-                    </div>
-                  )}
-                </>
+                <div className="tree-children">
+                  {renderTreeItems(files, 0)}
+                </div>
               )}
             </div>
           </>
@@ -887,7 +898,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           title="Create new markdown file"
           disabled={!rootPath}
         >
-          [+] New File
+          [+] File
         </button>
         <button 
           className="action-btn"
@@ -898,7 +909,21 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           title="Create new directory" 
           disabled={!rootPath}
         >
-          [+] New Folder
+          [+] Folder
+        </button>
+        <button 
+          className="action-btn"
+          onClick={() => rootPath ? loadDirectory(rootPath) : loadSavedDirectory()}
+          title={rootPath ? 'Refresh directory' : 'Load saved directory'}
+        >
+          [↻]
+        </button>
+        <button 
+          className="action-btn"
+          onClick={() => setShowSearchResults(!showSearchResults)}
+          title="Search files"
+        >
+          [search]
         </button>
       </div>
       
@@ -954,7 +979,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                         onClick={() => handlePinItem(item as any)}
                         disabled={isPinned || pinnedItems.length >= 5}
                       >
-                        {isPinned ? 'Already Pinned' : 'PIN ITEM'}
+                        {isPinned ? 'Already Favorited' : 'ADD TO FAVORITES'}
                       </button>
                       {isPinned && (
                         <button
@@ -964,7 +989,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                             setShowContextMenu(null)
                           }}
                         >
-                          UNPIN ITEM
+                          REMOVE FAVORITE
                         </button>
                       )}
                     </>

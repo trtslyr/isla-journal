@@ -1312,6 +1312,16 @@ class IslaDatabase {
     updateChat.run(newTitle, chatId)
   }
 
+  /** Delete ALL chats and ALL messages */
+  public clearAllChats(): void {
+    if (!this.db) throw new Error('Database not initialized')
+    const txn = this.db.transaction(() => {
+      this.db!.prepare('DELETE FROM chat_messages').run()
+      this.db!.prepare('DELETE FROM chats').run()
+    })
+    txn()
+  }
+
   // ========================
   // APP SETTINGS
   // ========================
@@ -1525,7 +1535,11 @@ class IslaDatabase {
         file_id: r.file_id,
         file_path: r.file_path,
         file_name: r.file_name,
-        content_snippet: String(r.content_snippet || '').replace(/\u0000/g, ''),
+        content_snippet: String(r.content_snippet || '')
+          .replace(/\u0000/g, '')
+          .replace(/"{2,}/g, '') // remove accidental doubled quotes
+          .replace(/\s+/g, ' ')   // collapse whitespace
+          .trim(),
         rank: r.rank,
         chunk_index: r.chunk_index,
         note_date: r.note_date,

@@ -15,9 +15,15 @@ interface EditorPaneProps {
   onChange: (value: string | undefined) => void
   onNewEditor?: () => void
   onRenameFile?: (newName: string) => void
+  onCommitRename?: (newName: string) => void
+  // New: chrome-like tabs
+  tabs?: EditorTabModel[]
+  activeTabId?: string
+  onSelectTab?: (tabId: string) => void
+  onCloseTab?: (tabId: string) => void
 }
 
-const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onNewEditor, onRenameFile }) => {
+const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onNewEditor, onRenameFile, onCommitRename, tabs = [], activeTabId, onSelectTab, onCloseTab }) => {
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -45,46 +51,67 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onN
 
   return (
     <div className="panel editor-panel" style={{ height: '100%', flex: 1 }}>
-      {/* Slim top bar to spawn another editor pane */}
-      <div className="panel-header" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 8px' }}>
-        <button className="search-btn" onClick={onNewEditor}>[+] New Editor</button>
-        <div style={{opacity:0.6, fontSize:12}}>{activeTab.path || activeTab.name}</div>
+      {/* Chrome-like tab strip with [+] fixed on the left */}
+      <div className="panel-header" style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 8px' }}>
+        <button
+          className="search-btn"
+          onClick={onNewEditor}
+          title="New Editor"
+          style={{ padding:'0 6px', width:28, height:24, lineHeight:'20px', fontSize:16, flex:'0 0 auto' }}
+        >
+          ＋
+        </button>
+        <div style={{ display:'flex', alignItems:'center', gap:6, overflowX:'auto', flex:1 }}>
+          {(tabs || []).map(tab => (
+            <div
+              key={tab.id}
+              onClick={() => onSelectTab?.(tab.id)}
+              style={{
+                display:'flex', alignItems:'center', gap:6,
+                maxWidth:240,
+                padding:'6px 10px', borderRadius:8,
+                cursor:'pointer',
+                background: tab.id === activeTabId ? 'var(--surface)' : 'transparent',
+                border: '1px solid var(--border-light)'
+              }}
+              title={tab.path || tab.name}
+            >
+              <div style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight: tab.id === activeTabId ? 600 : 500}}>
+                {tab.name}{tab.hasUnsavedChanges ? '*' : ''}
+              </div>
+              <button
+                className="search-btn"
+                onClick={(e) => { e.stopPropagation(); onCloseTab?.(tab.id) }}
+                title="Close"
+              >×</button>
+            </div>
+          ))}
+        </div>
       </div>
-      {/* Title input and tool bar inside editor space */}
+      {/* If no file selected for this tab, show placeholder */}
+      {(!activeTab.path) ? (
+        <div className="panel-content" style={{ padding: 16, color: 'var(--text-secondary)' }}>
+          No file selected
+        </div>
+      ) : (
       <div className="panel-header" style={{ padding:'4px 8px', borderTop:'1px solid var(--border-light)' }}>
-        <input
-          className="settings-input"
+        <div
           style={{
             width:'100%',
             fontSize: '20px',
             fontWeight: 700,
-            background:'transparent',
-            border:'0',
-            outline:'none',
             padding:'8px 6px'
           }}
-          value={activeTab.name}
-          onChange={(e)=> onRenameFile?.(e.target.value)}
-        />
-        <div className="tab-bar" style={{ gap: 6, padding: 4 }}>
-          <button className="search-btn" title="Heading 1" onClick={()=>editorApiRef.current?.insertHeading?.(1)}>H1</button>
-          <button className="search-btn" title="Heading 2" onClick={()=>editorApiRef.current?.insertHeading?.(2)}>H2</button>
-          <button className="search-btn" title="Heading 3" onClick={()=>editorApiRef.current?.insertHeading?.(3)}>H3</button>
-          <span style={{ width: 8 }} />
-          <button className="search-btn" title="Bold (Ctrl/Cmd+B)" onClick={()=>editorApiRef.current?.toggleBold()}>B</button>
-          <button className="search-btn" title="Italic (Ctrl/Cmd+I)" onClick={()=>editorApiRef.current?.toggleItalic()}>I</button>
-          <button className="search-btn" title="Inline code" onClick={()=>editorApiRef.current?.toggleInlineCode?.()}>`</button>
-          <span style={{ width: 8 }} />
-          <button className="search-btn" title="Link" onClick={()=>editorApiRef.current?.insertLink()}>Link</button>
-          <button className="search-btn" title="Bulleted list" onClick={()=>editorApiRef.current?.insertList('bullet')}>• List</button>
-          <button className="search-btn" title="Numbered list" onClick={()=>editorApiRef.current?.insertList('number')}>1. List</button>
-          <button className="search-btn" title="Task list" onClick={()=>editorApiRef.current?.insertList('check')}>[ ]</button>
-          <span style={{ width: 8 }} />
-          <button className="search-btn" title="Block quote" onClick={()=>editorApiRef.current?.insertQuote?.()}>❝</button>
-          <button className="search-btn" title="Code block" onClick={()=>editorApiRef.current?.insertCodeBlock()}>Code</button>
-          <button className="search-btn" title="Horizontal rule" onClick={()=>editorApiRef.current?.insertHorizontalRule?.()}>―</button>
+          title={activeTab.path || activeTab.name}
+        >
+          {activeTab.name.replace(/\.md$/i, '')}
+        </div>
+        {/* Read-only date meta */}
+        <div style={{ display:'flex', alignItems:'center', gap:12, padding:'0 6px 6px 6px', color:'var(--text-secondary)', fontSize:12 }}>
+          <span id="editor-file-date" />
         </div>
       </div>
+      )}
       <div className="panel-content">
         <div style={{height:'100%', display:'flex', flexDirection:'column'}}>
           <div style={{flex:1}}>

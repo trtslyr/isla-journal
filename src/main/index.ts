@@ -192,9 +192,81 @@ ipcMain.handle('embeddings:rebuildAll', async (_, modelOverride?: string) => {
   }
 })
 
+// Embeddings stats (for Settings initial view)
+ipcMain.handle('embeddings:getStats', async (_, modelOverride?: string) => {
+  try {
+    await database.ensureReady()
+    const llama = require('./services/llamaService').LlamaService.getInstance()
+    try { await llama.initialize() } catch {}
+    const model = modelOverride || llama.getCurrentModel() || 'llama3.1:latest'
+    const stats = database.getEmbeddingsStats(model)
+    return { model, ...stats }
+  } catch (error) {
+    return { model: null, embeddedCount: 0, chunkCount: 0, error: String((error as any)?.message || error) }
+  }
+})
+
 let mainWindow: BrowserWindow | null = null
 let embeddingsBuilding = false
 let vaultWatcher: import('chokidar').FSWatcher | null = null
+let embedRetryTimer: NodeJS.Timeout | null = null
+let embedRetryAttempts = 0
+
+async function maybeStartEmbeddingsBuild(reason: string = 'auto'): Promise<void> {
+  try {
+    if (embeddingsBuilding) return
+    await database.ensureReady()
+    const llama = LlamaService.getInstance()
+    try { await llama.initialize() } catch {}
+    const model = llama.getCurrentModel() || 'llama3.1:latest'
+    const pending = database.getChunksNeedingEmbeddings(model, 1)
+    if (!pending || pending.length === 0) {
+      // Schedule a short retry window to catch freshly indexed chunks
+      if (embedRetryAttempts < 12) {
+        if (embedRetryTimer) { try { clearTimeout(embedRetryTimer as any) } catch {} }
+        embedRetryAttempts++
+        embedRetryTimer = setTimeout(() => { maybeStartEmbeddingsBuild('retry') }, 1000)
+      } else {
+        embedRetryAttempts = 0
+      }
+      return
+    }
+    // We have pending work; build now
+    embedRetryAttempts = 0
+    if (embedRetryTimer) { try { clearTimeout(embedRetryTimer as any) } catch {} embedRetryTimer = null }
+    embeddingsBuilding = true
+    const batchSize = 64
+    const modelToUse = model
+    const startStats = database.getEmbeddingsStats(modelToUse)
+    mainWindow?.webContents.send('embeddings:progress', { total: startStats.chunkCount, embedded: startStats.embeddedCount, model: modelToUse, status: 'starting' })
+    let stagnation = 0
+    let prevEmbedded = startStats.embeddedCount
+    while (true) {
+      const batch = database.getChunksNeedingEmbeddings(modelToUse, batchSize)
+      if (!batch.length) break
+      const texts = batch.map(b => b.chunk_text)
+      const vectors = await llama.embedTexts(texts, modelToUse)
+      for (let i = 0; i < batch.length; i++) {
+        database.upsertEmbedding(batch[i].id, vectors[i] || [], modelToUse)
+      }
+      const now = database.getEmbeddingsStats(modelToUse)
+      mainWindow?.webContents.send('embeddings:progress', { total: now.chunkCount, embedded: now.embeddedCount, model: modelToUse, status: 'running' })
+      if (now.embeddedCount <= prevEmbedded) {
+        if (++stagnation >= 3) break
+      } else {
+        stagnation = 0
+        prevEmbedded = now.embeddedCount
+      }
+    }
+    const fin = database.getEmbeddingsStats(modelToUse)
+    mainWindow?.webContents.send('embeddings:progress', { total: fin.chunkCount, embedded: fin.embeddedCount, model: modelToUse, status: 'done' })
+  } catch (e) {
+    console.error('⚠️ [Main] maybeStartEmbeddingsBuild failed:', e)
+    try { mainWindow?.webContents.send('embeddings:progress', { status: 'error', error: String((e as any)?.message || e) }) } catch {}
+  } finally {
+    embeddingsBuilding = false
+  }
+}
 
 function startVaultWatcher(rootDir: string) {
   try {
@@ -245,6 +317,8 @@ function startVaultWatcher(rootDir: string) {
           const content = await readFile(filePath, 'utf-8')
           const name = path.basename(filePath)
           database.saveFile(filePath, name, content)
+          // New chunks may exist now; try to kick embeddings builder
+          maybeStartEmbeddingsBuild('file-indexed')
         } catch (e) {
           console.error('Watcher add/change failed:', e)
         }
@@ -896,6 +970,8 @@ ipcMain.handle('file:openDirectory', async () => {
       startVaultWatcher(normalizedDirPath)
       // Notify renderer of settings change
       try { mainWindow?.webContents.send('settings:changed', { key: 'selectedDirectory', value: normalizedDirPath }) } catch {}
+      // Kick off or schedule embeddings build for the new vault (non-blocking)
+      maybeStartEmbeddingsBuild('root-change')
     }
     
     const entries = await readdir(normalizedDirPath, { withFileTypes: true })
@@ -1282,10 +1358,10 @@ ipcMain.handle('chat:setActive', async (_, chatId: number) => {
   }
 })
 
-ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string) => {
+ipcMain.handle('chat:addMessage', async (_, chatId: number, role: string, content: string, metadata?: any) => {
   try {
     await database.ensureReady()
-    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content)
+    return database.addChatMessage(chatId, role as 'user' | 'assistant' | 'system', content, metadata)
   } catch (error) {
     console.error('❌ [IPC] Error adding chat message:', error)
     throw error
@@ -1375,6 +1451,15 @@ ipcMain.handle('content:streamSearchAndAnswer', async (_, query: string, chatId?
       try { mainWindow?.webContents.send('content:streamChunk', { chunk }) } catch {}
     })
     try { mainWindow?.webContents.send('content:streamDone', { answer: full, sources }) } catch {}
+    // Persist assistant message server-side to avoid renderer race/failures
+    try {
+      const active = database.getActiveChat()
+      if (active && full) {
+        database.addChatMessage(active.id, 'assistant', full, { sources })
+      }
+    } catch (e) {
+      console.warn('⚠️ [IPC] Failed to persist assistant message on stream end:', e)
+    }
     return { started: true }
   } catch (error) {
     console.error('❌ [IPC] Error in FTS-backed streaming:', error)
