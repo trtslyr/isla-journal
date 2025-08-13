@@ -36,8 +36,16 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.dmg" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          # Debug: Show what was created
+          echo "Contents of out directory:"
+          ls -la out/ || echo "No out directory"
+          find out -type f 2>/dev/null || echo "No files in out"
+          # Find files anywhere and copy to artifacts
+          find . -type f -name "*.dmg" -exec cp {} artifacts/ \; || echo "No DMG files found"
+          find . -type f -name "*.zip" -exec cp {} artifacts/ \; || echo "No ZIP files found"
+          # Show what we collected
+          echo "Collected artifacts:"
+          ls -la artifacts/
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
@@ -70,8 +78,16 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.dmg" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          # Debug: Show what was created
+          echo "Contents of out directory:"
+          ls -la out/ || echo "No out directory"
+          find out -type f 2>/dev/null || echo "No files in out"
+          # Find files anywhere and copy to artifacts
+          find . -type f -name "*.dmg" -exec cp {} artifacts/ \; || echo "No DMG files found"
+          find . -type f -name "*.zip" -exec cp {} artifacts/ \; || echo "No ZIP files found"
+          # Show what we collected
+          echo "Collected artifacts:"
+          ls -la artifacts/
       - uses: actions/upload-artifact@v4
         with:
           name: macos-x64
@@ -95,8 +111,16 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.exe" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          # Debug: Show what was created
+          echo "Contents of out directory:"
+          ls -la out/ || echo "No out directory"
+          find out -type f 2>/dev/null || echo "No files in out"
+          # Find files anywhere and copy to artifacts
+          find . -type f -name "*.exe" -exec cp {} artifacts/ \; || echo "No EXE files found"
+          find . -type f -name "*.zip" -exec cp {} artifacts/ \; || echo "No ZIP files found"
+          # Show what we collected
+          echo "Collected artifacts:"
+          ls -la artifacts/
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
