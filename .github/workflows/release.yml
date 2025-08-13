@@ -36,8 +36,9 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.dmg" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          echo "Searching for DMG/ZIP artifacts in workspace..."
+          find . -type f -name "*.dmg" -exec cp -n {} artifacts/ \; || true
+          find . -type f -name "*.zip" -exec cp -n {} artifacts/ \; || true
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
@@ -70,8 +71,9 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.dmg" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          echo "Searching for DMG/ZIP artifacts in workspace..."
+          find . -type f -name "*.dmg" -exec cp -n {} artifacts/ \; || true
+          find . -type f -name "*.zip" -exec cp -n {} artifacts/ \; || true
       - uses: actions/upload-artifact@v4
         with:
           name: macos-x64
@@ -95,8 +97,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          find out/make -type f -name "*.exe" -exec cp {} artifacts/ \;
-          find out/make -type f -name "*.zip" -exec cp {} artifacts/ \;
+          echo "Searching for EXE/ZIP artifacts in workspace..."
+          find . -type f -name "*.exe" -exec cp -n {} artifacts/ \; || true
+          find . -type f -name "*.zip" -exec cp -n {} artifacts/ \; || true
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
