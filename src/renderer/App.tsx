@@ -355,27 +355,30 @@ const App: React.FC = () => {
           setPlatform(plat)
         } catch {}
 
-        // Load saved directory from settings - try to restore directory handle
+        // Load saved directory from settings - restore persistent directory
         try {
           const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
           const savedName = await window.electronAPI.settingsGet?.('selectedDirectoryName')
           console.log('🔍 [App] Saved directory:', savedDirectory, 'name:', savedName)
           
           if (savedDirectory === 'fsroot://' && savedName) {
-            // Try to restore the directory handle from browser storage
+            // Check if we already have a directory handle in memory
             const existingHandle = (window as any).__isla_rootHandle
             const existingName = (window as any).__isla_rootName
             
             if (existingHandle && existingName) {
-              console.log('✅ [App] Directory handle already restored:', existingName)
+              console.log('✅ [App] Directory handle already available:', existingName)
               setRootDirectory(savedDirectory)
             } else {
-              console.log('⚠️ [App] No existing handle, prompting user to select directory')
-              // Trigger directory selection
-              setTimeout(() => handleOpenDirectory(), 100)
+              // Set the saved name so UI shows it, but trigger re-selection
+              console.log('🔄 [App] Restoring directory session, but need user to re-grant access')
+              ;(window as any).__isla_rootName = savedName
+              setRootDirectory(savedDirectory) // Show the UI with saved name
+              // Note: User will need to re-select directory after refresh due to browser security
+              // This is expected behavior for PWAs
             }
           } else {
-            console.log('📁 [App] No saved directory found - user needs to select directory')
+            console.log('📁 [App] No saved directory - user needs to select directory')
             setTimeout(() => handleOpenDirectory(), 100)
           }        
         } catch (error) {
@@ -829,10 +832,14 @@ const App: React.FC = () => {
         console.log('📁 [App] Directory selected:', result)
         setRootDirectory(result)
         
-        // Save the selected directory to settings
+        // Save both directory path and name to settings for persistence
         try {
           await window.electronAPI.settingsSet?.('selectedDirectory', result)
-          console.log('💾 [App] Directory saved to settings:', result)
+          const directoryName = (window as any).__isla_rootName
+          if (directoryName) {
+            await window.electronAPI.settingsSet?.('selectedDirectoryName', directoryName)
+            console.log('💾 [App] Directory and name saved to settings:', result, directoryName)
+          }
         } catch (settingsError) {
           console.error('❌ [App] Failed to save directory to settings:', settingsError)
         }

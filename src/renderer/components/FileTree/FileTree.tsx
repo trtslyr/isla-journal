@@ -212,8 +212,16 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   useEffect(() => {
     const loadLabel = async () => {
       try {
-        const name = await window.electronAPI.settingsGet?.('selectedDirectoryName')
-        if (name) setRootLabel(name)
+        // Try to get from window first, then from settings
+        let name = (window as any).__isla_rootName
+        if (!name) {
+          name = await window.electronAPI.settingsGet?.('selectedDirectoryName')
+        }
+        if (name) {
+          const cleanName = cleanDirectoryName(name)
+          setRootLabel(cleanName)
+          console.log('📁 [FileTree] Set root label:', cleanName)
+        }
       } catch {}
     }
     loadLabel()
@@ -225,6 +233,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       setIsBuilding(true)
     } else {
       setFiles([])
+      setRootLabel('')
     }
   }, [rootPath])
 
