@@ -370,12 +370,12 @@ const App: React.FC = () => {
               console.log('✅ [App] Directory handle already available:', existingName)
               setRootDirectory(savedDirectory)
             } else {
-              // Set the saved name so UI shows it, but trigger re-selection
+              // Set the saved name so UI shows it, but directory needs re-selection
               console.log('🔄 [App] Restoring directory session, but need user to re-grant access')
               ;(window as any).__isla_rootName = savedName
-              setRootDirectory(savedDirectory) // Show the UI with saved name
-              // Note: User will need to re-select directory after refresh due to browser security
-              // This is expected behavior for PWAs
+              // Don't set rootDirectory yet - this will cause FileTree to try loading without a handle
+              // Instead, the user needs to click the directory button to re-grant access
+              console.log('⚠️ [App] Directory handle missing - user must re-select directory to access files')
             }
           } else {
             console.log('📁 [App] No saved directory - user needs to select directory')

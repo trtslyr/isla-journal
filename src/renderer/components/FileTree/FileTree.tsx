@@ -843,10 +843,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           <button 
             className="open-directory-btn"
             onClick={onDirectorySelect}
-            title={rootPath || 'Choose directory'}
+            title={rootPath ? 'Re-select directory to access files' : 'Choose directory'}
             style={{flex:'1 1 auto', textAlign:'left'}}
           >
-            {rootPath ? (rootLabel || cleanDirectoryName(rootPath.split('/').pop() || rootPath)) : '[Select Directory]'}
+            {rootPath && rootLabel ? `${rootLabel} (Click to re-access)` : (rootLabel ? `${rootLabel} (Click to access)` : '[Select Directory]')}
           </button>
           {isBuilding && (
             <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 6px', border:'1px solid var(--border-light)', borderRadius:6 }} title="Indexing and building embeddings…">
@@ -897,7 +897,23 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
             <div className="file-tree-content">
               {rootPath && (
                 <div className="tree-children">
-                  {renderTreeItems(files, 0)}
+                  {loading ? (
+                    <div className="file-tree-loading">
+                      <p>Loading directory contents...</p>
+                    </div>
+                  ) : error ? (
+                    <div className="file-tree-error">
+                      <p>{error}</p>
+                      <small>Try clicking the directory name above to re-select</small>
+                    </div>
+                  ) : files.length === 0 ? (
+                    <div className="file-tree-empty">
+                      <p>No files found or directory access needed</p>
+                      <small>Click the directory name above to grant access</small>
+                    </div>
+                  ) : (
+                    renderTreeItems(files, 0)
+                  )}
                 </div>
               )}
             </div>
