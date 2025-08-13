@@ -18,7 +18,7 @@ jobs:
     runs-on: macos-latest
     env:
       CSC_TEAM_ID: ${{ secrets.TEAM_ID }}
-      CSC_NAME: Developer ID Application: Taylor Wall (85H5F442V2)
+      CSC_NAME: "Developer ID Application: Taylor Wall (85H5F442V2)"
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -62,7 +62,7 @@ jobs:
     runs-on: macos-13
     env:
       CSC_TEAM_ID: ${{ secrets.TEAM_ID }}
-      CSC_NAME: Developer ID Application: Taylor Wall (85H5F442V2)
+      CSC_NAME: "Developer ID Application: Taylor Wall (85H5F442V2)"
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
