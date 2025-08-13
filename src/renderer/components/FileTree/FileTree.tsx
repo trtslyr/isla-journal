@@ -267,10 +267,15 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       // Check if directory handle became available and reload content
       const hasHandle = !!(window as any).__isla_rootHandle
       if (rootPath && hasHandle && files.length === 0 && !loading) {
-        console.log('📁 [FileTree] Handle now available - loading content')
+        console.log('📁 [FileTree] Handle now available - loading content automatically')
         loadDirectory(rootPath)
         setExpandedFolders(new Set([rootPath]))
         setIsBuilding(true)
+      }
+      
+      // Debug current state
+      if (rootPath && !hasHandle) {
+        console.log('📁 [FileTree] Have rootPath but no handle - waiting for user to select directory')
       }
     }, 500) // Check every 500ms
     

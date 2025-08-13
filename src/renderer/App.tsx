@@ -827,7 +827,11 @@ const App: React.FC = () => {
   // Directory persistence
   const handleOpenDirectory = async () => {
     try {
-      console.log('📁 [App] Opening directory picker...')
+      console.log('📁 [App] User clicked directory button - triggering picker...')
+      
+      // Clear any existing state to force fresh selection
+      setRootDirectory(null)
+      
       const result = await window.electronAPI.openDirectory?.()
       if (result) {
         console.log('📁 [App] Directory selected:', result)
@@ -848,12 +852,24 @@ const App: React.FC = () => {
         }
         
         // Force a refresh of the FileTree component
-        console.log('🔄 [App] Directory selection complete - UI should update')
+        console.log('🔄 [App] Directory selection complete - UI should update immediately')
       } else {
-        console.log('❌ [App] No directory selected')
+        console.log('❌ [App] User cancelled directory selection')
+        // Restore previous directory if there was one
+        const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
+        if (savedDirectory) {
+          setRootDirectory(savedDirectory)
+        }
       }
     } catch (error) {
       console.error('❌ [App] Failed to open directory:', error)
+      // Restore previous directory if there was one
+      try {
+        const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
+        if (savedDirectory) {
+          setRootDirectory(savedDirectory)
+        }
+      } catch {}
     }
   }
 
