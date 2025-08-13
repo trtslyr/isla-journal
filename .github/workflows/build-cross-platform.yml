@@ -334,12 +334,12 @@ jobs:
           # electron-builder outputs to 'release/' per package.json config
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-              npx --yes electron-builder --mac dmg,zip --arm64 --publish=never | cat
+              npx --yes electron-builder --mac dmg zip --arm64 --publish=never | cat
             else
-              npx --yes electron-builder --mac dmg,zip --x64 --publish=never | cat
+              npx --yes electron-builder --mac dmg zip --x64 --publish=never | cat
             fi
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
-            npx --yes electron-builder --win nsis,portable --x64 --publish=never | cat
+            npx --yes electron-builder --win nsis portable --x64 --publish=never | cat
           else
             echo "Unsupported OS: ${{ runner.os }}"
             exit 1
