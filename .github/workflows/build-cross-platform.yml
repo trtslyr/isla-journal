@@ -325,61 +325,23 @@ jobs:
           
           echo "Application tests passed"
       
-      - name: Package Application
+      - name: Package Application (electron-builder)
         shell: bash
         run: |
-          echo "Packaging ${{ matrix.name }} application..."
+          echo "Packaging ${{ matrix.name }} application with electron-builder..."
           
-          # Set platform-specific environment variables
-          export npm_config_target_platform="${{ matrix.platform }}"
-          export npm_config_target_arch="${{ matrix.arch }}"
-          export npm_config_cache="$(pwd)/.npm-cache"
-          
-          # Debug native modules before packaging (macOS only)
+          # electron-builder outputs to 'release/' per package.json config
           if [[ "${{ runner.os }}" == "macOS" ]]; then
-            echo "Debugging macOS packaging prerequisites..."
-            
-            # Check for appdmg and its native modules
-            if npm list appdmg >/dev/null 2>&1; then
-              echo "✓ appdmg package found"
-              echo "Checking appdmg native modules:"
-              find node_modules/appdmg -name "*.node" -ls 2>/dev/null || echo "No .node files found in appdmg"
-              
-              # Try to require appdmg to see detailed error
-              node -e "
-                try {
-                  const appdmg = require('appdmg');
-                  console.log('✓ appdmg loads successfully');
-                } catch(e) {
-                  console.log('✗ appdmg load error:', e.message);
-                  console.log('Stack:', e.stack);
-                }
-              " || echo "Failed to test appdmg loading"
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              npx --yes electron-builder --mac dmg,zip --arm64 --publish=never | cat
             else
-              echo "⚠️ appdmg package not found"
+              npx --yes electron-builder --mac dmg,zip --x64 --publish=never | cat
             fi
-          fi
-          
-                     # Package the application with error handling
-          if npm run make; then
-            echo "✅ Packaging completed successfully for ${{ matrix.name }}"
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            npx --yes electron-builder --win nsis,portable --x64 --publish=never | cat
           else
-            echo "❌ Packaging failed for ${{ matrix.name }}"
-            echo "Attempting alternative packaging approach..."
-            
-            # For macOS, try ZIP-only creation as fallback
-            if [[ "${{ runner.os }}" == "macOS" ]]; then
-              echo "Trying ZIP-only packaging for macOS (avoiding DMG native module issues)..."
-              if npm run make:mac-zip; then
-                echo "✅ ZIP packaging successful for ${{ matrix.name }}"
-              else
-                echo "❌ ZIP packaging also failed, trying basic package..."
-                npm run package || echo "Basic package step also failed"
-                exit 1
-              fi
-            else
-              exit 1
-            fi
+            echo "Unsupported OS: ${{ runner.os }}"
+            exit 1
           fi
       
       - name: Verify Package
@@ -387,12 +349,16 @@ jobs:
         run: |
           echo "Verifying ${{ matrix.name }} package..."
           
-          # Check if out/make directory exists
-          if [[ ! -d "out/make" ]]; then
-            echo "✗ No out/make directory found"
-            echo "Contents of out directory:"
-            ls -la out/ 2>/dev/null || echo "No out directory"
-            exit 1
+          if [[ -d "release" ]]; then
+            echo "✓ Found electron-builder output directory: release/"
+            find release -type f | head -50
+          else
+            echo "⚠️ No release directory, checking electron-forge fallback out/make/"
+            if [[ ! -d "out/make" ]]; then
+              echo "✗ Neither release/ nor out/make/ directories found"
+              ls -la || true
+              exit 1
+            fi
           fi
           
           # Platform-specific installer verification
@@ -414,9 +380,9 @@ jobs:
             fi
           else
             # Look for macOS installers in multiple possible locations (DMG preferred, ZIP as fallback)
-            DMGS=$(find out -name "*.dmg" 2>/dev/null || echo "")
-            ZIPS=$(find out -name "*.zip" 2>/dev/null || echo "")
-            APPS=$(find out -name "*.app" 2>/dev/null || echo "")
+            DMGS=$(find release out -name "*.dmg" 2>/dev/null || echo "")
+            ZIPS=$(find release out -name "*.zip" 2>/dev/null || echo "")
+            APPS=$(find release out -name "*.app" 2>/dev/null || echo "")
             
             if [[ -n "$DMGS" ]]; then
               echo "✓ macOS DMG installer(s) created:"
@@ -454,6 +420,11 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
+            release/**/*.exe
+            release/**/*.msi
+            release/**/*.dmg
+            release/**/*.zip
+            release/**/*.app
             out/**/*.exe
             out/**/*.msi
             out/**/*.dmg
@@ -462,12 +433,15 @@ jobs:
           retention-days: 30
           compression-level: 6
       
-      - name: List ALL files in out directory
+      - name: List ALL files in release/out directories
         shell: bash
         run: |
-          echo "=== COMPLETE CONTENTS OF OUT DIRECTORY ==="
+          echo "=== CONTENTS OF release/ DIRECTORY ==="
+          ls -la release/ || echo "No release directory"
+          echo "=== CONTENTS OF out/ DIRECTORY ==="
           ls -la out/ || echo "No out directory"
-          find . -name "*.exe" -o -name "*.dmg" -o -name "*.msi" -o -name "*.zip" -o -name "*.app" | head -20
+          echo "=== FIRST 50 INSTALLER FILES FOUND ==="
+          find . -name "*.exe" -o -name "*.dmg" -o -name "*.msi" -o -name "*.zip" -o -name "*.app" | head -50
           echo "=== END FILE LISTING ==="
           
       - name: Upload to GitHub Release - Latest
