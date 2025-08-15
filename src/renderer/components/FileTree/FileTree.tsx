@@ -209,42 +209,28 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
 
   // Friendly root label & initial load
   const [rootLabel, setRootLabel] = useState<string>('')
+  
   useEffect(() => {
-    const loadLabel = async () => {
-      try {
-        // Try to get from window first, then from settings
-        let name = (window as any).__isla_rootName
-        if (!name) {
-          name = await window.electronAPI.settingsGet?.('selectedDirectoryName')
-        }
-        if (name) {
-          const cleanName = cleanDirectoryName(name)
-          setRootLabel(cleanName)
-          console.log('📁 [FileTree] Set root label:', cleanName)
-        } else {
-          setRootLabel('')
-        }
-      } catch {}
-    }
-    loadLabel()
-    if (rootPath) {
-      console.log('📁 [FileTree] RootPath set:', rootPath)
-      // Only try to load directory if we have a handle
-      const hasHandle = !!(window as any).__isla_rootHandle
-      console.log('📁 [FileTree] Directory handle available:', hasHandle)
-      
-      if (hasHandle) {
-        console.log('📁 [FileTree] Loading directory content...')
-        loadDirectory(rootPath)
-        // Ensure root is expanded by default
-        setExpandedFolders(new Set([rootPath]))
-        // show preparing indicator until embeddings report done
-        setIsBuilding(true)
+    const loadLabel = () => {
+      // Only get directory name from current session (window object)
+      const name = (window as any).__isla_rootName
+      if (name) {
+        const cleanName = cleanDirectoryName(name)
+        setRootLabel(cleanName)
+        console.log('📁 [FileTree] Set root label:', cleanName)
       } else {
-        console.log('📁 [FileTree] No handle - showing empty state')
-        setFiles([])
-        setIsBuilding(false)
+        setRootLabel('')
       }
+    }
+    
+    if (rootPath) {
+      console.log('📁 [FileTree] Loading directory:', rootPath)
+      loadLabel()
+      loadDirectory(rootPath)
+      // Ensure root is expanded by default
+      setExpandedFolders(new Set([rootPath]))
+      // show preparing indicator until embeddings report done
+      setIsBuilding(true)
     } else {
       setFiles([])
       setRootLabel('')
@@ -252,35 +238,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     }
   }, [rootPath])
   
-  // Force refresh label and content periodically to catch updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const name = (window as any).__isla_rootName
-      if (name) {
-        const cleanName = cleanDirectoryName(name)
-        if (cleanName !== rootLabel) {
-          setRootLabel(cleanName)
-          console.log('📁 [FileTree] Updated root label from window:', cleanName)
-        }
-      }
-      
-      // Check if directory handle became available and reload content
-      const hasHandle = !!(window as any).__isla_rootHandle
-      if (rootPath && hasHandle && files.length === 0 && !loading) {
-        console.log('📁 [FileTree] Handle now available - loading content automatically')
-        loadDirectory(rootPath)
-        setExpandedFolders(new Set([rootPath]))
-        setIsBuilding(true)
-      }
-      
-      // Debug current state
-      if (rootPath && !hasHandle) {
-        console.log('📁 [FileTree] Have rootPath but no handle - waiting for user to select directory')
-      }
-    }, 500) // Check every 500ms
-    
-    return () => clearInterval(interval)
-  }, [rootLabel, rootPath, files.length, loading])
+
 
   const toggleFolder = async (item: FileItem) => {
     const isCurrentlyExpanded = expandedFolders.has(item.path)
@@ -538,26 +496,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
     return date.toLocaleDateString()
   }
 
-  // Function to manually load saved directory
-  const loadSavedDirectory = async () => {
-    try {
-      console.log('🔄 [FileTree] Manually loading saved directory...')
-      const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
-      console.log('🔍 [FileTree] Found saved directory:', savedDirectory)
-      if (savedDirectory) {
-        // Trigger the parent to update rootPath by calling onDirectorySelect
-        // This is a workaround since we can't directly set the parent's state
-        console.log('✅ [FileTree] Saved directory found, calling directory selector...')
-        onDirectorySelect()
-      } else {
-        console.log('❌ [FileTree] No saved directory found')
-        onDirectorySelect()
-      }
-    } catch (error) {
-      console.error('❌ [FileTree] Error loading saved directory:', error)
-      onDirectorySelect()
-    }
-  }
+
 
   // Search functionality
   const handleSearch = async (query: string) => {
@@ -888,19 +827,12 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
           <button 
             className="open-directory-btn"
             onClick={onDirectorySelect}
-            title={rootPath || 'Choose directory'}
+            title={rootLabel ? `Re-select ${rootLabel} folder` : 'Choose your workspace folder'}
             style={{flex:'1 1 auto', textAlign:'left'}}
           >
-            {rootLabel || (rootPath ? cleanDirectoryName(rootPath.split('/').pop() || rootPath) : '[Select Directory]')}
+            {rootLabel || 'Select Workspace'}
           </button>
-          {isBuilding && (
-            <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 6px', border:'1px solid var(--border-light)', borderRadius:6 }} title="Indexing and building embeddings…">
-              <span>⏳</span>
-              <span style={{ fontSize:12, color:'var(--text-secondary)' }}>
-                {buildEmbedded.toLocaleString()} / {buildTotal.toLocaleString()}
-              </span>
-            </div>
-          )}
+          {/* Embedding build indicator removed per request */}
         </div>
         
         {/* Search input - only show when search is active */}
@@ -953,8 +885,17 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
                     </div>
                   ) : files.length === 0 ? (
                     <div className="file-tree-empty">
-                      <p>No files found or directory access needed</p>
-                      <small>Click the directory name above to grant access</small>
+                      {rootLabel ? (
+                        <>
+                          <p>Click the folder button above to restore access</p>
+                          <small>Select the same "{rootLabel}" folder to continue</small>
+                        </>
+                      ) : (
+                        <>
+                          <p>No workspace selected</p>
+                          <small>Click the folder button above to choose your workspace</small>
+                        </>
+                      )}
                     </div>
                   ) : (
                     renderTreeItems(files, 0)
@@ -990,13 +931,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         >
           [+] Folder
         </button>
-        <button 
-          className="action-btn"
-          onClick={() => rootPath ? loadDirectory(rootPath) : loadSavedDirectory()}
-          title={rootPath ? 'Refresh directory' : 'Load saved directory'}
-        >
-          [↻]
-        </button>
+
         <button 
           className="action-btn"
           onClick={() => setShowSearchResults(!showSearchResults)}

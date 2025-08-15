@@ -148,6 +148,8 @@ async function indexDirectoryRecursive(dir: FileSystemDirectoryHandle, basePath:
 async function buildIndexFromRoot(root: FileSystemDirectoryHandle): Promise<void> {
 	;(window as any).__isla_files = []
 	;(window as any).__isla_chunks = []
+	;(window as any).__isla_embeddings = {} // key => vector
+	;(window as any).__isla_embeddings_model = null
 	await indexDirectoryRecursive(root, '')
 }
 
@@ -158,19 +160,37 @@ async function pickDirectory(): Promise<string | null> {
 		if (!window.showDirectoryPicker) return null
 		// @ts-ignore
 		const handle: FileSystemDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
+		
+		// Store directory handle and info
 		;(window as any).__isla_rootHandle = handle
 		;(window as any).__isla_rootName = (handle as any).name || 'Directory'
 		
-		// Persist directory information
-		try { 
-			storage.set('selectedDirectoryName', (handle as any).name || '')
-			storage.set('selectedDirectory', 'fsroot://')
-			console.log('💾 [webBridge] Directory persisted:', (handle as any).name)
-		} catch {} 
+		// Single source of truth for persistence
+		const directoryInfo = {
+			name: (handle as any).name || 'Directory',
+			path: 'fsroot://',
+			timestamp: Date.now()
+		}
+		storage.set('isla_directory', JSON.stringify(directoryInfo))
+		console.log('💾 [webBridge] Directory saved:', directoryInfo.name)
 		
-		await buildIndexFromRoot(handle)
+		// Directory handle is now available
+		
+		// Build index in background
+		console.log('🔄 [webBridge] Starting background indexing...')
+		setTimeout(async () => {
+			try {
+				await buildIndexFromRoot(handle)
+				console.log('✅ [webBridge] Background indexing complete')
+				await electronAPI.embeddingsRebuildAll()
+			} catch (e) {
+				console.error('❌ [webBridge] Background indexing failed:', e)
+			}
+		}, 100)
+		
 		return 'fsroot://'
 	} catch {
+		console.log('📁 [webBridge] User cancelled directory selection')
 		return null
 	}
 }
@@ -179,8 +199,8 @@ async function listDirectory(path: string): Promise<any[]> {
     try {
         let root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle
         if (!root) {
-            // No handle available - return empty to show "click to access" message
-            console.log('⚠️ [webBridge] No directory handle available for listDirectory')
+            // No handle available - return empty to let UI handle it
+            console.log('⚠️ [webBridge] No directory handle for listDirectory – returning empty')
             return []
         }
 		const dirHandle = await getDirectoryHandleByPath(root, path)
@@ -206,6 +226,39 @@ async function listDirectory(path: string): Promise<any[]> {
 	} catch {
 		return []
 	}
+}
+
+// Embeddings helpers (optional acceleration for RAG)
+function cosineSimilarity(a: number[], b: number[]): number {
+    const len = Math.min(a.length, b.length)
+    if (len === 0) return 0
+    let dot = 0, na = 0, nb = 0
+    for (let i = 0; i < len; i++) {
+        const va = a[i] || 0
+        const vb = b[i] || 0
+        dot += va * vb
+        na += va * va
+        nb += vb * vb
+    }
+    if (na === 0 || nb === 0) return 0
+    return dot / (Math.sqrt(na) * Math.sqrt(nb))
+}
+
+function chunkKey(filePath: string, chunkIndex: number): string {
+    return `${filePath}#${chunkIndex}`
+}
+
+async function chooseEmbeddingModel(host: string): Promise<string> {
+    try {
+        const tags = await ollamaList(host)
+        const models: string[] = (tags?.models || []).map((m:any)=>m.name)
+        const embed = models.find(m => /embed/i.test(m))
+        if (embed) return embed
+        // Fallback to current chat model if no embed model is installed
+        return await chooseOllamaModel(host)
+    } catch {
+        return 'nomic-embed-text:latest'
+    }
 }
 
 async function readFileAt(path: string): Promise<string> {
@@ -615,11 +668,33 @@ async function searchContent(query: string, limit: number = 20): Promise<any[]> 
 	}
 	// Text match: include chunks containing any expanded token
 	const tokens = expanded.toLowerCase().split(/\s+/).filter(t => t.length > 2)
-	const matched = rows.filter(r => {
+	let matched = rows.filter(r => {
 		const lc = r.chunk_text.toLowerCase()
 		return tokens.some(t => lc.includes(t))
 	})
 	if (matched.length === 0) return []
+
+	// If embeddings are available for a good portion of content, use them to improve ranking
+	try {
+		const embeddings: Record<string, number[]> = (window as any).__isla_embeddings || {}
+		const totalChunks = ((window as any).__isla_chunks || []).length
+		const coverage = Object.keys(embeddings).length / Math.max(1, totalChunks)
+		if (coverage > 0.5) {
+			const host = await getResolvedOllamaHost()
+			const model = (window as any).__isla_embeddings_model || await chooseEmbeddingModel(host)
+			const qVec = await ollamaEmbed(host, model, expanded)
+			matched = matched
+				.map((r) => {
+					const key = chunkKey(r.file_path, r.chunk_index)
+					const v = embeddings[key]
+					const sim = v ? cosineSimilarity(qVec, v) : 0
+					return { r, sim }
+				})
+				.sort((a,b)=> b.sim - a.sim)
+				.map(x=>x.r)
+		}
+	} catch {}
+
 	return rankAndFilter(matched, expanded, dateFilter, limit)
 }
 
@@ -644,6 +719,47 @@ const electronAPI = {
 	dbClearAll: async () => { (window as any).__isla_files = []; (window as any).__isla_chunks = []; return true },
 	dbGetStats: async () => ({ fileCount: ((window as any).__isla_files||[]).length, chunkCount: ((window as any).__isla_chunks||[]).length, indexSize: ((window as any).__isla_chunks||[]).length }),
 	dbReindexAll: async () => { const root: FileSystemDirectoryHandle | undefined = (window as any).__isla_rootHandle; if (root) await buildIndexFromRoot(root); return { fileCount: ((window as any).__isla_files||[]).length, chunkCount: ((window as any).__isla_chunks||[]).length, indexSize: ((window as any).__isla_chunks||[]).length } },
+
+	// Embeddings build pipeline (PWA-side, via Ollama proxy)
+	onEmbeddingsProgress: (cb: (p: { status: string; total?: number; embedded?: number; model?: string; error?: string }) => void) => {
+		;(window as any).__isla_onEmbeddingsProgress = cb
+		return () => { if ((window as any).__isla_onEmbeddingsProgress === cb) (window as any).__isla_onEmbeddingsProgress = undefined }
+	},
+	embeddingsGetStats: async () => {
+		const total = (((window as any).__isla_chunks)||[]).length
+		const embedded = Object.keys((window as any).__isla_embeddings || {}).length
+		return { chunkCount: total, embeddedCount: embedded, model: (window as any).__isla_embeddings_model || null }
+	},
+	embeddingsRebuildAll: async () => {
+		const chunks: Array<{file_path:string; chunk_index:number; chunk_text:string}> = (window as any).__isla_chunks || []
+		const total = chunks.length
+		const notify = (p:any) => { try { (window as any).__isla_onEmbeddingsProgress && (window as any).__isla_onEmbeddingsProgress(p) } catch {} }
+		if (total === 0) { notify({ status:'error', error:'No chunks to embed' }); return }
+		notify({ status:'starting', total, embedded: 0 })
+		try {
+			const host = await getResolvedOllamaHost()
+			const model = await chooseEmbeddingModel(host)
+			;(window as any).__isla_embeddings_model = model
+			const store: Record<string, number[]> = (window as any).__isla_embeddings || {}
+			let done = 0
+			for (const c of chunks) {
+				const key = chunkKey(c.file_path, c.chunk_index)
+				try {
+					const text = (c.chunk_text || '').slice(0, 1500) // keep prompt reasonable
+					const vec = await ollamaEmbed(host, model, text)
+					if (Array.isArray(vec) && vec.length > 0) {
+						store[key] = vec
+						;(window as any).__isla_embeddings = store
+					}
+				} catch {}
+				done++
+				notify({ status:'running', total, embedded: done, model })
+			}
+			notify({ status:'done', total, embedded: done, model })
+		} catch (e:any) {
+			notify({ status:'error', error: e?.message || 'Embedding failed' })
+		}
+	},
 
 	// Settings
 	settingsGet: async (key: string) => storage.get(key),
@@ -764,9 +880,8 @@ const electronAPI = {
 	// System operations
 	openExternal: async (url: string) => { try { window.open(url, '_blank', 'noopener,noreferrer') } catch {} return true },
 
-	// Events (no-op shims for compatibility)
-	onSettingsChanged: (callback: (payload: { key: string; value: any }) => void) => (()=>{}),
-	onEmbeddingsProgress: (cb: any) => (()=>{})
+	// Events (no-op shim for compatibility)
+	onSettingsChanged: (callback: (payload: { key: string; value: any }) => void) => (()=>{})
 }
 
 ;(window as any).electronAPI = electronAPI

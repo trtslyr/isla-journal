@@ -355,36 +355,8 @@ const App: React.FC = () => {
           setPlatform(plat)
         } catch {}
 
-        // Load saved directory from settings - restore persistent directory
-        try {
-          const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
-          const savedName = await window.electronAPI.settingsGet?.('selectedDirectoryName')
-          console.log('🔍 [App] Saved directory:', savedDirectory, 'name:', savedName)
-          
-          if (savedDirectory === 'fsroot://' && savedName) {
-            // Check if we already have a directory handle in memory
-            const existingHandle = (window as any).__isla_rootHandle
-            const existingName = (window as any).__isla_rootName
-            
-            if (existingHandle && existingName) {
-              console.log('✅ [App] Directory handle already available:', existingName)
-              setRootDirectory(savedDirectory)
-            } else {
-              // Set the saved name and directory path, but don't auto-trigger loading yet
-              console.log('🔄 [App] Directory session found but handle missing - showing name only')
-              ;(window as any).__isla_rootName = savedName
-              setRootDirectory(savedDirectory) 
-              // The FileTree will show the name but won't try to load content until user action
-              console.log('✅ [App] Directory name restored, content will load on user interaction')
-            }
-          } else {
-            console.log('📁 [App] No saved directory - user needs to select directory')
-            setTimeout(() => handleOpenDirectory(), 100)
-          }        
-        } catch (error) {
-          console.error('❌ [App] Failed to load saved directory:', error)
-          setTimeout(() => handleOpenDirectory(), 100)
-        }
+        // Don't restore directory info - user needs to re-select after reload
+        console.log('📁 [App] No workspace restored - user needs to select one')
 
         // Restore previous editor session (tabs + active)
         try {
@@ -605,10 +577,11 @@ const App: React.FC = () => {
       }
       
       // If streaming did not start within 1s, fallback to non-streaming
-      await new Promise(r => setTimeout(r, 1000))
-      if (!gotStream || !ragResponse) {
-        console.log(`⚠️ [App] No RAG response, falling back to basic LLM`)
-        // Fallback to basic LLM response
+      // Wait longer for stream to start, and only fallback if truly no response
+      await new Promise(r => setTimeout(r, 3000))
+      if (!gotStream && !ragResponse) {
+        console.log(`⚠️ [App] No stream after 3 seconds, falling back to basic LLM`)
+        // Only fallback if we got no response at all
         const basicResponse = await window.electronAPI.llmSendMessage?.(
           [
             { role: 'user', content: userContent }
@@ -641,6 +614,8 @@ const App: React.FC = () => {
         } catch (e) {
           console.error('❌ [App] Failed to refresh after fallback:', e)
         }
+      } else if (ragResponse) {
+        console.log('✅ [App] Stream completed successfully, no fallback needed')
       }
       if (offChunk) offChunk()
       if (offDone) offDone()
@@ -824,52 +799,27 @@ const App: React.FC = () => {
     setRenamingChat(null)
   }
 
-  // Directory persistence
+  // Simple directory selection
   const handleOpenDirectory = async () => {
     try {
-      console.log('📁 [App] User clicked directory button - triggering picker...')
-      
-      // Clear any existing state to force fresh selection
-      setRootDirectory(null)
+      console.log('📁 [App] User clicked directory button - opening picker...')
       
       const result = await window.electronAPI.openDirectory?.()
       if (result) {
         console.log('📁 [App] Directory selected:', result)
         
-        // Immediately update UI
-        setRootDirectory(result)
+        // Force a state update to trigger FileTree re-render
+        setRootDirectory(null) // Clear first
+        setTimeout(() => {
+          setRootDirectory(result) // Then set - this ensures useEffect runs
+        }, 10)
         
-        // Save both directory path and name to settings for persistence
-        try {
-          await window.electronAPI.settingsSet?.('selectedDirectory', result)
-          const directoryName = (window as any).__isla_rootName
-          if (directoryName) {
-            await window.electronAPI.settingsSet?.('selectedDirectoryName', directoryName)
-            console.log('💾 [App] Directory and name saved to settings:', result, directoryName)
-          }
-        } catch (settingsError) {
-          console.error('❌ [App] Failed to save directory to settings:', settingsError)
-        }
-        
-        // Force a refresh of the FileTree component
-        console.log('🔄 [App] Directory selection complete - UI should update immediately')
+        console.log('✅ [App] Directory selection complete')
       } else {
-        console.log('❌ [App] User cancelled directory selection')
-        // Restore previous directory if there was one
-        const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
-        if (savedDirectory) {
-          setRootDirectory(savedDirectory)
-        }
+        console.log('📁 [App] User cancelled directory selection')
       }
     } catch (error) {
       console.error('❌ [App] Failed to open directory:', error)
-      // Restore previous directory if there was one
-      try {
-        const savedDirectory = await window.electronAPI.settingsGet?.('selectedDirectory')
-        if (savedDirectory) {
-          setRootDirectory(savedDirectory)
-        }
-      } catch {}
     }
   }
 
