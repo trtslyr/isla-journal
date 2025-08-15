@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Directory-Based Embeddings</title>
+</head>
+<body>
+    <h1>Directory-Based Embeddings Test</h1>
+    <div id="status">Loading...</div>
+    <button id="selectDir">Select Directory</button>
+    <button id="testEmbed">Test Embeddings</button>
+    <pre id="output"></pre>
+
+    <script>
+        // Load the webBridge from the main app
+        const script = document.createElement('script');
+        script.src = 'http://localhost:5178/assets/webBridge.js';
+        script.onload = () => {
+            document.getElementById('status').textContent = 'WebBridge loaded!';
+        };
+        script.onerror = () => {
+            // Try to load basic functionality for testing
+            initTestEnvironment();
+        };
+        document.head.appendChild(script);
+
+        function initTestEnvironment() {
+            document.getElementById('status').textContent = 'Ready for testing (manual mode)';
+        }
+
+        async function log(message) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toISOString() + ': ' + message + '\n';
+            console.log(message);
+        }
+
+        document.getElementById('selectDir').addEventListener('click', async () => {
+            try {
+                if (!window.showDirectoryPicker) {
+                    log('File System Access API not supported');
+                    return;
+                }
+                
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                window.__test_handle = handle;
+                log('Directory selected: ' + handle.name);
+                
+                // Test creating .isla directory
+                try {
+                    const islaDir = await handle.getDirectoryHandle('.isla', { create: true });
+                    log('✅ .isla directory created/accessed');
+                    
+                    // Test creating a test file
+                    const testFile = await islaDir.getFileHandle('test.json', { create: true });
+                    const writable = await testFile.createWritable();
+                    await writable.write(JSON.stringify({
+                        test: true,
+                        timestamp: new Date().toISOString(),
+                        message: 'Directory-based storage working!'
+                    }, null, 2));
+                    await writable.close();
+                    log('✅ Test file created in .isla directory');
+                    
+                } catch (error) {
+                    log('❌ Failed to create .isla directory: ' + error.message);
+                }
+                
+            } catch (error) {
+                log('❌ Directory selection failed: ' + error.message);
+            }
+        });
+
+        document.getElementById('testEmbed').addEventListener('click', async () => {
+            try {
+                // Test Ollama connection via proxy
+                const response = await fetch('http://localhost:5178/api/tags');
+                const data = await response.json();
+                log('✅ Ollama connection working, models: ' + data.models.length);
+                
+                // Test embedding generation
+                const embedResponse = await fetch('http://localhost:5178/api/embeddings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'nomic-embed-text:latest',
+                        prompt: 'This is a test document for embeddings'
+                    })
+                });
+                
+                if (embedResponse.ok) {
+                    const embedData = await embedResponse.json();
+                    log('✅ Embedding generated, dimensions: ' + embedData.embedding.length);
+                    
+                    // Test saving to directory if we have a handle
+                    if (window.__test_handle) {
+                        try {
+                            const islaDir = await window.__test_handle.getDirectoryHandle('.isla');
+                            const embeddingFile = await islaDir.getFileHandle('test-embeddings.json', { create: true });
+                            const writable = await embeddingFile.createWritable();
+                            await writable.write(JSON.stringify({
+                                version: '1.0',
+                                model: 'nomic-embed-text:latest',
+                                timestamp: new Date().toISOString(),
+                                embeddings: {
+                                    'test-chunk': embedData.embedding
+                                }
+                            }, null, 2));
+                            await writable.close();
+                            log('✅ Embeddings saved to directory successfully!');
+                        } catch (dirError) {
+                            log('❌ Failed to save to directory: ' + dirError.message);
+                        }
+                    }
+                } else {
+                    log('❌ Embedding failed: ' + embedResponse.status);
+                }
+                
+            } catch (error) {
+                log('❌ Test failed: ' + error.message);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Directory Embedding Save</title>
+</head>
+<body>
+    <h1>Test Directory Embedding Save</h1>
+    <button id="testSave">Test Save Embeddings</button>
+    <button id="testLoad">Test Load Embeddings</button>
+    <pre id="output"></pre>
+
+    <script>
+        function log(msg) {
+            document.getElementById('output').textContent += new Date().toISOString() + ': ' + msg + '\n';
+            console.log(msg);
+        }
+
+        // Test if we can save to directory
+        document.getElementById('testSave').addEventListener('click', async () => {
+            try {
+                if (!window.showDirectoryPicker) {
+                    log('❌ File System Access API not supported');
+                    return;
+                }
+                
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                log('✅ Directory selected: ' + handle.name);
+                
+                // Create embeddings directory
+                const embeddingsDir = await handle.getDirectoryHandle('embeddings', { create: true });
+                log('✅ embeddings directory created/accessed');
+                
+                // Test embeddings data
+                const testEmbeddings = {
+                    version: '1.0',
+                    model: 'test-model',
+                    timestamp: new Date().toISOString(),
+                    embeddings: {
+                        'test-chunk-1': [0.1, 0.2, 0.3, 0.4, 0.5],
+                        'test-chunk-2': [0.6, 0.7, 0.8, 0.9, 1.0]
+                    }
+                };
+                
+                // Save embeddings.json
+                const embeddingFile = await embeddingsDir.getFileHandle('embeddings.json', { create: true });
+                const writable = await embeddingFile.createWritable();
+                await writable.write(JSON.stringify(testEmbeddings, null, 2));
+                await writable.close();
+                
+                log('✅ Test embeddings.json saved successfully!');
+                
+            } catch (error) {
+                log('❌ Error: ' + error.message);
+            }
+        });
+
+        // Test if we can load from directory
+        document.getElementById('testLoad').addEventListener('click', async () => {
+            try {
+                if (!window.showDirectoryPicker) {
+                    log('❌ File System Access API not supported');
+                    return;
+                }
+                
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                log('✅ Directory selected: ' + handle.name);
+                
+                // Try to access embeddings directory
+                const embeddingsDir = await handle.getDirectoryHandle('embeddings');
+                log('✅ embeddings directory found');
+                
+                // Try to read embeddings.json
+                const embeddingFile = await embeddingsDir.getFileHandle('embeddings.json');
+                const file = await embeddingFile.getFile();
+                const content = await file.text();
+                const data = JSON.parse(content);
+                
+                log('✅ Embeddings loaded: ' + Object.keys(data.embeddings || {}).length + ' chunks');
+                log('📄 Content preview: ' + JSON.stringify(data, null, 2).substring(0, 200) + '...');
+                
+            } catch (error) {
+                log('❌ Error loading: ' + error.message);
+            }
+        });
+    </script>
+</body>
+</html>

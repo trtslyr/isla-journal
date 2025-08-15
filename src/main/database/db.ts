@@ -811,8 +811,8 @@ class IslaDatabase {
     flushBlock(lines.length)
 
     // Now turn blocks into overlapping chunks by token-like length
-    const maxLen = 800
-    const overlap = 150
+    const maxLen = 2000  // ~500 tokens for optimal RAG performance
+    const overlap = 300   // ~75 tokens (15% overlap)
     for (const block of textBlocks) {
       const text = block.text.replace(/\s+/g, ' ').trim()
       if (!text) continue
