@@ -135,7 +135,12 @@ const App: React.FC = () => {
           'jetbrains-mono': 'JetBrains Mono, Consolas, "Courier New", monospace',
           'fira-code': 'Fira Code, "JetBrains Mono", Consolas, monospace',
           'source-code-pro': 'Source Code Pro, "JetBrains Mono", Consolas, monospace',
-          'monaco': 'Monaco, "JetBrains Mono", Consolas, "Segoe UI", monospace'
+          'monaco': 'Monaco, "JetBrains Mono", Consolas, "Segoe UI", monospace',
+          'system-ui': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          'inter': 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          'sf-pro': '"SF Pro Display", "SF Pro Text", system-ui, -apple-system, sans-serif',
+          'helvetica': 'Helvetica, "Helvetica Neue", Arial, sans-serif',
+          'arial': 'Arial, "Helvetica Neue", Helvetica, sans-serif'
         }
         
         const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']
@@ -1456,7 +1461,6 @@ const App: React.FC = () => {
                         </div>
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                           <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:8, padding:'8px 0', borderTop:'1px solid var(--border-light)' }}>
-                            <div style={{ fontSize:'12px', color:'var(--text-secondary)', fontWeight:500 }}>Sources:</div>
                             {message.sources.filter(s=> (s?.file_name && s?.file_path && (s?.snippet||'').length > 40)).slice(0,6).map((src, idx) => {
                               // Clean filename by removing hash IDs
                                const cleanFileName = src.file_name

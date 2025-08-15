@@ -387,6 +387,13 @@ const MonacoEditor: React.FC<MonacoEditorProps> = ({
 
   const { fontFamily, fontSize } = getFontSettings()
 
+  // Update Monaco theme when app theme changes
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.updateOptions({ theme: getMonacoTheme() })
+    }
+  }, [theme])
+
   return (
     <div style={{ height: '100%', width: '100%', background: 'var(--bg-primary)' }}>
       <Editor

@@ -19,8 +19,9 @@
   
   --panel-width-sidebar: 280px;
   --panel-width-chat: 320px;
-  --title-bar-height: 35px;
-  --panel-header-height: 35px;
+  --title-bar-height: 38px;
+  --panel-header-height: 38px;
+  --toolbar-height: 38px;
   --collapsed-panel-width: 40px;
 }
 
@@ -124,6 +125,80 @@
   --accent-purple: #6f42c1;
   --accent-orange: #fd7e14;
   --accent-red: #dc3545;
+}
+
+/* Global smooth transitions for better UX */
+* {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Enhanced status displays */
+.embeddings-status {
+  background: var(--bg-tertiary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.embeddings-status:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-blue);
+}
+
+/* Enhanced File Tree Styling */
+.tree-item {
+  padding: 6px 12px;
+  margin: 1px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s ease;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+
+.tree-item:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-color);
+  transform: translateX(2px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.tree-item.selected {
+  background-color: var(--accent-blue);
+  color: white;
+  border-color: var(--accent-blue-hover);
+  box-shadow: 0 2px 8px rgba(0, 122, 204, 0.3);
+}
+
+.tree-item.directory {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tree-item.file {
+  color: var(--text-secondary);
+}
+
+.tree-item.file:hover {
+  color: var(--text-primary);
+}
+
+.tree-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pinned-indicator {
+  font-size: 10px;
+  color: var(--accent-orange);
+  background: var(--bg-tertiary);
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin-left: auto;
 }
 
 /* Ensure app layout supports a full-width status bar at bottom */
@@ -281,6 +356,7 @@
   border-right: 1px solid var(--border-color);
   position: relative;
   transition: width 0.3s ease;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
 }
 
 .panel:last-child {
@@ -295,8 +371,12 @@
 .panel-header {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
-  padding: 8px 12px;
+  padding: 0 12px;
+  height: var(--panel-header-height);
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .panel-header-actions {
@@ -395,16 +475,16 @@
   color: var(--text-primary);
   cursor: pointer;
   padding: 0 10px;
-  height: 28px;
-  border-radius: 4px;
+  height: 30px;
+  border-radius: 6px;
   font-size: 11px;
   font-family: var(--app-font-family, 'JetBrains Mono', monospace);
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   min-width: 48px;
   flex: 1;
   text-align: center;
   outline: none;
-  box-shadow: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .file-tree .panel-header .refresh-btn:hover,
@@ -1407,17 +1487,20 @@
   background: var(--accent-blue);
   color: white;
   border: none;
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 10px 16px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 500;
-  transition: background 0.2s;
+  font-weight: 600;
+  transition: all 0.2s ease;
   white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 122, 204, 0.2);
 }
 
 .new-chat-btn:hover {
   background: var(--accent-blue-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 122, 204, 0.3);
 }
 
 /* Scroll to bottom button */
@@ -1470,29 +1553,59 @@
 
 .message {
   width: 100%;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .message-line {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 12px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
-  line-height: 1.5;
-  padding: 4px 0;
+  line-height: 1.6;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.message-line:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  border-color: var(--border-color);
 }
 
 .message-icon {
   font-weight: bold;
   font-size: 14px;
-  min-width: 12px;
+  min-width: 16px;
   color: var(--accent-blue);
   margin-top: 1px;
+  background: var(--bg-tertiary);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.message-user .message-line {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-green);
 }
 
 .message-user .message-icon {
   color: var(--accent-green);
+  background: var(--accent-green);
+  color: white;
+}
+
+.message-assistant .message-icon {
+  background: var(--accent-blue);
+  color: white;
 }
 
 .message-text {

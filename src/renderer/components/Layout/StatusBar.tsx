@@ -123,7 +123,7 @@ const StatusBar: React.FC<Props> = ({ activeFilePath, content }) => {
         <button
           className="search-btn"
           title="Rebuild embeddings"
-          onClick={()=>window.electronAPI?.embeddingsRebuild?.()}
+          onClick={()=>window.electronAPI?.embeddingsRebuildAll?.()}
         >Reindex</button>
       </div>
     </div>

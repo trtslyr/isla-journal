@@ -399,7 +399,12 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
       'jetbrains-mono': 'JetBrains Mono, Consolas, "Courier New", monospace',
       'fira-code': 'Fira Code, "JetBrains Mono", Consolas, monospace',
       'source-code-pro': 'Source Code Pro, "JetBrains Mono", Consolas, monospace',
-      'monaco': 'Monaco, "JetBrains Mono", Consolas, "Segoe UI", monospace'
+      'monaco': 'Monaco, "JetBrains Mono", Consolas, "Segoe UI", monospace',
+      'system-ui': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      'inter': 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      'sf-pro': '"SF Pro Display", "SF Pro Text", system-ui, -apple-system, sans-serif',
+      'helvetica': 'Helvetica, "Helvetica Neue", Arial, sans-serif',
+      'arial': 'Arial, "Helvetica Neue", Helvetica, sans-serif'
     }
     
     const fontStackValue = fontFamilyMap[fontFamily] || fontFamilyMap['jetbrains-mono']
@@ -699,27 +704,7 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
           {/* Search settings removed for simplicity; using smart defaults */}
 
-          {/* Version Section */}
-          <div className="settings-section">
-            <h3>Version</h3>
-            <div className="settings-item">
-              <div className="version-info">
-                <div className="version-item">
-                  <span className="version-label">App Version:</span>
-                  <span className="version-value">1.0.0</span>
-                </div>
-                <div className="version-item">
-                  <span className="version-label">Electron Version:</span>
-                  <span className="version-value">v31.0.0</span>
-                </div>
-                <div className="version-item">
-                  <span className="version-label">Node Version:</span>
-                  <span className="version-value">v20.11.1</span>
-                </div>
-              </div>
-              <button className="settings-btn">Check for Updates</button>
-            </div>
-          </div>
+
 
           {/* Theme/Font Section */}
           <div className="settings-section">
@@ -739,6 +724,11 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
                 <option value="fira-code">Fira Code</option>
                 <option value="source-code-pro">Source Code Pro</option>
                 <option value="monaco">Monaco</option>
+                <option value="system-ui">System UI</option>
+                <option value="inter">Inter</option>
+                <option value="sf-pro">SF Pro</option>
+                <option value="helvetica">Helvetica</option>
+                <option value="arial">Arial</option>
               </select>
             </div>
             <div className="settings-item">
@@ -755,10 +745,9 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Close button only */}
           <div className="settings-actions">
-            <button className="settings-btn danger">Reset to Defaults</button>
-            <button className="settings-btn primary" onClick={onClose}>Save Changes</button>
+            <button className="settings-btn primary" onClick={onClose}>Close</button>
           </div>
         </div>
       </div>
