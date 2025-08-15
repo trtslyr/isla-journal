@@ -39,11 +39,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onN
 
   if (!activeTab) {
     return (
-      <div style={{ padding: 16, color: 'var(--text-secondary)', height:'100%', display:'flex', flexDirection:'column' }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-          <div style={{ fontWeight:600 }}>Editor</div>
-          <button className="search-btn" onClick={onNewEditor}>[+] New Editor</button>
-        </div>
+      <div style={{ padding: 16, color: 'var(--text-secondary)', height:'100%', display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center' }}>
         <div>No file open</div>
       </div>
     )
@@ -51,43 +47,6 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onN
 
   return (
     <div className="panel editor-panel" style={{ height: '100%', flex: 1 }}>
-      {/* Chrome-like tab strip with [+] fixed on the left */}
-      <div className="panel-header" style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 8px' }}>
-        <button
-          className="search-btn"
-          onClick={onNewEditor}
-          title="New Editor"
-          style={{ padding:'0 6px', width:28, height:24, lineHeight:'20px', fontSize:16, flex:'0 0 auto' }}
-        >
-          ＋
-        </button>
-        <div style={{ display:'flex', alignItems:'center', gap:6, overflowX:'auto', flex:1 }}>
-          {(tabs || []).map(tab => (
-            <div
-              key={tab.id}
-              onClick={() => onSelectTab?.(tab.id)}
-              style={{
-                display:'flex', alignItems:'center', gap:6,
-                maxWidth:240,
-                padding:'6px 10px', borderRadius:8,
-                cursor:'pointer',
-                background: tab.id === activeTabId ? 'var(--surface)' : 'transparent',
-                border: '1px solid var(--border-light)'
-              }}
-              title={tab.path || tab.name}
-            >
-              <div style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight: tab.id === activeTabId ? 600 : 500}}>
-                {tab.name}{tab.hasUnsavedChanges ? '*' : ''}
-              </div>
-              <button
-                className="search-btn"
-                onClick={(e) => { e.stopPropagation(); onCloseTab?.(tab.id) }}
-                title="Close"
-              >×</button>
-            </div>
-          ))}
-        </div>
-      </div>
       {/* If no file selected for this tab, show placeholder */}
       {(!activeTab.path) ? (
         <div className="panel-content" style={{ padding: 16, color: 'var(--text-secondary)' }}>

@@ -29,6 +29,10 @@ const App: React.FC = () => {
   const [version, setVersion] = useState<string>('')
   const [platform, setPlatform] = useState<string>('')
   
+  // Status indicators for header
+  const [embeddingStats, setEmbeddingStats] = useState<{ embedded: number; total: number; isBuilding: boolean }>({ embedded: 0, total: 0, isBuilding: false })
+  const [ollamaStatus, setOllamaStatus] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null })
+  
   // License management
   const { licenseStatus, isLoading: licenseLoading, isLicensed, validateNewLicense } = useLicenseCheck()
   const [licenseKey, setLicenseKey] = useState('')
@@ -421,6 +425,77 @@ const App: React.FC = () => {
     }
 
     initializeApp()
+  }, [])
+
+  // Poll for status updates
+  useEffect(() => {
+    let timer: NodeJS.Timeout
+    
+    const updateStatuses = async () => {
+      try {
+        // Update embedding stats
+        const embStats = await window.electronAPI?.embeddingsGetStats?.()
+        if (embStats) {
+          setEmbeddingStats(prev => ({
+            embedded: embStats.embeddedCount || 0,
+            total: embStats.chunkCount || 0,
+            isBuilding: prev.isBuilding // Keep building state from progress events
+          }))
+        }
+        
+        // Update Ollama status  
+        try {
+          const model = await window.electronAPI?.llmGetCurrentModel?.()
+          // Test connection with a quick request
+          const testResponse = await fetch('http://127.0.0.1:11434/api/tags', { 
+            method: 'GET',
+            signal: AbortSignal.timeout(2000) // 2s timeout
+          })
+          setOllamaStatus({
+            connected: testResponse.ok,
+            model: model || null
+          })
+        } catch {
+          setOllamaStatus({
+            connected: false,
+            model: null
+          })
+        }
+      } catch (error) {
+        console.warn('Status update failed:', error)
+      }
+      
+      timer = setTimeout(updateStatuses, 3000) // Update every 3 seconds
+    }
+    
+    updateStatuses()
+    return () => clearTimeout(timer)
+  }, [])
+  
+  // Listen for embedding progress events
+  useEffect(() => {
+    const progressHandler = (progress: any) => {
+      if (progress.status === 'starting' || progress.status === 'running') {
+        setEmbeddingStats(prev => ({
+          embedded: progress.embedded || 0,
+          total: progress.total || prev.total,
+          isBuilding: true
+        }))
+      } else if (progress.status === 'done') {
+        setEmbeddingStats(prev => ({
+          embedded: progress.embedded || 0,
+          total: progress.total || prev.total,
+          isBuilding: false
+        }))
+      }
+    }
+    
+    try {
+      const cleanup = window.electronAPI?.onEmbeddingsProgress?.(progressHandler)
+      return cleanup
+    } catch {
+      return () => {}
+    }
   }, [])
 
   // Persist editor session whenever tabs or active tab changes
@@ -823,6 +898,64 @@ const App: React.FC = () => {
     }
   }
 
+  // FileTree ref for calling its methods
+  const fileTreeRef = useRef<any>(null)
+
+  // File tree action handlers
+  const handleCreateFile = async () => {
+    if (!rootDirectory) {
+      // If no directory selected, create untitled tab
+      const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
+      setTabs(prev => [...prev, newTab as any])
+      setActiveTabId((newTab as any).id)
+      return
+    }
+
+    try {
+      // Create a new file with timestamp in the directory
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '').replace('T', '_')
+      const fileName = `untitled_${timestamp}`
+      
+      // Create the actual file in the directory
+      const filePath = await window.electronAPI.createFile?.(rootDirectory, fileName)
+      if (filePath) {
+        // Open the created file in a new tab
+        const content = '' // New file, empty content
+        const cleanName = fileName.replace(/\.md$/, '') // Remove .md extension for display
+        
+        const newTab = { 
+          id: `file-${Date.now()}`, 
+          name: cleanName, 
+          path: filePath, 
+          content: content, 
+          hasUnsavedChanges: false 
+        }
+        setTabs(prev => [...prev, newTab as any])
+        setActiveTabId((newTab as any).id)
+        
+        console.log('✅ [App] Created and opened new file:', filePath)
+      }
+    } catch (error) {
+      console.error('❌ [App] Failed to create file:', error)
+      // Fallback to untitled tab
+      const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
+      setTabs(prev => [...prev, newTab as any])
+      setActiveTabId((newTab as any).id)
+    }
+  }
+
+  const handleCreateFolder = () => {
+    if (fileTreeRef.current) {
+      fileTreeRef.current.createFolder()
+    }
+  }
+
+  const handleSearch = () => {
+    if (fileTreeRef.current) {
+      fileTreeRef.current.toggleSearch()
+    }
+  }
+
   // License key validation function
   const handleLicenseValidation = async () => {
     const trimmedKey = licenseKey.trim()
@@ -912,17 +1045,140 @@ const App: React.FC = () => {
       {!licenseLoading && isLicensed && (
         <>
           {/* Title Bar */}
+          {/* Single Combined Header Bar */}
           <div className="title-bar">
+            {/* Left Section */}
             <div className="title-bar-left">
-              {/* Removed app title */}
-            </div>
-            <div className="title-bar-center">
-              <span className="file-path">
-                {activeTab ? activeTab.name : 'No file open'}
+              <span className="embeddings-status" style={{ fontSize: '11px', opacity: 0.8 }}>
+                {embeddingStats.isBuilding ? (
+                  <span style={{ color: '#3b82f6' }}>
+                    Building {embeddingStats.embedded}/{embeddingStats.total}
+                  </span>
+                ) : embeddingStats.total > 0 ? (
+                  <span title={`${embeddingStats.embedded} of ${embeddingStats.total} chunks embedded`}>
+                    {embeddingStats.embedded}/{embeddingStats.total}
+                  </span>
+                ) : (
+                  <span style={{ opacity: 0.5 }}>No embeddings</span>
+                )}
               </span>
+              
+              {/* Action Buttons */}
+              <button 
+                className="settings-gear-btn"
+                onClick={handleCreateFolder}
+                title="Create new folder"
+                style={{ marginLeft: '6px' }}
+              >
+                [⊞]
+              </button>
+              <button 
+                className="settings-gear-btn"
+                onClick={handleSearch}
+                title="Search files"
+                style={{ marginLeft: '4px' }}
+              >
+                [⊙]
+              </button>
+              <button 
+                className="settings-gear-btn"
+                onClick={handleCreateFile}
+                title="Create new file"
+                style={{ marginLeft: '4px' }}
+              >
+                [+]
+              </button>
             </div>
+
+            {/* Center Section - Tabs */}
+            <div className="title-bar-center">
+              <div className="header-tabs-blocky" style={{ display: 'flex', alignItems: 'center' }}>
+                <button 
+                  className="settings-gear-btn"
+                  onClick={() => {
+                    const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
+                    setTabs(prev => [...prev, newTab as any])
+                    setActiveTabId((newTab as any).id)
+                  }}
+                  title="New editor tab"
+                  style={{ marginRight: '4px' }}
+                >
+                  [+]
+                </button>
+                {tabs.length === 0 ? (
+                  <span className="no-tabs" style={{ opacity: 0.5, fontSize: '11px' }}>No file open</span>
+                ) : (
+                  tabs.map(tab => (
+                    <div
+                      key={tab.id}
+                      className={`header-tab-block ${tab.id === activeTabId ? 'active' : ''}`}
+                      onClick={() => setActiveTabId(tab.id)}
+                      style={{
+                        background: tab.id === activeTabId ? 'var(--bg-primary)' : 'var(--bg-tertiary)',
+                        border: `1px solid ${tab.id === activeTabId ? 'var(--border-color)' : 'transparent'}`,
+                        borderBottom: tab.id === activeTabId ? '1px solid var(--bg-primary)' : '1px solid var(--border-color)',
+                        color: 'var(--text-primary)',
+                        padding: '4px 12px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        marginRight: '2px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        maxWidth: '150px',
+                        minWidth: '80px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        borderTopLeftRadius: '4px',
+                        borderTopRightRadius: '4px',
+                        position: 'relative',
+                        top: '1px'
+                      }}
+                      title={tab.name}
+                    >
+                      {tab.hasUnsavedChanges && <span style={{ marginRight: '4px', color: '#ffa500' }}>•</span>}
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.name}</span>
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          closeTab(tab.id)
+                        }}
+                        style={{
+                          marginLeft: '6px',
+                          fontSize: '12px',
+                          opacity: 0.6,
+                          cursor: 'pointer',
+                          padding: '0 2px',
+                          borderRadius: '2px'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                        title="Close tab"
+                      >
+                        ×
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Right Section */}
             <div className="title-bar-right">
-              <span className="app-info">v{version} ({platform})</span>
+              <span className="ollama-status" style={{ fontSize: '11px', opacity: 0.8, marginRight: '12px' }}>
+                {ollamaStatus.connected ? (
+                  <span style={{ color: '#4ade80' }} title={`Connected to Ollama - Model: ${ollamaStatus.model || 'Unknown'}`}>
+                    {ollamaStatus.model || 'Connected'}
+                  </span>
+                ) : (
+                  <span style={{ color: '#f87171' }} title="Ollama not connected">
+                    Offline
+                  </span>
+                )}
+              </span>
+              <span className="app-info" style={{ fontSize: '11px', opacity: 0.7, marginRight: '8px' }}>
+                v{version || '0.1.0'} ({platform || 'web'})
+              </span>
               <button 
                 className="settings-gear-btn"
                 onClick={() => setShowSettings(true)}
@@ -933,9 +1189,10 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Main Content Area */}
+          {/* Main Content Area with Extended Panels */}
       <div className="main-content">
         <Sidebar
+          ref={fileTreeRef}
           rootDirectory={rootDirectory}
           width={leftPanelWidth}
           collapsed={leftPanelCollapsed}
@@ -943,10 +1200,14 @@ const App: React.FC = () => {
           onOpenDirectory={handleOpenDirectory}
           onFileSelect={handleFileSelect}
           selectedFilePath={activeTab?.path || null}
+          onCreateFile={handleCreateFile}
+          onCreateFolder={handleCreateFolder}
+          onSearch={handleSearch}
         />
  
         {/* Center Panel - Editor */}
         <div style={{ display:'flex', flex:1, flexDirection:'column', minWidth:0 }}>
+
           <EditorPane
             activeTab={activeTab || null}
             theme={currentTheme}
@@ -974,10 +1235,6 @@ const App: React.FC = () => {
                 console.error('Rename failed:', e)
               }
             }}
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onSelectTab={(id)=> setActiveTabId(id)}
-            onCloseTab={(id)=> closeTab(id)}
           />
 
         </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react'
 import CreateModal from './CreateModal'
 import RenameModal from './RenameModal'
 
@@ -32,9 +32,18 @@ interface FileTreeProps {
   onFileSelect: (filePath: string, fileName: string) => void
   selectedFile: string | null
   onDirectorySelect: () => void
+  onCreateFile?: () => void
+  onCreateFolder?: () => void
+  onSearch?: () => void
 }
 
-const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFile, onDirectorySelect }) => {
+interface FileTreeRef {
+  createFile: () => void
+  createFolder: () => void
+  toggleSearch: () => void
+}
+
+const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelect, selectedFile, onDirectorySelect, onCreateFile, onCreateFolder, onSearch }, ref) => {
   const [files, setFiles] = useState<FileItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +76,21 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
   // Drag and drop states
   const [draggedItems, setDraggedItems] = useState<string[]>([])
   const [dragOverItem, setDragOverItem] = useState<string | null>(null)
+
+  // Expose methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    createFile: () => {
+      setCreateType('file')
+      setShowCreateModal(true)
+    },
+    createFolder: () => {
+      setCreateType('directory')
+      setShowCreateModal(true)
+    },
+    toggleSearch: () => {
+      setShowSearchResults(!showSearchResults)
+    }
+  }))
   
   // Load pinned items from settings on mount
   useEffect(() => {
@@ -907,39 +931,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
         )}
       </div>
 
-      {/* Action buttons */}
-      <div className="file-tree-actions">
-        <button 
-          className="action-btn"
-          onClick={() => {
-            setCreateType('file')
-            setShowCreateModal(true)
-          }}
-          title="Create new markdown file"
-          disabled={!rootPath}
-        >
-          [+] File
-        </button>
-        <button 
-          className="action-btn"
-          onClick={() => {
-            setCreateType('directory')
-            setShowCreateModal(true)
-          }}
-          title="Create new directory" 
-          disabled={!rootPath}
-        >
-          [+] Folder
-        </button>
 
-        <button 
-          className="action-btn"
-          onClick={() => setShowSearchResults(!showSearchResults)}
-          title="Search files"
-        >
-          [search]
-        </button>
-      </div>
       
       {/* Modals */}
       <CreateModal
@@ -1030,6 +1022,6 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, onFileSelect, selectedFil
       )}
     </div>
   )
-}
+})
 
 export default FileTree 

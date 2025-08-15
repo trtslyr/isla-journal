@@ -159,11 +159,13 @@ async function getDirectoryHandleByPath(root: FileSystemDirectoryHandle, path: s
 async function indexDirectoryRecursive(dir: FileSystemDirectoryHandle, basePath: string): Promise<void> {
 	for await (const [name, handle] of (dir as any).entries()) {
 		if (name.startsWith('.')) continue
-i 		if (name === 'embeddings') continue // Skip embeddings folder to prevent recursive indexing
+		if (name === 'embeddings') continue // Skip embeddings folder to prevent recursive indexing
 		if ((handle as any).kind === 'directory') {
 			await indexDirectoryRecursive(handle as FileSystemDirectoryHandle, `${basePath}/${name}`)
 		} else {
 			if (!hasIndexableExt(name)) continue
+			// Skip embedding-related files to prevent recursive indexing
+			if (name === 'embeddings.json' || name === 'content-index.json') continue
 			try {
 				const file = await (handle as FileSystemFileHandle).getFile()
 				const text = await file.text()
@@ -198,6 +200,20 @@ async function buildIndexFromRoot(root: FileSystemDirectoryHandle): Promise<void
 		}
 	} catch (error) {
 		console.log('📂 [Index] Failed to load embeddings from directory:', error.message)
+	}
+	
+	// Check for content changes and auto-update embeddings if needed
+	const hasChanges = await detectContentChanges((window as any).__isla_files)
+	if (hasChanges) {
+		console.log('🔄 [Auto-Refresh] Content changes detected, updating embeddings incrementally...')
+		// Use smart incremental updates instead of full rebuild
+		setTimeout(async () => {
+			try {
+				await updateEmbeddingsIncremental((window as any).__isla_files, (window as any).__isla_chunks)
+			} catch (e) {
+				console.warn('Auto-refresh embeddings failed:', e)
+			}
+		}, 1000) // Small delay to let UI update
 	}
 	
 	// Save current content index for change detection
@@ -489,6 +505,131 @@ function simpleHash(content: string): string {
 		hash = hash & hash // Convert to 32-bit integer
 	}
 	return hash.toString(36)
+}
+
+async function detectContentChanges(currentFiles: any[]): Promise<boolean> {
+	try {
+		const oldIndexContent = await readFileAt('fsroot://embeddings/content-index.json')
+		const oldIndex = JSON.parse(oldIndexContent)
+		
+		if (!oldIndex.fileHashes) return true // No previous index, consider changed
+		
+		const currentHashes = currentFiles.map(f => ({
+			path: f.path,
+			hash: simpleHash(f.content || '')
+		}))
+		
+		const oldHashes = oldIndex.fileHashes || []
+		
+		// Check for file count changes
+		if (currentHashes.length !== oldHashes.length) {
+			console.log('🔄 [Change Detection] File count changed:', oldHashes.length, '→', currentHashes.length)
+			return true
+		}
+		
+		// Check for content changes
+		for (const current of currentHashes) {
+			const old = oldHashes.find(o => o.path === current.path)
+			if (!old || old.hash !== current.hash) {
+				console.log('🔄 [Change Detection] Content changed:', current.path)
+				return true
+			}
+		}
+		
+		// Check for deleted files
+		for (const old of oldHashes) {
+			const current = currentHashes.find(c => c.path === old.path)
+			if (!current) {
+				console.log('🔄 [Change Detection] File deleted:', old.path)
+				return true
+			}
+		}
+		
+		console.log('✅ [Change Detection] No changes detected')
+		return false
+	} catch (error) {
+		console.log('🔄 [Change Detection] No previous index found, treating as changed')
+		return true // No previous index, treat as changed
+	}
+}
+
+async function updateEmbeddingsIncremental(currentFiles: any[], currentChunks: any[]): Promise<void> {
+	try {
+		const oldIndexContent = await readFileAt('fsroot://embeddings/content-index.json')
+		const oldIndex = JSON.parse(oldIndexContent)
+		const oldHashes = oldIndex.fileHashes || []
+		
+		const currentHashes = currentFiles.map(f => ({
+			path: f.path,
+			hash: simpleHash(f.content || '')
+		}))
+		
+		const currentEmbeddings: Record<string, number[]> = (window as any).__isla_embeddings || {}
+		const host = await getResolvedOllamaHost()
+		const model = await chooseEmbeddingModel(host)
+		
+		let changesDetected = 0
+		
+		// Remove embeddings for deleted files
+		for (const old of oldHashes) {
+			const current = currentHashes.find(c => c.path === old.path)
+			if (!current) {
+				// File was deleted, remove its embeddings
+				const chunksToRemove = Object.keys(currentEmbeddings).filter(key => key.startsWith(old.path + '#'))
+				for (const key of chunksToRemove) {
+					delete currentEmbeddings[key]
+					changesDetected++
+				}
+				console.log('🗑️ [Incremental] Removed embeddings for deleted file:', old.path)
+			}
+		}
+		
+		// Add/update embeddings for new or changed files
+		for (const current of currentHashes) {
+			const old = oldHashes.find(o => o.path === current.path)
+			if (!old || old.hash !== current.hash) {
+				// File is new or changed, re-embed its chunks
+				const fileChunks = currentChunks.filter(c => c.file_path === current.path)
+				
+				// Remove old embeddings for this file first
+				if (old) {
+					const oldKeys = Object.keys(currentEmbeddings).filter(key => key.startsWith(current.path + '#'))
+					for (const key of oldKeys) {
+						delete currentEmbeddings[key]
+					}
+				}
+				
+				// Add new embeddings for this file
+				for (const chunk of fileChunks) {
+					const key = chunkKey(chunk.file_path, chunk.chunk_index)
+					try {
+						const baseText = (chunk.chunk_text || '').slice(0, 1400)
+						const contextualText = `File: ${chunk.file_name}\nDate: ${chunk.note_date || chunk.file_mtime || 'unknown'}\nContent: ${baseText}`
+						const vec = await ollamaEmbed(host, model, contextualText)
+						if (Array.isArray(vec) && vec.length > 0) {
+							currentEmbeddings[key] = vec
+							changesDetected++
+						}
+					} catch (e) {
+						console.warn('Failed to embed chunk:', key, e)
+					}
+				}
+				
+				console.log('✅ [Incremental] Updated embeddings for:', current.path, `(${fileChunks.length} chunks)`)
+			}
+		}
+		
+		if (changesDetected > 0) {
+			;(window as any).__isla_embeddings = currentEmbeddings
+			await saveEmbeddingsToDirectory(currentEmbeddings)
+			console.log(`🎉 [Incremental] Updated ${changesDetected} embeddings (instead of rebuilding ${currentChunks.length})`)
+		}
+		
+	} catch (error) {
+		console.warn('Incremental update failed, falling back to full rebuild:', error)
+		// Fallback to full rebuild
+		await (window as any).electronAPI?.embeddingsRebuildAll?.()
+	}
 }
 
 async function deleteEntry(targetPath: string): Promise<boolean> {
