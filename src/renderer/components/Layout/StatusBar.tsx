@@ -29,7 +29,7 @@ const StatusBar: React.FC<Props> = ({ activeFilePath, content }) => {
       try {
         const m = await window.electronAPI?.llmGetCurrentModel?.()
         setModel(m)
-        const es = await window.electronAPI?.embeddingsStats?.()
+        const es = await window.electronAPI?.embeddingsGetStats?.()
         if (es) setEmbStats({ embeddedCount: es.embeddedCount, chunkCount: es.chunkCount })
       } catch {}
       timer = setTimeout(poll, 1500)

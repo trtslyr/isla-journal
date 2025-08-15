@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "serve": "node scripts/serve-proxy.mjs",
     "serve:build": "npm run build && node scripts/serve-proxy.mjs",
+    "bundle": "node scripts/bundle-executable.js",
+    "dist:pwa": "npm run build && npm run bundle",
     "clean:dist": "node -e \"const fs=require('fs'); const path='dist'; if(fs.existsSync(path)) fs.rmSync(path,{recursive:true,force:true}); console.log('dist cleaned')\"",
     "clean:modules": "node -e \"const fs=require('fs'); ['node_modules','package-lock.json'].forEach(p=>{if(fs.existsSync(p)) fs.rmSync(p,{recursive:true,force:true})}); console.log('modules cleaned')\""
   },

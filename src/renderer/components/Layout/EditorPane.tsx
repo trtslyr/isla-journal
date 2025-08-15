@@ -1,4 +1,4 @@
-import React, { useRef } from 'react'
+import React, { useRef, useState } from 'react'
 import { MonacoEditor } from '../Editor'
 
 export interface EditorTabModel {
@@ -24,6 +24,32 @@ interface EditorPaneProps {
 }
 
 const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onNewEditor, onRenameFile, onCommitRename, tabs = [], activeTabId, onSelectTab, onCloseTab }) => {
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [editingTitle, setEditingTitle] = useState('')
+  
+  const handleTitleClick = () => {
+    if (activeTab?.path) {
+      setEditingTitle(activeTab.name.replace(/\.md$/i, ''))
+      setIsEditingTitle(true)
+    }
+  }
+  
+  const handleTitleSubmit = async () => {
+    if (editingTitle.trim() && activeTab?.path && onCommitRename) {
+      const newName = editingTitle.trim()
+      await onCommitRename(newName)
+    }
+    setIsEditingTitle(false)
+  }
+  
+  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleTitleSubmit()
+    } else if (e.key === 'Escape') {
+      setIsEditingTitle(false)
+    }
+  }
+  
   const editorApiRef = useRef<{
     wrapSelection: (p: string, s?: string) => void
     toggleBold: () => void
@@ -54,21 +80,42 @@ const EditorPane: React.FC<EditorPaneProps> = ({ activeTab, theme, onChange, onN
         </div>
       ) : (
       <div className="panel-header" style={{ padding:'4px 8px', borderTop:'1px solid var(--border-light)' }}>
-        <div
-          style={{
-            width:'100%',
-            fontSize: '20px',
-            fontWeight: 700,
-            padding:'8px 6px'
-          }}
-          title={activeTab.path || activeTab.name}
-        >
-          {activeTab.name.replace(/\.md$/i, '')}
-        </div>
-        {/* Read-only date meta */}
-        <div style={{ display:'flex', alignItems:'center', gap:12, padding:'0 6px 6px 6px', color:'var(--text-secondary)', fontSize:12 }}>
-          <span id="editor-file-date" />
-        </div>
+        {isEditingTitle ? (
+          <input
+            type="text"
+            value={editingTitle}
+            onChange={(e) => setEditingTitle(e.target.value)}
+            onBlur={handleTitleSubmit}
+            onKeyDown={handleTitleKeyDown}
+            autoFocus
+            style={{
+              width: '100%',
+              fontSize: '20px',
+              fontWeight: 700,
+              padding: '8px 6px',
+              border: '1px solid var(--accent-blue)',
+              borderRadius: '4px',
+              background: 'var(--bg-primary)',
+              color: 'var(--text-primary)',
+              outline: 'none'
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              width:'100%',
+              fontSize: '20px',
+              fontWeight: 700,
+              padding:'8px 6px',
+              cursor: activeTab?.path ? 'pointer' : 'default'
+            }}
+            title={activeTab?.path ? 'Click to rename file' : (activeTab.path || activeTab.name)}
+            onClick={handleTitleClick}
+          >
+            {activeTab.name.replace(/\.md$/i, '')}
+          </div>
+        )}
+
       </div>
       )}
       <div className="panel-content">

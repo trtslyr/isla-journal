@@ -41,6 +41,7 @@ interface FileTreeRef {
   createFile: () => void
   createFolder: () => void
   toggleSearch: () => void
+  refreshDirectory: () => void
 }
 
 const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelect, selectedFile, onDirectorySelect, onCreateFile, onCreateFolder, onSearch }, ref) => {
@@ -55,6 +56,10 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
   const [buildEmbedded, setBuildEmbedded] = useState<number>(0)
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [lastClickedItem, setLastClickedItem] = useState<string | null>(null)
+  
+  // Loading states for individual items (helpful for iCloud slow loading)
+  const [loadingItems, setLoadingItems] = useState<Set<string>>(new Set())
+  const [expandingDirectories, setExpandingDirectories] = useState<Set<string>>(new Set())
   
   // Search states
   const [searchQuery, setSearchQuery] = useState('')
@@ -89,6 +94,11 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
     },
     toggleSearch: () => {
       setShowSearchResults(!showSearchResults)
+    },
+    refreshDirectory: () => {
+      if (rootPath) {
+        loadDirectory(rootPath)
+      }
     }
   }))
   
@@ -291,7 +301,7 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
     setExpandedFolders(newExpanded)
   }
 
-  const handleItemClick = (item: FileItem, event: React.MouseEvent) => {
+  const handleItemClick = async (item: FileItem, event: React.MouseEvent) => {
     // Handle multi-select with Shift key
     if (event.shiftKey && lastClickedItem) {
       handleRangeSelect(lastClickedItem, item.path)
@@ -314,9 +324,29 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
     setLastClickedItem(item.path)
 
     if (item.type === 'directory') {
-      toggleFolder(item)
+      // Add loading state for directory expansion
+      setExpandingDirectories(prev => new Set(prev).add(item.path))
+      try {
+        await toggleFolder(item)
+      } finally {
+        setExpandingDirectories(prev => {
+          const next = new Set(prev)
+          next.delete(item.path)
+          return next
+        })
+      }
     } else {
-      onFileSelect(item.path, item.name)
+      // Add loading state for file opening (helpful for iCloud)
+      setLoadingItems(prev => new Set(prev).add(item.path))
+      try {
+        onFileSelect(item.path, item.name)
+      } finally {
+        setLoadingItems(prev => {
+          const next = new Set(prev)
+          next.delete(item.path)
+          return next
+        })
+      }
     }
   }
 
@@ -569,11 +599,13 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
       const isPinned = pinnedItems.some(p => p.path === item.path)
       const isDraggedOver = dragOverItem === item.path
       const isDragging = draggedItems.includes(item.path)
+      const isLoading = loadingItems.has(item.path)
+      const isExpanding = expandingDirectories.has(item.path)
       
       return (
         <div key={item.path}>
           <div
-            className={`tree-item ${item.type} ${isSelected ? 'selected' : ''} ${isDraggedOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''}`}
+            className={`tree-item ${item.type} ${isSelected ? 'selected' : ''} ${isDraggedOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isLoading || isExpanding ? 'loading' : ''}`}
             draggable={true}
             onClick={(event) => handleItemClick(item, event)}
             onContextMenu={(event) => handleContextMenu(item, event)}
@@ -584,14 +616,25 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
             onDragOver={(event) => handleDragOver(event, item)}
             onDragLeave={handleDragLeave}
             onDrop={(event) => handleDrop(event, item)}
-            style={{ paddingLeft: `${12 + depth * 16}px` }}
+            style={{ 
+              paddingLeft: `${12 + depth * 16}px`,
+              '--depth': depth 
+            } as any}
+            data-drag-count={isDragging ? draggedItems.length > 1 ? draggedItems.length : '' : ''}
             title={`${item.name} ${item.type === 'file' ? `(${formatFileSize(item.size)}) - Modified: ${formatDate(item.modified)}` : ''}`}
           >
             <span className="tree-name">{item.name.replace(/\.?md$/i,'')}</span>
             {isPinned && <span className="pinned-indicator">fav</span>}
             
+            {/* Loading indicator for iCloud/slow files */}
+            {(isLoading || isExpanding) && (
+              <span className="loading-indicator" title={isExpanding ? 'Loading folder contents...' : 'Opening file...'}>
+                ⟳
+              </span>
+            )}
+            
             {/* Hover menu */}
-            {isHovered && !isDragging && (
+            {isHovered && !isDragging && !(isLoading || isExpanding) && (
               <div 
                 className="item-actions"
                 onClick={(e) => {
@@ -771,6 +814,10 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
     if (targetItem && targetItem.type === 'directory') {
       event.dataTransfer.dropEffect = 'move'
       setDragOverItem(targetItem.path)
+    } else if (!targetItem) {
+      // Allow dropping on empty space (root directory)
+      event.dataTransfer.dropEffect = 'move'
+      setDragOverItem('root')
     } else {
       event.dataTransfer.dropEffect = 'none'
       setDragOverItem(null)
@@ -788,58 +835,68 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
     }
   }
 
-  const handleDrop = async (event: React.DragEvent, targetItem: FileItem) => {
+  const handleDrop = async (event: React.DragEvent, targetItem?: FileItem) => {
     event.preventDefault()
     setDragOverItem(null)
+    setDraggedItems([])
     
     try {
       const draggedPaths = JSON.parse(event.dataTransfer.getData('text/plain')) as string[]
       
-      if (targetItem.type === 'directory') {
-        // Move each dragged item to the target directory
-        for (const draggedPath of draggedPaths) {
-          const draggedItem = findItemByPath(files, draggedPath)
-          if (!draggedItem) continue
-          
-          try {
-            const result = await window.electronAPI.moveFile?.(draggedPath, targetItem.path)
-            if (result?.success) {
-              console.log('🚚 [FileTree] Moved:', draggedItem.name, 'to', targetItem.name)
-              
-              // Update pinned items if the moved item was pinned
-              setPinnedItems(prev => prev.map(pinned => 
-                pinned.path === draggedPath 
-                  ? { ...pinned, path: result?.newPath }
-                  : pinned
-              ))
-              
-              // Update selected items
-              setSelectedItems(prev => {
-                const newSelected = new Set(prev)
-                if (newSelected.has(draggedPath)) {
-                  newSelected.delete(draggedPath)
-                  newSelected.add(result?.newPath || '')
-                }
-                return newSelected
-              })
-            } else if (result?.message) {
-              console.log('ℹ️ [FileTree]', result.message)
-            }
-          } catch (error) {
-            console.error('❌ [FileTree] Failed to move:', draggedItem.name, error)
-            alert(`Failed to move "${draggedItem.name}": ${error.message}`)
-          }
-        }
+      // Determine target path
+      let targetPath = rootPath || ''
+      if (targetItem && targetItem.type === 'directory') {
+        targetPath = targetItem.path
+      } else if (targetItem) {
+        // Don't allow dropping on files
+        return
+      }
+      
+      // Move each dragged item to the target directory
+      for (const draggedPath of draggedPaths) {
+        // Don't move item to itself or its parent
+        if (draggedPath === targetPath) continue
         
-        // Refresh the directory
-        if (rootPath) {
-          await loadDirectory(rootPath)
+        const draggedItem = findItemByPath(files, draggedPath)
+        if (!draggedItem) continue
+        
+        try {
+          const result = await window.electronAPI.moveFile?.(draggedPath, targetPath)
+          if (result?.success) {
+            
+            // Update pinned items if the moved item was pinned
+            setPinnedItems(prev => prev.map(pinned => 
+              pinned.path === draggedPath 
+                ? { ...pinned, path: result.newPath }
+                : pinned
+            ))
+            
+            // Update selected items
+            setSelectedItems(prev => {
+              const newSelected = new Set(prev)
+              if (newSelected.has(draggedPath)) {
+                newSelected.delete(draggedPath)
+                newSelected.add(result.newPath)
+              }
+              return newSelected
+            })
+          } else {
+            if (result?.message) {
+              alert(`Failed to move "${draggedItem.name}": ${result.message}`)
+            }
+          }
+        } catch (error) {
+          alert(`Failed to move "${draggedItem.name}": ${error.message}`)
         }
       }
-      // Don't allow dropping on files - only directories
+      
+      // Refresh the directory to show new structure
+      if (rootPath) {
+        await loadDirectory(rootPath)
+      }
       
     } catch (error) {
-      console.error('❌ [FileTree] Drop operation failed:', error)
+      // Silent fail - user will see individual file errors if any
     }
   }
 
@@ -881,7 +938,12 @@ const FileTree = forwardRef<FileTreeRef, FileTreeProps>(({ rootPath, onFileSelec
         )}
       </div>
 
-      <div className="panel-content">
+      <div 
+        className={`panel-content ${dragOverItem === 'root' ? 'drag-over-root' : ''}`}
+        onDragOver={(e) => handleDragOver(e)}
+        onDrop={(e) => handleDrop(e)}
+        onDragLeave={handleDragLeave}
+      >
         {showSearchResults ? (
           renderSearchResults()
         ) : !rootPath ? (

@@ -5,6 +5,7 @@ import Sidebar from './components/Layout/Sidebar'
 import { FileTree } from './components/FileTree'
 
 import Settings from './components/Settings'
+import OllamaWizard from './components/OllamaWizard'
 import { useLicenseCheck } from './hooks/useLicenseCheck'
 import './App.css'
 
@@ -72,12 +73,21 @@ const App: React.FC = () => {
   const [fileSuggestions, setFileSuggestions] = useState<Array<{path:string,name:string}>>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   
+  // Auto-scroll state for chat messages
+  const chatMessagesRef = useRef<HTMLDivElement>(null)
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false)
+  const lastMessageCountRef = useRef(0)
+  
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false)
   const [renamingChat, setRenamingChat] = useState<{id: number, title: string} | null>(null)
   
   // Settings modal state
   const [showSettings, setShowSettings] = useState(false)
+  
+  // Ollama wizard state
+  const [showOllamaWizard, setShowOllamaWizard] = useState(false)
+  const [ollamaAutoLaunched, setOllamaAutoLaunched] = useState(false)
   
   // Theme state
   const [currentTheme, setCurrentTheme] = useState('dark')
@@ -89,6 +99,14 @@ const App: React.FC = () => {
     insertList: (t: 'bullet'|'number'|'check') => void
     insertCodeBlock: () => void
   } | null>(null)
+
+  // Check browser compatibility on app load
+  useEffect(() => {
+    // @ts-ignore
+    if (!window.showDirectoryPicker && !window.electronAPI) {
+      console.warn('⚠️ Browser not supported - requires Chromium for File System Access')
+    }
+  }, [])
 
   // Initialize theme on app load
   useEffect(() => {
@@ -211,10 +229,28 @@ const App: React.FC = () => {
     document.addEventListener('mousemove', handleLeftResize)
     document.addEventListener('mousemove', handleRightResize)
     document.addEventListener('mouseup', handleMouseUp)
-    
-    // Streaming listeners
+
+    return () => {
+      document.removeEventListener('mousemove', handleLeftResize)
+      document.removeEventListener('mousemove', handleRightResize)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [handleLeftResize, handleRightResize, handleMouseUp])
+
+  // Separate effect for stream listeners that only sets up once
+  useEffect(() => {
+    // Streaming listeners - only set up once, not per activeChat change
     const offChunk = window.electronAPI.onContentStreamChunk?.(({ chunk }) => {
       console.log('⚡️ [App] Stream chunk received:', chunk?.substring(0, 50) + '...')
+      
+      // Only update UI if we're still on the same chat that started the stream
+      const streamChatId = (window as any).__isla_current_stream_chat_id
+      const currentChatId = (window as any).__isla_current_active_chat_id
+      if (!streamChatId || currentChatId !== streamChatId) {
+        console.log('🚫 [App] Ignoring chunk - chat switched during stream', { streamChatId, currentChatId })
+        return
+      }
+      
       setChatMessages(prev => {
         const last = prev[prev.length-1]
         if (!last || last.role !== 'assistant') {
@@ -226,49 +262,105 @@ const App: React.FC = () => {
         }
       })
     })
+    
     const offDone = window.electronAPI.onContentStreamDone?.(async ({ answer, sources }) => {
       console.log('✅ [App] Stream done. Persisting assistant message...')
-      setChatMessages(prev => {
-        const last = prev[prev.length-1]
-        if (last && last.role === 'assistant') {
-          const updated = { ...last, content: answer, sources }
-          return [...prev.slice(0,-1), updated as any]
-        }
-        return prev
-      })
+      
+      // Get the chat ID that started the stream
+      const streamChatId = (window as any).__isla_current_stream_chat_id
+      const currentChatId = (window as any).__isla_current_active_chat_id
+      
+      // Only update UI if we're still on the same chat that started the stream
+      if (streamChatId && currentChatId === streamChatId) {
+        setChatMessages(prev => {
+          const last = prev[prev.length-1]
+          if (last && last.role === 'assistant') {
+            const updated = { ...last, content: answer, sources }
+            return [...prev.slice(0,-1), updated as any]
+          }
+          return prev
+        })
+      }
       setIsAiThinking(false)
       
-      // CRITICAL: Persist assistant message to localStorage
+      // CRITICAL: Always persist to the original chat that started the stream
       try {
-        if (activeChat?.id && answer) {
-          console.log('💾 [App] Saving assistant message to chat:', activeChat.id)
-          await window.electronAPI.chatAddMessage(activeChat.id, 'assistant', answer, JSON.stringify({ sources }))
+        if (streamChatId && answer) {
+          console.log('💾 [App] Saving assistant message to original chat:', streamChatId)
+          await window.electronAPI.chatAddMessage(streamChatId, 'assistant', answer, JSON.stringify({ sources }))
           console.log('✅ [App] Assistant message saved successfully')
           
-          // Force refresh messages from storage to ensure UI reflects persistence
-          const refreshedMessages = await window.electronAPI.chatGetMessages(activeChat.id)
-          console.log('📚 [App] Refreshed', refreshedMessages.length, 'messages from storage')
-          setChatMessages(refreshedMessages.map(msg => ({
-            id: msg.id.toString(),
-            content: msg.content,
-            role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at),
-            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
-          })))
+          // Only refresh UI if we're still viewing the same chat
+          if (currentChatId === streamChatId) {
+            const refreshedMessages = await window.electronAPI.chatGetMessages(streamChatId)
+            console.log('📚 [App] Refreshed', refreshedMessages.length, 'messages from storage')
+            setChatMessages(refreshedMessages.map(msg => ({
+              id: msg.id.toString(),
+              content: msg.content,
+              role: msg.role as 'user' | 'assistant',
+              timestamp: new Date(msg.created_at),
+              sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
+            })))
+          }
         }
       } catch (e) { 
         console.error('❌ [App] CRITICAL: Failed to persist assistant message:', e)
       }
+      
+      // Clear the stream chat tracking
+      ;(window as any).__isla_current_stream_chat_id = null
     })
 
     return () => {
-      document.removeEventListener('mousemove', handleLeftResize)
-      document.removeEventListener('mousemove', handleRightResize)
-      document.removeEventListener('mouseup', handleMouseUp)
       if (offChunk) offChunk()
       if (offDone) offDone()
     }
-  }, [handleLeftResize, handleRightResize, handleMouseUp])
+  }, []) // Empty dependency array - only set up once
+
+  // Track current active chat ID globally
+  useEffect(() => {
+    ;(window as any).__isla_current_active_chat_id = activeChat?.id
+  }, [activeChat])
+
+  // Auto-scroll chat messages to bottom when new messages arrive
+  useEffect(() => {
+    const chatContainer = chatMessagesRef.current
+    if (!chatContainer) return
+
+    // Check if user has scrolled up from the bottom
+    const isScrolledToBottom = () => {
+      return chatContainer.scrollHeight - chatContainer.clientHeight <= chatContainer.scrollTop + 1
+    }
+
+    const handleScroll = () => {
+      setIsUserScrolledUp(!isScrolledToBottom())
+    }
+
+    // Scroll to bottom on new messages, but only if user isn't scrolled up
+    if (chatMessages.length > lastMessageCountRef.current && !isUserScrolledUp) {
+      requestAnimationFrame(() => {
+        chatContainer.scrollTop = chatContainer.scrollHeight
+      })
+    }
+    
+    lastMessageCountRef.current = chatMessages.length
+
+    // Add scroll listener to detect user scrolling
+    chatContainer.addEventListener('scroll', handleScroll)
+    
+    return () => {
+      chatContainer.removeEventListener('scroll', handleScroll)
+    }
+  }, [chatMessages, isUserScrolledUp])
+
+  // Reset scroll position when switching chats
+  useEffect(() => {
+    if (chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+      setIsUserScrolledUp(false)
+      lastMessageCountRef.current = chatMessages.length
+    }
+  }, [activeChat?.id])
 
 
   // Tab management functions
@@ -419,6 +511,10 @@ const App: React.FC = () => {
           })))
         }
         // No automatic chat creation - user can create chats when needed
+        
+        // Check Ollama status after app loads
+        setTimeout(checkOllamaStatus, 2000) // Give app time to settle
+        
       } catch (error) {
         console.error('❌ [App] Failed to initialize app:', error)
       }
@@ -546,6 +642,7 @@ const App: React.FC = () => {
 
   const handleFileSelect = async (filePath: string, fileName: string) => {
     try {
+      console.log('📂 [App] Loading file (may be slow for iCloud):', fileName)
       // Load the selected file content
       const content = await window.electronAPI.readFile?.(filePath)
       
@@ -641,101 +738,20 @@ const App: React.FC = () => {
 
       // Use RAG for intelligent notes-aware responses
       console.log(`🧠 [App] Using RAG for intelligent response with chat context`)
-      let ragResponse: any = null
-      let gotStream = false
-      const offChunk = window.electronAPI.onContentStreamChunk?.(() => { gotStream = true })
-      const offDone = window.electronAPI.onContentStreamDone?.(() => { gotStream = true })
-      if (contextSelections.length > 0 && window.electronAPI.contentStreamSearchAndAnswerWithContext) {
-        ragResponse = await window.electronAPI.contentStreamSearchAndAnswerWithContext(userContent, activeChat.id, contextSelections.map(c=>c.path))
-      } else {
-        ragResponse = await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
-      }
       
-      // If streaming did not start within 1s, fallback to non-streaming
-      // Wait longer for stream to start, and only fallback if truly no response
-      await new Promise(r => setTimeout(r, 3000))
-      if (!gotStream && !ragResponse) {
-        console.log(`⚠️ [App] No stream after 3 seconds, falling back to basic LLM`)
-        // Only fallback if we got no response at all
-        const basicResponse = await window.electronAPI.llmSendMessage?.(
-          [
-            { role: 'user', content: userContent }
-          ]
-        )
-        
-        console.log('💾 [App] Saving fallback assistant response')
-        await window.electronAPI.chatAddMessage?.(activeChat.id, 'assistant', basicResponse)
-        console.log('✅ [App] Fallback response saved')
-        
-        const assistantMessage = {
-          id: (Date.now() + 1).toString(),
-          content: basicResponse,
-          role: 'assistant' as const,
-          timestamp: new Date()
-        }
-        setChatMessages(prev => [...prev, assistantMessage])
-        
-        // Force refresh to ensure persistence reflected
-        try {
-          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
-          console.log('📚 [App] Fallback refresh: loaded', messages.length, 'messages')
-          setChatMessages(messages.map(msg => ({
-            id: msg.id.toString(),
-            content: msg.content,
-            role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at),
-            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
-          })))
-        } catch (e) {
-          console.error('❌ [App] Failed to refresh after fallback:', e)
-        }
-      } else if (ragResponse) {
-        console.log('✅ [App] Stream completed successfully, no fallback needed')
+      // Track which chat started this stream to prevent cross-chat contamination
+      ;(window as any).__isla_current_stream_chat_id = activeChat.id
+      
+      if (contextSelections.length > 0 && window.electronAPI.contentStreamSearchAndAnswerWithContext) {
+        await window.electronAPI.contentStreamSearchAndAnswerWithContext(userContent, activeChat.id, contextSelections.map(c=>c.path))
+      } else {
+        await window.electronAPI.contentStreamSearchAndAnswer?.(userContent, activeChat.id)
       }
-      if (offChunk) offChunk()
-      if (offDone) offDone()
 
     } catch (error) {
       console.error('❌ [App] Failed to send message:', error)
-      
-      // Fallback to basic LLM if RAG fails
-      try {
-        console.log('🔄 [App] RAG failed, falling back to basic LLM...')
-        const basicResponse = await window.electronAPI.llmSendMessage?.(
-          [
-            { role: 'user', content: userContent }
-          ]
-        )
-        
-        console.log('💾 [App] Saving secondary fallback assistant response')
-        await window.electronAPI.chatAddMessage?.(activeChat.id, 'assistant', basicResponse)
-        console.log('✅ [App] Secondary fallback response saved')
-        
-        const assistantMessage = {
-          id: (Date.now() + 1).toString(),
-          content: basicResponse,
-          role: 'assistant' as const,
-          timestamp: new Date()
-        }
-        setChatMessages(prev => [...prev, assistantMessage])
-        
-        try {
-          const messages = await window.electronAPI.chatGetMessages(activeChat.id)
-          console.log('📚 [App] Secondary fallback refresh: loaded', messages.length, 'messages')
-          setChatMessages(messages.map(msg => ({
-            id: msg.id.toString(),
-            content: msg.content,
-            role: msg.role as 'user' | 'assistant',
-            timestamp: new Date(msg.created_at),
-            sources: (()=>{ try { const m = msg.metadata && JSON.parse(msg.metadata); return m?.sources || [] } catch { return [] } })()
-          })))
-        } catch (e) {
-          console.error('❌ [App] Failed to refresh after secondary fallback:', e)
-        }
-      } catch (fallbackError) {
-        console.error('❌ [App] Even fallback LLM failed:', fallbackError)
-        alert('Failed to get AI response. Please check your connection and try again.')
-      }
+      // Clear stream tracking on error
+      ;(window as any).__isla_current_stream_chat_id = null
     } finally {
       setIsAiThinking(false)
     }
@@ -902,45 +918,66 @@ const App: React.FC = () => {
   const fileTreeRef = useRef<any>(null)
 
   // File tree action handlers
-  const handleCreateFile = async () => {
+    const handleCreateFile = async () => {
     if (!rootDirectory) {
-      // If no directory selected, create untitled tab
-      const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
-      setTabs(prev => [...prev, newTab as any])
-      setActiveTabId((newTab as any).id)
+      console.log('❌ [App] No directory selected for file creation')
       return
     }
 
     try {
-      // Create a new file with timestamp in the directory
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '').replace('T', '_')
-      const fileName = `untitled_${timestamp}`
-      
+      // Create a unique filename with timestamp ID
+      const fileId = Date.now()
+      const fileName = `Untitled-${fileId}.md`
+
       // Create the actual file in the directory
       const filePath = await window.electronAPI.createFile?.(rootDirectory, fileName)
       if (filePath) {
-        // Open the created file in a new tab
-        const content = '' // New file, empty content
-        const cleanName = fileName.replace(/\.md$/, '') // Remove .md extension for display
+        console.log('✅ [App] Created new file:', filePath)
         
-        const newTab = { 
-          id: `file-${Date.now()}`, 
-          name: cleanName, 
-          path: filePath, 
-          content: content, 
-          hasUnsavedChanges: false 
+        // Create content with today's date as the first line
+        const today = new Date()
+        const dateStr = today.toISOString().slice(0, 10) // YYYY-MM-DD format
+        const content = `# ${dateStr}\n\n`
+        
+        // Open the created file in the current tab (replace current content)
+        const cleanName = fileName // Keep the .md extension in the name
+
+        // If there's an active tab, replace its content; otherwise create a new tab
+        if (activeTabId && tabs.length > 0) {
+          // Replace current tab content
+          setTabs(prev => prev.map(tab => 
+            tab.id === activeTabId 
+              ? {
+                  ...tab,
+                  name: cleanName,
+                  path: filePath,
+                  content: content,
+                  hasUnsavedChanges: true // Mark as changed since we added content
+                } as any
+              : tab
+          ))
+        } else {
+          // Create new tab if no active tab
+          const newTab = {
+            id: `file-${Date.now()}`,
+            name: cleanName,
+            path: filePath,
+            content: content,
+            hasUnsavedChanges: true // Mark as changed since we added content
+          }
+          setTabs(prev => [...prev, newTab as any])
+          setActiveTabId((newTab as any).id)
         }
-        setTabs(prev => [...prev, newTab as any])
-        setActiveTabId((newTab as any).id)
         
-        console.log('✅ [App] Created and opened new file:', filePath)
+        // Trigger file tree refresh to show the new file immediately
+        if (fileTreeRef.current && typeof (fileTreeRef.current as any).refreshDirectory === 'function') {
+          ;(fileTreeRef.current as any).refreshDirectory()
+        }
+
+        console.log('✅ [App] Opened new file in current tab:', filePath)
       }
     } catch (error) {
       console.error('❌ [App] Failed to create file:', error)
-      // Fallback to untitled tab
-      const newTab = { id: `untitled-${Date.now()}`, name: 'Untitled', path: null, content: '', hasUnsavedChanges: false }
-      setTabs(prev => [...prev, newTab as any])
-      setActiveTabId((newTab as any).id)
     }
   }
 
@@ -1005,6 +1042,32 @@ const App: React.FC = () => {
     }
   }
 
+  // Check Ollama status and auto-launch wizard if needed
+  const checkOllamaStatus = async () => {
+    try {
+      const models = await window.electronAPI?.llmGetAvailableModels?.()
+      
+      // If no models available, Ollama is likely not running or no models installed
+      if (!models || models.length === 0) {
+        console.log('⚙️ [App] No Ollama models detected, launching management')
+        setOllamaAutoLaunched(true)
+        setShowOllamaWizard(true)
+      } else {
+        // Check if required embedding model is installed
+        const hasEmbeddingModel = models.some(m => m.includes('nomic-embed-text'))
+        if (!hasEmbeddingModel) {
+          console.log('⚙️ [App] Missing required embedding model, launching management')
+          setOllamaAutoLaunched(true)
+          setShowOllamaWizard(true)
+        }
+      }
+    } catch (error) {
+      console.log('⚙️ [App] Ollama not reachable, launching management')
+      setOllamaAutoLaunched(true)
+      setShowOllamaWizard(true)
+    }
+  }
+
   // Suggestion search when typing '@'
   useEffect(() => {
     const atIndex = chatInput.lastIndexOf('@')
@@ -1064,29 +1127,29 @@ const App: React.FC = () => {
               </span>
               
               {/* Action Buttons */}
-              <button 
-                className="settings-gear-btn"
-                onClick={handleCreateFolder}
-                title="Create new folder"
-                style={{ marginLeft: '6px' }}
-              >
-                [⊞]
-              </button>
-              <button 
+                            <button
                 className="settings-gear-btn"
                 onClick={handleSearch}
                 title="Search files"
+                style={{ marginLeft: '6px' }}
+              >
+                [search]
+              </button>
+              <button
+                className="settings-gear-btn"
+                onClick={handleCreateFolder}
+                title="Create new folder"
                 style={{ marginLeft: '4px' }}
               >
-                [⊙]
+                [folder]
               </button>
-              <button 
+              <button
                 className="settings-gear-btn"
                 onClick={handleCreateFile}
                 title="Create new file"
                 style={{ marginLeft: '4px' }}
               >
-                [+]
+                [file]
               </button>
             </div>
 
@@ -1227,12 +1290,25 @@ const App: React.FC = () => {
               try {
                 if (!activeTab?.path) return
                 const clean = newName.replace(/\.?md$/i, '')
-                await window.electronAPI.renameFile?.(activeTab.path, clean + '.md')
-                // Refresh active tab path and name
-                const parent = activeTab
-                setTabs(prev => prev.map(t => t.id === parent.id ? { ...t, name: clean + '.md' } as any : t))
+                const result = await window.electronAPI.renameFile?.(activeTab.path, clean + '.md')
+                if (result?.success) {
+                  console.log('✅ [App] File renamed successfully:', result.newPath)
+                  // Update tab with new path and name
+                  setTabs(prev => prev.map(t => t.id === activeTab.id ? { 
+                    ...t, 
+                    name: clean + '.md', 
+                    path: result.newPath,
+                    hasUnsavedChanges: false 
+                  } as any : t))
+                  // Refresh file tree to show the renamed file
+                  if (fileTreeRef.current && typeof (fileTreeRef.current as any).refreshDirectory === 'function') {
+                    ;(fileTreeRef.current as any).refreshDirectory()
+                  }
+                } else {
+                  console.error('❌ [App] Failed to rename file')
+                }
               } catch (e) {
-                console.error('Rename failed:', e)
+                console.error('❌ [App] Rename failed:', e)
               }
             }}
           />
@@ -1359,7 +1435,7 @@ const App: React.FC = () => {
                 </div>
                 
                 <div className="chat-container">
-                  <div className="chat-messages">
+                  <div className="chat-messages" ref={chatMessagesRef}>
                     {chatMessages.map((message) => (
                       <div
                         key={message.id}
@@ -1436,6 +1512,22 @@ const App: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  
+                  {/* Scroll to bottom button - appears when user scrolled up */}
+                  {isUserScrolledUp && (
+                    <button 
+                      className="scroll-to-bottom-btn"
+                      onClick={() => {
+                        if (chatMessagesRef.current) {
+                          chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight
+                          setIsUserScrolledUp(false)
+                        }
+                      }}
+                      title="Scroll to bottom"
+                    >
+                      ↓
+                    </button>
+                  )}
                   
                   <div className="chat-input-area">
                   <div className="chat-input-wrapper">
@@ -1517,6 +1609,21 @@ const App: React.FC = () => {
             isOpen={showSettings}
             onClose={() => setShowSettings(false)}
             onForceLicenseScreen={forceLicenseScreenToShow}
+            onOpenOllamaWizard={() => {
+              setShowSettings(false)
+              setOllamaAutoLaunched(false)
+              setShowOllamaWizard(true)
+            }}
+          />
+          
+          {/* Ollama Wizard */}
+          <OllamaWizard
+            isOpen={showOllamaWizard}
+            onClose={() => {
+              setShowOllamaWizard(false)
+              setOllamaAutoLaunched(false)
+            }}
+            autoLaunched={ollamaAutoLaunched}
           />
         </>
       )}

@@ -239,7 +239,8 @@
   background: none;
   border: none;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-family: var(--app-font-family, 'JetBrains Mono', monospace);
+  font-size: var(--app-font-size, 13px);
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 4px;
@@ -530,6 +531,25 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+/* Loading indicator for iCloud/slow file access */
+.tree-item.loading {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.loading-indicator {
+  margin-left: auto;
+  color: var(--accent-blue);
+  font-size: 12px;
+  animation: spin 1s linear infinite;
+  user-select: none;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Remove legacy tree bullet/arrow icons for a cleaner look */
 .tree-icon { display: none; }
 
@@ -741,34 +761,104 @@
   border-radius: 1px;
 }
 
-/* Drag and Drop (to be implemented) */
+/* Enhanced Drag and Drop Visual Feedback */
 .tree-item.drag-over {
-  background-color: rgba(0, 122, 204, 0.2);
-  border: 2px dashed var(--accent-blue);
-  border-radius: 4px;
-  animation: dragPulse 0.8s ease-in-out infinite alternate;
+  background: linear-gradient(135deg, rgba(0, 122, 204, 0.15), rgba(0, 122, 204, 0.25)) !important;
+  border: 2px dashed var(--accent-blue) !important;
+  border-radius: 6px;
+  animation: dragPulse 1.2s ease-in-out infinite alternate;
+  box-shadow: 0 4px 12px rgba(0, 122, 204, 0.2);
+  transform: scale(1.02);
+  transition: all 0.3s ease;
 }
 
 @keyframes dragPulse {
   from {
-    background-color: rgba(0, 122, 204, 0.1);
+    background: linear-gradient(135deg, rgba(0, 122, 204, 0.1), rgba(0, 122, 204, 0.2));
+    box-shadow: 0 2px 8px rgba(0, 122, 204, 0.15);
   }
   to {
-    background-color: rgba(0, 122, 204, 0.3);
+    background: linear-gradient(135deg, rgba(0, 122, 204, 0.25), rgba(0, 122, 204, 0.35));
+    box-shadow: 0 6px 16px rgba(0, 122, 204, 0.3);
   }
 }
 
 /* Enhanced drag visual feedback */
 .tree-item.dragging {
-  opacity: 0.5;
+  opacity: 0.7;
   background-color: var(--bg-tertiary);
-  transform: rotate(2deg);
+  transform: rotate(3deg) scale(0.98);
   transition: all 0.2s ease;
+  border: 1px solid rgba(0, 122, 204, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 /* Multi-select visual improvements */
 .tree-item.selected.dragging {
-  box-shadow: 0 2px 8px rgba(0, 122, 204, 0.3);
+  box-shadow: 0 6px 20px rgba(0, 122, 204, 0.4);
+  border: 2px solid var(--accent-blue);
+}
+
+/* Root drop zone feedback */
+.panel-content.drag-over-root {
+  background: linear-gradient(135deg, rgba(0, 122, 204, 0.05), rgba(0, 122, 204, 0.15));
+  border: 3px dashed var(--accent-blue);
+  border-radius: 12px;
+  animation: rootDropPulse 1s ease-in-out infinite alternate;
+  transition: all 0.3s ease;
+}
+
+@keyframes rootDropPulse {
+  from {
+    background: linear-gradient(135deg, rgba(0, 122, 204, 0.05), rgba(0, 122, 204, 0.1));
+    border-color: rgba(0, 122, 204, 0.6);
+  }
+  to {
+    background: linear-gradient(135deg, rgba(0, 122, 204, 0.1), rgba(0, 122, 204, 0.2));
+    border-color: var(--accent-blue);
+  }
+}
+
+/* Improved directory hover for drag targets */
+.file-tree .tree-item.directory:not(.dragging):not(.selected):hover {
+  background-color: rgba(0, 122, 204, 0.12) !important;
+  border-left: 4px solid var(--accent-blue) !important;
+  transition: all 0.2s ease;
+  transform: translateX(3px);
+  box-shadow: 0 2px 12px rgba(0, 122, 204, 0.2);
+  border-radius: 4px;
+}
+
+/* Also add hover effect for selected directories */
+.file-tree .tree-item.directory.selected:not(.dragging):hover {
+  background-color: rgba(0, 122, 204, 0.9) !important;
+  border-left: 4px solid white !important;
+  transform: translateX(3px);
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 12px rgba(0, 122, 204, 0.3);
+}
+
+/* Directory cursor */
+.tree-item.directory {
+  cursor: pointer;
+}
+
+/* Ghost element styles for better drag preview */
+.tree-item.dragging::after {
+  content: attr(data-drag-count);
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: var(--accent-blue);
+  color: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
 }
 
 /* Enhanced file tree header */
@@ -1330,6 +1420,34 @@
   background: var(--accent-blue-hover);
 }
 
+/* Scroll to bottom button */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background: var(--accent-blue);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scroll-to-bottom-btn:hover {
+  background: var(--accent-blue-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
 .chat-container {
   display: flex;
   flex-direction: column;
@@ -1346,6 +1464,8 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0; /* Allow scrolling when needed */
+  position: relative;
+  scroll-behavior: smooth;
 }
 
 .message {

@@ -42,9 +42,10 @@ interface SettingsProps {
   isOpen: boolean
   onClose: () => void
   onForceLicenseScreen: () => void
+  onOpenOllamaWizard: () => void
 }
 
-const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScreen }) => {
+const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScreen, onOpenOllamaWizard }) => {
   const [licenseKey, setLicenseKey] = useState('')
   const [validationMessage, setValidationMessage] = useState('')
   const [databaseStats, setDatabaseStats] = useState({ fileCount: 0, chunkCount: 0, indexSize: 0 })
@@ -588,110 +589,38 @@ const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onForceLicenseScre
 
           {/* AI Model Section */}
           <div className="settings-section">
-            <h3>AI Model</h3>
-            
-            {/* Auto-Selected Model Display */}
-            {modelStatus.recommendedModel && (
-              <div className="settings-item">
-                <div className="auto-selected-model">
-                  <h4>🤖 Auto-Selected for Your Device</h4>
-                  <div className="current-model-display">
-                    <div className="model-info">
-                      <strong>{modelStatus.recommendedModel.displayName}</strong>
-                      <span className="model-size">({modelStatus.recommendedModel.downloadSize})</span>
-                      {modelStatus.recommendedModel.isOptimized && <span className="optimization-badge">⚡ Optimized</span>}
-                    </div>
-                    <p className="model-description">{modelStatus.recommendedModel.description}</p>
-                    <div className="auto-selection-reason">
-                      <small>
-                        ✅ Selected based on your {modelStatus.deviceSpecs?.totalMemory}GB RAM, {modelStatus.deviceSpecs?.platform} {modelStatus.deviceSpecs?.arch}
-                        {modelStatus.deviceSpecs?.isAppleSilicon && ', Apple Silicon optimized'}
-                      </small>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Model Status */}
-            <div className="settings-item">
-              <label>Status:</label>
-              {modelStatus.isDownloading ? (
-                <div className="model-status downloading">
-                  <span>📥 Downloading optimal model... {modelStatus.downloadProgress}%</span>
-                  <div className="progress-bar">
-                    <div 
-                      className="progress-fill" 
-                      style={{ width: `${modelStatus.downloadProgress}%` }}
-                    ></div>
-                  </div>
-                </div>
-              ) : modelStatus.isConnected ? (
-                <span className="model-status online">● Ready - Using {modelStatus.currentModel}</span>
-              ) : (
-                <span className="model-status offline">○ Setting up AI model...</span>
-              )}
+            <div className="section-header">
+              <h3>AI Models</h3>
+              <button 
+                className="settings-btn wizard-btn"
+                onClick={onOpenOllamaWizard}
+                title="Manage Ollama models and connection"
+              >
+                Manage Models
+              </button>
             </div>
-
-            {/* Model selection (always visible) */}
+            
+            {/* Simple Status Display */}
             <div className="settings-item">
-              <div className="advanced-content">
-                  <p className="advanced-note">
-                    <small>⚠️ The system automatically selects the best model for your device. Only change this if you have specific requirements.</small>
-                  </p>
-
-                  {/* Device Information */}
-                  {modelStatus.deviceSpecs && (
-                    <div className="device-info-advanced">
-                      <h5>Device Specifications</h5>
-                      <div className="device-stats">
-                        <div className="device-stat">
-                          <span className="device-label">Platform:</span>
-                          <span className="device-value">
-                            {modelStatus.deviceSpecs.platform} ({modelStatus.deviceSpecs.arch})
-                            {modelStatus.deviceSpecs.isAppleSilicon && ' - Apple Silicon'}
-                          </span>
-                        </div>
-                        <div className="device-stat">
-                          <span className="device-label">Memory:</span>
-                          <span className="device-value">
-                            {modelStatus.deviceSpecs.availableMemory}GB available / {modelStatus.deviceSpecs.totalMemory}GB total
-                          </span>
-                        </div>
-                        <div className="device-stat">
-                          <span className="device-label">CPU:</span>
-                          <span className="device-value">
-                            {modelStatus.deviceSpecs.cpuCores} cores @ {modelStatus.deviceSpecs.cpuSpeed}GHz
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Manual Model Selection */}
-                  <div className="manual-selection">
-                    <label>Installed Models:</label>
-                    {modelStatus.availableModels.length === 0 ? (
-                      <div style={{ color: 'var(--text-secondary)' }}>No models detected. In a terminal: <code>ollama pull gemma2:2b</code></div>
-                    ) : (
-                      <select 
-                        className="settings-select"
-                        value={selectedModel}
-                        onChange={(e) => handleModelChange(e.target.value)}
-                        disabled={modelStatus.isDownloading}
-                      >
-                        {modelStatus.availableModels
-                          .filter(m => !/embed/i.test(m))
-                          .map(m => (
-                            <option key={m} value={m}>{m}{selectedModel === m ? ' (Active)' : ''}</option>
-                          ))}
-                      </select>
-                    )}
-                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
-                      Current: {modelStatus.currentModel || '—'}
-                    </small>
-                  </div>
-
+              <div className="ollama-status-summary">
+                <div className="status-row">
+                  <span className="status-label">Connection:</span>
+                  <span className={`status-value ${modelStatus.isConnected ? 'connected' : 'disconnected'}`}>
+                    {modelStatus.isConnected ? '● Connected' : '○ Disconnected'}
+                  </span>
+                </div>
+                <div className="status-row">
+                  <span className="status-label">Active Model:</span>
+                  <span className="status-value">
+                    {modelStatus.currentModel || 'None selected'}
+                  </span>
+                </div>
+                <div className="status-row">
+                  <span className="status-label">Available Models:</span>
+                  <span className="status-value">
+                    {modelStatus.availableModels.length} installed
+                  </span>
+                </div>
               </div>
             </div>
           </div>
